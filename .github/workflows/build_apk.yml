@@ -21,23 +21,6 @@ jobs:
           cache: true
       - name: Generate Android project
         run: flutter create --platforms=android --org com.personalfinance .
-      - name: Force compileSdk 36 across all Android modules (Gradle init script)
-        run: |
-          mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/compileSdk36.gradle <<'GROOVY'
-          allprojects {
-              plugins.withId('com.android.library') {
-                  android {
-                      compileSdkVersion 36
-                  }
-              }
-              plugins.withId('com.android.application') {
-                  android {
-                      compileSdkVersion 36
-                  }
-              }
-          }
-          GROOVY
       - name: Add ProGuard rules for ML Kit
         run: |
           mkdir -p android/app
@@ -55,6 +38,24 @@ jobs:
         run: rm -f test/widget_test.dart
       - name: Get dependencies
         run: flutter pub get
+      - name: Patch file_picker compileSdk to 36 (AGP 9 requires >=36)
+        run: |
+          shopt -s nullglob
+          files=($HOME/.pub-cache/hosted/pub.dev/file_picker-*/android/build.gradle.kts $HOME/.pub-cache/hosted/pub.dev/file_picker-*/android/build.gradle)
+          for f in "${files[@]}"; do
+            echo "--- before ($f) ---"
+            grep -n -i compileSdk "$f" || true
+            sed -i \
+              -e 's/compileSdk = flutter\.compileSdkVersion/compileSdk = 36/' \
+              -e 's/compileSdk flutter\.compileSdkVersion/compileSdk 36/' \
+              -e 's/compileSdkVersion flutter\.compileSdkVersion/compileSdkVersion 36/' \
+              -e 's/compileSdk = [0-9][0-9]*/compileSdk = 36/' \
+              -e 's/compileSdk [0-9][0-9]*/compileSdk 36/' \
+              -e 's/compileSdkVersion [0-9][0-9]*/compileSdkVersion 36/' \
+              "$f"
+            echo "--- after ($f) ---"
+            grep -n -i compileSdk "$f" || true
+          done
       - name: Analyze Dart code
         run: flutter analyze
       - name: Build release APK
