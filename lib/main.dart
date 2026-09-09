@@ -254,6 +254,12 @@ const defaultCategories = <Category>[
   Category(id: 'e_transport_fuel', name: 'بنزین', parentId: 'e_transport', type: TxType.expense),
   Category(id: 'e_transport_repair', name: 'تعمیر خودرو', parentId: 'e_transport', type: TxType.expense),
   Category(id: 'e_transport_public', name: 'حمل‌ونقل عمومی', parentId: 'e_transport', type: TxType.expense),
+  Category(id: 'e_car', name: 'خودرو', type: TxType.expense),
+  Category(id: 'e_car_insurance', name: 'بیمه خودرو', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_service', name: 'تعمیر و سرویس', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_fuel', name: 'بنزین', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_fine', name: 'جریمه رانندگی', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_installment', name: 'قسط خودرو', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_bills', name: 'قبوض', type: TxType.expense),
   Category(id: 'e_bills_power', name: 'برق', parentId: 'e_bills', type: TxType.expense),
   Category(id: 'e_bills_water', name: 'آب', parentId: 'e_bills', type: TxType.expense),
@@ -277,6 +283,36 @@ const defaultCategories = <Category>[
 
 const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'EUR');
 
+const kCategoryIcons = <String, IconData>{
+  'e_food': Icons.restaurant_outlined,
+  'e_housing': Icons.home_outlined,
+  'e_transport': Icons.directions_bus_outlined,
+  'e_car': Icons.directions_car_outlined,
+  'e_bills': Icons.receipt_long_outlined,
+  'e_health': Icons.medical_services_outlined,
+  'e_leisure': Icons.sports_esports_outlined,
+  'e_clothing': Icons.checkroom_outlined,
+  'e_loans': Icons.credit_card_outlined,
+  'e_misc': Icons.more_horiz,
+  'i_salary': Icons.payments_outlined,
+  'i_freelance': Icons.laptop_mac_outlined,
+  'i_investment': Icons.trending_up,
+  'i_gift': Icons.card_giftcard_outlined,
+  'i_misc': Icons.more_horiz,
+};
+
+IconData iconForCategory(Category? c, List<Category> all) {
+  var cur = c;
+  while (cur != null) {
+    final icon = kCategoryIcons[cur.id];
+    if (icon != null) return icon;
+    if (cur.parentId == null) break;
+    final matches = all.where((x) => x.id == cur!.parentId).toList();
+    cur = matches.isEmpty ? null : matches.first;
+  }
+  return (c?.type ?? TxType.expense) == TxType.expense ? Icons.remove_circle_outline : Icons.add_circle_outline;
+}
+
 // ============================== Storage ==============================
 
 class Store {
@@ -298,12 +334,20 @@ class Store {
   static Future<List<Category>> loadCategories() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_catKey);
+    List<Category> list;
+    var changed = false;
     if (raw == null) {
-      // first run: seed with defaults so they become fully editable
-      await saveCategories(defaultCategories);
-      return List.of(defaultCategories);
+      list = List.of(defaultCategories);
+      changed = true;
+    } else {
+      list = raw.map((s) => Category.fromJson(jsonDecode(s))).toList();
     }
-    return raw.map((s) => Category.fromJson(jsonDecode(s))).toList();
+    if (!list.any((c) => c.id == 'e_car')) {
+      list = [...list, ...defaultCategories.where((c) => c.id == 'e_car' || c.parentId == 'e_car')];
+      changed = true;
+    }
+    if (changed) await saveCategories(list);
+    return list;
   }
 
   static Future<void> saveCategories(List<Category> list) async {
@@ -605,7 +649,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       leading: CircleAvatar(
                         backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
                         child: Icon(
-                          t.type == TxType.income ? Icons.arrow_downward : Icons.arrow_upward,
+                          iconForCategory(
+                            categories.where((c) => c.id == t.categoryId).isEmpty
+                                ? Category(id: t.categoryId, name: '', type: t.type)
+                                : categories.firstWhere((c) => c.id == t.categoryId),
+                            categories,
+                          ),
                           color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
                         ),
                       ),
@@ -722,7 +771,13 @@ class _TransactionEditorState extends State<TransactionEditor> {
       showDragHandle: true,
       builder: (ctx) => CategoryPicker(type: type, categories: categories),
     );
-    if (picked != null) setState(() => selectedCategory = picked);
+    // refresh in case a new category/subcategory was added inside the picker
+    final refreshed = await Store.loadCategories();
+    if (!mounted) return;
+    setState(() {
+      categories = refreshed;
+      if (picked != null) selectedCategory = picked;
+    });
   }
 
   void _save() {
@@ -968,14 +1023,46 @@ class CategoryPicker extends StatefulWidget {
 
 class _CategoryPickerState extends State<CategoryPicker> {
   List<Category> stack = [];
+  late List<Category> categories;
+
+  @override
+  void initState() {
+    super.initState();
+    categories = List.of(widget.categories);
+  }
+
+  Future<void> _addCategory() async {
+    final ctrl = TextEditingController();
+    final parentId = stack.isEmpty ? null : stack.last.id;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید در «${stack.last.name}»'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('افزودن')),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+    final newCat = Category(
+      id: 'c_${DateTime.now().microsecondsSinceEpoch}',
+      name: name,
+      parentId: parentId,
+      type: widget.type,
+    );
+    setState(() => categories = [...categories, newCat]);
+    await Store.saveCategories(categories);
+  }
 
   @override
   Widget build(BuildContext context) {
     final parentId = stack.isEmpty ? null : stack.last.id;
-    final items = widget.categories.where((c) => c.type == widget.type && c.parentId == parentId).toList();
+    final items = categories.where((c) => c.type == widget.type && c.parentId == parentId).toList();
     return SafeArea(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1001,14 +1088,15 @@ class _CategoryPickerState extends State<CategoryPicker> {
             if (items.isEmpty && stack.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('هنوز دسته‌بندی‌ای وجود ندارد. از منوی «مدیریت دسته‌بندی‌ها» اضافه کنید.'),
+                child: Text('هنوز دسته‌بندی‌ای وجود ندارد. با دکمه‌ی زیر یکی اضافه کنید.'),
               ),
             Flexible(
               child: ListView(
                 shrinkWrap: true,
                 children: items.map((c) {
-                  final hasChildren = widget.categories.any((x) => x.parentId == c.id);
+                  final hasChildren = categories.any((x) => x.parentId == c.id);
                   return ListTile(
+                    leading: Icon(iconForCategory(c, categories)),
                     title: Text(c.name),
                     trailing: hasChildren ? const Icon(Icons.chevron_left) : null,
                     onTap: () {
@@ -1021,6 +1109,12 @@ class _CategoryPickerState extends State<CategoryPicker> {
                   );
                 }).toList(),
               ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.add),
+              title: Text(stack.isEmpty ? 'افزودن دسته‌بندی جدید' : 'افزودن زیرمجموعه‌ی جدید'),
+              onTap: _addCategory,
             ),
           ],
         ),
@@ -1041,6 +1135,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
   List<Category> categories = [];
   bool loading = true;
   TxType selectedType = TxType.expense;
+  Set<String> collapsed = {};
 
   @override
   void initState() {
@@ -1141,13 +1236,26 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final children = categories.where((c) => c.type == selectedType && c.parentId == parentId).toList();
     final widgets = <Widget>[];
     for (final c in children) {
+      final hasChildren = categories.any((x) => x.parentId == c.id);
+      final isCollapsed = collapsed.contains(c.id);
       widgets.add(Padding(
         padding: EdgeInsets.only(right: depth * 20.0),
         child: ListTile(
+          leading: Icon(iconForCategory(c, categories), color: Colors.grey.shade700),
           title: Text(c.name),
+          onTap: hasChildren
+              ? () => setState(() {
+                    if (isCollapsed) {
+                      collapsed.remove(c.id);
+                    } else {
+                      collapsed.add(c.id);
+                    }
+                  })
+              : null,
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (hasChildren) Icon(isCollapsed ? Icons.chevron_left : Icons.expand_more, color: Colors.grey.shade500),
               IconButton(
                 icon: const Icon(Icons.add, size: 20),
                 tooltip: 'افزودن زیرمجموعه',
@@ -1167,7 +1275,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
           ),
         ),
       ));
-      widgets.addAll(_buildTree(c.id, depth + 1));
+      if (!isCollapsed) widgets.addAll(_buildTree(c.id, depth + 1));
     }
     return widgets;
   }
