@@ -802,7 +802,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DropdownButtonFormField<RecurrenceFrequency>(
-          value: recurrence,
+          initialValue: recurrence,
           decoration: const InputDecoration(labelText: 'نوع تکرار', border: OutlineInputBorder()),
           items: const [
             DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
@@ -827,7 +827,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
         if (recurrence == RecurrenceFrequency.weekly) ...[
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
-            value: weekday,
+            initialValue: weekday,
             decoration: const InputDecoration(labelText: 'روز هفته', border: OutlineInputBorder()),
             items: List.generate(
               7,
@@ -912,7 +912,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
-            value: selectedAccount,
+            initialValue: selectedAccount,
             decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
             items: widget.accounts
                 .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})')))
@@ -1246,14 +1246,14 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام حساب'), autofocus: true),
               const SizedBox(height: 12),
               DropdownButtonFormField<AccountType>(
-                value: type,
+                initialValue: type,
                 decoration: const InputDecoration(labelText: 'نوع حساب'),
                 items: AccountType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.label))).toList(),
                 onChanged: (v) => setLocal(() => type = v ?? type),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: currency,
+                initialValue: currency,
                 decoration: const InputDecoration(labelText: 'واحد پول'),
                 items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                 onChanged: (v) => setLocal(() => currency = v ?? currency),
@@ -1293,6 +1293,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
 
   Future<void> _delete(Account a) async {
     final tx = await Store.loadTransactions();
+    if (!mounted) return;
     final inUse = tx.any((t) => t.accountId == a.id);
     if (inUse) {
       showDialog(
