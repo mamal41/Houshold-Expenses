@@ -22,6 +22,19 @@ jobs:
           cache: true
       - name: Generate Android project
         run: flutter create --platforms=android --org com.personalfinance .
+      - name: Add ProGuard rules for ML Kit
+        run: |
+          mkdir -p android/app
+          cat >> android/app/proguard-rules.pro <<'PROGUARD'
+          # Google ML Kit text recognition ships optional per-script recognizers
+          # (Chinese, Japanese, Korean, Devanagari) as separate artifacts that
+          # this app does not depend on. Tell R8 to ignore the missing classes
+          # instead of failing the build over them.
+          -dontwarn com.google.mlkit.vision.text.chinese.**
+          -dontwarn com.google.mlkit.vision.text.japanese.**
+          -dontwarn com.google.mlkit.vision.text.korean.**
+          -dontwarn com.google.mlkit.vision.text.devanagari.**
+          PROGUARD
       - name: Remove default test (uses old template)
         run: rm -f test/widget_test.dart
       - name: Get dependencies
