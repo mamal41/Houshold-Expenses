@@ -21,6 +21,34 @@ jobs:
           cache: true
       - name: Generate Android project
         run: flutter create --platforms=android --org com.personalfinance .
+      - name: Force compileSdk 36 across all Android modules (app + plugins)
+        run: |
+          if [ -f android/build.gradle.kts ]; then
+            cat >> android/build.gradle.kts <<'KTS'
+
+          subprojects {
+              afterEvaluate {
+                  extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.let { ext ->
+                      ext.compileSdkVersion(36)
+                  }
+              }
+          }
+          KTS
+          fi
+          if [ -f android/build.gradle ]; then
+            cat >> android/build.gradle <<'GROOVY'
+
+          subprojects {
+              afterEvaluate { proj ->
+                  if (proj.hasProperty('android')) {
+                      proj.android {
+                          compileSdkVersion 36
+                      }
+                  }
+              }
+          }
+          GROOVY
+          fi
       - name: Add ProGuard rules for ML Kit
         run: |
           mkdir -p android/app
