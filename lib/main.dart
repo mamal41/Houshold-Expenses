@@ -1061,12 +1061,23 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       } else {
         final img = await ImagePicker().pickImage(
           source: source == ScanSource.camera ? ImageSource.camera : ImageSource.gallery,
-          imageQuality: 90,
+          imageQuality: 85,
+          maxWidth: 1800,
+          maxHeight: 1800,
         );
         if (img == null) return;
         if (!mounted) return;
         setState(() => busy = true);
         imagePath = img.path;
+      }
+      // Give the OS a brief moment to finish flushing the captured file to
+      // disk before handing it to ML Kit (some camera apps return the path
+      // slightly before the write completes, which can crash the native
+      // image decoder with a null-object exception).
+      await Future.delayed(const Duration(milliseconds: 300));
+      final imgFile = File(imagePath);
+      if (!await imgFile.exists() || await imgFile.length() == 0) {
+        throw Exception('فایل تصویر خوانده نشد. لطفاً دوباره امتحان کنید.');
       }
       final text = await extractTextFromImage(imagePath);
       if (!mounted) return;
