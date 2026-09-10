@@ -1212,7 +1212,8 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
         result = await Navigator.push<Transaction>(
             context, MaterialPageRoute(builder: (_) => ReceiptReviewScreen(imagePath: imagePath, initial: draft)));
       }
-      if (result != null && mounted) Navigator.pop(context, result);
+      if (!mounted) return;
+      if (result != null) Navigator.pop(context, result);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
     } finally {
@@ -1420,7 +1421,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         final shouldPop = await confirmDiscardChanges(context);
-        if (shouldPop && context.mounted) Navigator.pop(context);
+        if (!context.mounted) return;
+        if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
       appBar: AppBar(title: const Text('بررسی رسید')),
@@ -1637,7 +1639,8 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         final shouldPop = await confirmDiscardChanges(context);
-        if (shouldPop && context.mounted) Navigator.pop(context);
+        if (!context.mounted) return;
+        if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
       appBar: AppBar(title: const Text('بررسی فیش حقوقی')),
@@ -1985,7 +1988,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         final shouldPop = await confirmDiscardChanges(context, onSave: () async => _save());
-        if (shouldPop && context.mounted && !didPop) {
+        if (didPop || !context.mounted) return;
+        if (shouldPop) {
           // _save() already pops with the saved Transaction when it succeeds;
           // if the user chose to discard instead, pop with no result here.
           if (Navigator.canPop(context)) Navigator.pop(context);
@@ -2011,7 +2015,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     ],
                   ),
                 );
-                if (confirm == true && mounted) {
+                if (confirm == true) {
+                  if (!mounted) return;
                   Navigator.pop(context, DeleteTransactionSignal(widget.existing!.id));
                 }
               },
