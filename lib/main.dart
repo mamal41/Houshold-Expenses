@@ -550,7 +550,11 @@ Future<String> extractTextFromImage(String path) async {
 }
 
 final _amountRegex = RegExp(r'(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\b');
-final _dateRegex = RegExp(r'(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})');
+// German receipts always use dots for dates (DD.MM.YYYY); deliberately not
+// matching '-' or '/' here, since '-' also appears inside ISO timestamps
+// printed on the receipt (e.g. TSE transaction records), which previously
+// got misread as a purchase date.
+final _dateRegex = RegExp(r'(\d{1,2})\.(\d{1,2})\.(\d{2,4})');
 
 double? _parseAmountToken(String token) {
   var t = token.replaceAll(' ', '');
@@ -575,7 +579,11 @@ class ReceiptDraft {
   ReceiptDraft({this.merchant = '', this.date, this.total, this.itemsText = ''});
 }
 
-const _totalKeywords = ['summe', 'gesamt', 'total', 'zu zahlen', 'endbetrag', 'جمع', 'مبلغ کل'];
+const _totalKeywords = ['zu zahlen', 'endbetrag', 'gesamtbetrag', 'betrag', 'total', 'summe', 'gesamt', 'جمع', 'مبلغ کل'];
+
+const _knownMerchants = [
+  'Lidl', 'Aldi', 'Rewe', 'Edeka', 'Netto', 'Penny', 'Kaufland', 'dm', 'Rossmann', 'real', 'Norma', 'Globus'
+];
 
 /// Best-effort local (offline) parsing of raw OCR text from a receipt.
 /// This is a heuristic fallback; the Gemini step (when available) produces
@@ -583,7 +591,15 @@ const _totalKeywords = ['summe', 'gesamt', 'total', 'zu zahlen', 'endbetrag', '�
 ReceiptDraft parseReceiptText(String text) {
   final lines = text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
   final draft = ReceiptDraft();
-  if (lines.isNotEmpty) draft.merchant = lines.first;
+
+  final lowerFull = text.toLowerCase();
+  for (final m in _knownMerchants) {
+    if (lowerFull.contains(m.toLowerCase())) {
+      draft.merchant = m;
+      break;
+    }
+  }
+  if (draft.merchant.isEmpty && lines.isNotEmpty) draft.merchant = lines.first;
 
   for (final line in lines) {
     final dm = _dateRegex.firstMatch(line);
@@ -598,15 +614,24 @@ ReceiptDraft parseReceiptText(String text) {
     }
   }
 
-  final lower = text.toLowerCase();
-  for (final kw in _totalKeywords) {
-    final idx = lower.indexOf(kw);
-    if (idx == -1) continue;
-    final rest = text.substring(idx, (idx + 60).clamp(0, text.length));
-    final am = _amountRegex.firstMatch(rest);
-    if (am != null) {
-      final v = _parseAmountToken(am.group(1)!);
-      if (v != null) draft.total = v;
+  // Look for a total-amount keyword and, when found, only read the amount
+  // from the SAME line (not a fixed character window), to avoid spilling
+  // into unrelated table rows (e.g. the VAT breakdown table also contains
+  // the word "Summe"). The first keyword in priority order that matches
+  // wins, instead of letting a later, less reliable keyword overwrite it.
+  outer:
+  for (final line in lines) {
+    final lowerLine = line.toLowerCase();
+    for (final kw in _totalKeywords) {
+      if (!lowerLine.contains(kw)) continue;
+      final matches = _amountRegex.allMatches(line).toList();
+      if (matches.isNotEmpty) {
+        final v = _parseAmountToken(matches.last.group(1)!);
+        if (v != null) {
+          draft.total = v;
+          break outer;
+        }
+      }
     }
   }
   // fallback: largest amount found anywhere in the text
