@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -16,6 +18,45 @@ void main() => runApp(const MoneyApp());
 // so it always renders left-to-right in the right place, instead of the
 // Unicode bidi algorithm re-ordering symbols/signs relative to the digits.
 String ltr(String s) => '\u2066$s\u2069';
+
+Future<bool> confirmExitApp(BuildContext context) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('خروج از برنامه'),
+      content: const Text('آیا می‌خواهید از برنامه خارج شوید؟'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+      ],
+    ),
+  );
+  return result ?? false;
+}
+
+/// Returns true if the screen should be allowed to close (discard or the
+/// user chose "save" and it was handled by [onSave]), false to stay.
+Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function()? onSave}) async {
+  final choice = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('تغییرات ذخیره نشده'),
+      content: const Text('چیزی تغییر کرده یا اضافه شده که هنوز ذخیره نشده. چه کار کنم؟'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('انصراف')),
+        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خروج بدون ذخیره')),
+        if (onSave != null) FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('ذخیره و خروج')),
+      ],
+    ),
+  );
+  if (choice == 'save' && onSave != null) {
+    // onSave() pops the screen itself when it succeeds (with the saved
+    // result); returning true here would cause a second, empty pop.
+    await onSave();
+    return false;
+  }
+  return choice == 'discard';
+}
 
 // ============================== Enums ==============================
 
@@ -274,7 +315,6 @@ const defaultCategories = <Category>[
   Category(id: 'e_car_service', name: 'تعمیر و سرویس', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_car_fuel', name: 'بنزین', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_car_fine', name: 'جریمه رانندگی', parentId: 'e_car', type: TxType.expense),
-  Category(id: 'e_car_installment', name: 'قسط خودرو', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_bills', name: 'قبوض', type: TxType.expense),
   Category(id: 'e_bills_power', name: 'برق', parentId: 'e_bills', type: TxType.expense),
   Category(id: 'e_bills_water', name: 'آب', parentId: 'e_bills', type: TxType.expense),
@@ -372,6 +412,22 @@ class Store {
       list = [...list, ...defaultCategories.where((c) => c.id == 'e_car' || c.parentId == 'e_car')];
       changed = true;
     }
+    if (list.any((c) => c.id == 'e_car_installment')) {
+      // duplicate of e_loans_car, removed after the fact: reassign any
+      // transactions that used it to the parent "خودرو" category instead.
+      list = list.where((c) => c.id != 'e_car_installment').toList();
+      final tx = await loadTransactions();
+      var txChanged = false;
+      final newTx = tx.map((t) {
+        if (t.categoryId == 'e_car_installment') {
+          txChanged = true;
+          return t.copyWith(categoryId: 'e_car');
+        }
+        return t;
+      }).toList();
+      if (txChanged) await saveTransactions(newTx);
+      changed = true;
+    }
     if (changed) await saveCategories(list);
     return list;
   }
@@ -426,7 +482,13 @@ class AppDrawer extends StatelessWidget {
           onTap: () {
             Navigator.pop(context);
             if (currentIndex == i) return;
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => builder()));
+            if (i == 0) {
+              // Go back to the single root Home instance instead of stacking
+              // a new one, so the back button naturally exits from Home.
+              Navigator.popUntil(context, (route) => route.isFirst);
+            } else {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => builder()));
+            }
           },
         );
     return Drawer(
@@ -602,16 +664,21 @@ ReceiptDraft parseReceiptText(String text) {
   if (draft.merchant.isEmpty && lines.isNotEmpty) draft.merchant = lines.first;
 
   for (final line in lines) {
+    if (draft.date != null) break;
     final dm = _dateRegex.firstMatch(line);
-    if (dm != null && draft.date == null) {
-      final d = int.tryParse(dm.group(1)!);
-      final m = int.tryParse(dm.group(2)!);
-      var y = int.tryParse(dm.group(3)!);
-      if (d != null && m != null && y != null && d <= 31 && m <= 12) {
-        if (y < 100) y += 2000;
-        draft.date = DateTime(y, m, d);
-      }
-    }
+    if (dm == null) continue;
+    final d = int.tryParse(dm.group(1)!);
+    final m = int.tryParse(dm.group(2)!);
+    var y = int.tryParse(dm.group(3)!);
+    if (d == null || m == null || y == null) continue;
+    if (d < 1 || d > 31 || m < 1 || m > 12) continue;
+    if (y < 100) y += 2000;
+    // Reject implausible years - OCR noise elsewhere on the receipt (long
+    // signature/hash strings, transaction numbers) can otherwise coincidentally
+    // match the date pattern and produce a nonsense date like the year 2001.
+    final nowYear = DateTime.now().year;
+    if (y < nowYear - 5 || y > nowYear + 1) continue;
+    draft.date = DateTime(y, m, d);
   }
 
   // Look for a total-amount keyword and, when found, only read the amount
@@ -714,9 +781,24 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
     ],
     'generationConfig': {'response_mime_type': 'application/json'},
   });
-  final resp = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: body);
-  if (resp.statusCode != 200) {
-    throw Exception('خطای Gemini API (${resp.statusCode}): ${resp.body}');
+  // Gemini occasionally returns a transient 503 "model overloaded" error;
+  // retry a couple of times with a short backoff before giving up.
+  http.Response? resp;
+  for (var attempt = 0; attempt < 3; attempt++) {
+    resp = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: body);
+    if (resp.statusCode == 200) break;
+    if (resp.statusCode == 503 && attempt < 2) {
+      await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+      continue;
+    }
+    break;
+  }
+  if (resp == null || resp.statusCode != 200) {
+    final code = resp?.statusCode;
+    if (code == 503) {
+      throw Exception('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.');
+    }
+    throw Exception('خطای Gemini API (${code ?? '—'}): ${resp?.body ?? ''}');
   }
   final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
   final text = decoded['candidates']?[0]?['content']?['parts']?[0]?['text'];
@@ -860,13 +942,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openEditor({Transaction? existing}) async {
-    final result = await Navigator.push<Transaction>(
+    final result = await Navigator.push<Object>(
       context,
       MaterialPageRoute(
         builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: existing),
       ),
     );
     if (result == null) return;
+    if (result is DeleteTransactionSignal) {
+      setState(() => tx.removeWhere((x) => x.id == result.id));
+      await _save();
+      return;
+    }
+    if (result is! Transaction) return;
     setState(() {
       final idx = tx.indexWhere((x) => x.id == result.id);
       if (idx >= 0) {
@@ -903,7 +991,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final periodLabel = start == null
         ? 'این ماه'
         : 'از ${ltr(DateFormat('dd.MM').format(start))} تا امروز (بعد از آخرین حقوق)';
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final exit = await confirmExitApp(context);
+        if (exit) SystemNavigator.pop();
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: const Text('مدیریت مالی شخصی'),
         actions: [
@@ -1036,6 +1131,7 @@ class _HomeScreenState extends State<HomeScreen> {
         icon: const Icon(Icons.add),
         label: const Text('تراکنش جدید'),
       ),
+    ),
     );
   }
 }
@@ -1243,6 +1339,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
+    if (hasGeminiKey) unawaited(_improveWithGemini());
   }
 
   Future<void> _improveWithGemini() async {
@@ -1318,7 +1415,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldPop = await confirmDiscardChanges(context);
+        if (shouldPop && context.mounted) Navigator.pop(context);
+      },
+      child: Scaffold(
       appBar: AppBar(title: const Text('بررسی رسید')),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -1389,6 +1493,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }
@@ -1450,6 +1555,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
+    if (hasGeminiKey) unawaited(_improveWithGemini());
   }
 
   Future<void> _improveWithGemini() async {
@@ -1526,7 +1632,14 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldPop = await confirmDiscardChanges(context);
+        if (shouldPop && context.mounted) Navigator.pop(context);
+      },
+      child: Scaffold(
       appBar: AppBar(title: const Text('بررسی فیش حقوقی')),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -1597,8 +1710,16 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           ),
         ],
       ),
+    ),
     );
   }
+}
+
+/// Signals that the user wants to delete the transaction being edited,
+/// as opposed to saving it or cancelling.
+class DeleteTransactionSignal {
+  final String id;
+  const DeleteTransactionSignal(this.id);
 }
 
 class TransactionEditor extends StatefulWidget {
@@ -1625,6 +1746,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   DateTime? endDate;
   bool useEndDate = false;
   bool draft = false;
+  bool _dirty = false;
   List<Category> categories = [];
 
   @override
@@ -1653,6 +1775,11 @@ class _TransactionEditorState extends State<TransactionEditor> {
     } else {
       dayCtrl.text = date.day.toString();
     }
+    amountCtrl.addListener(() => _dirty = true);
+    noteCtrl.addListener(() => _dirty = true);
+    dayCtrl.addListener(() => _dirty = true);
+    intervalCtrl.addListener(() => _dirty = true);
+    installmentsCtrl.addListener(() => _dirty = true);
   }
 
   Future<void> _pickCategory() async {
@@ -1667,23 +1794,26 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (!mounted) return;
     setState(() {
       categories = refreshed;
-      if (picked != null) selectedCategory = picked;
+      if (picked != null) {
+        selectedCategory = picked;
+        _dirty = true;
+      }
     });
   }
 
-  void _save() {
+  bool _save() {
     final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
-      return;
+      return false;
     }
     if (selectedCategory == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک دسته‌بندی انتخاب کنید.')));
-      return;
+      return false;
     }
     if (selectedAccount == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک حساب انتخاب کنید.')));
-      return;
+      return false;
     }
     int? recDay;
     int? recWeekday;
@@ -1700,7 +1830,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       recInterval = int.tryParse(intervalCtrl.text);
       if (recInterval == null || recInterval <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
-        return;
+        return false;
       }
     }
     if (recurrence != RecurrenceFrequency.none) {
@@ -1728,6 +1858,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       draft: draft,
     );
     Navigator.pop(context, result);
+    return true;
   }
 
   Widget _recurrenceSection() {
@@ -1757,7 +1888,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
             DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی (روز مشخصی از هفته)')),
             DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
           ],
-          onChanged: (v) => setState(() => recurrence = v ?? RecurrenceFrequency.none),
+          onChanged: (v) => setState(() {
+            recurrence = v ?? RecurrenceFrequency.none;
+            _dirty = true;
+          }),
         ),
         if (recurrence == RecurrenceFrequency.monthly) ...[
           const SizedBox(height: 12),
@@ -1780,7 +1914,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
               7,
               (i) => DropdownMenuItem(value: i + 1, child: Text(_weekdayNames[i])),
             ),
-            onChanged: (v) => setState(() => weekday = v ?? weekday),
+            onChanged: (v) => setState(() {
+              weekday = v ?? weekday;
+              _dirty = true;
+            }),
           ),
         ],
         if (recurrence == RecurrenceFrequency.custom) ...[
@@ -1797,7 +1934,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
             contentPadding: EdgeInsets.zero,
             title: const Text('تاریخ آخرین پرداخت مشخص است (به‌جای تعداد قسط)'),
             value: useEndDate,
-            onChanged: (v) => setState(() => useEndDate = v),
+            onChanged: (v) => setState(() {
+              useEndDate = v;
+              _dirty = true;
+            }),
           ),
           if (useEndDate)
             ListTile(
@@ -1812,7 +1952,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   lastDate: DateTime(2100),
                   initialDate: endDate ?? date,
                 );
-                if (d != null) setState(() => endDate = d);
+                if (d != null) {
+                  setState(() {
+                    endDate = d;
+                    _dirty = true;
+                  });
+                }
               },
             )
           else
@@ -1835,8 +1980,44 @@ class _TransactionEditorState extends State<TransactionEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش')),
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldPop = await confirmDiscardChanges(context, onSave: () async => _save());
+        if (shouldPop && context.mounted && !didPop) {
+          // _save() already pops with the saved Transaction when it succeeds;
+          // if the user chose to discard instead, pop with no result here.
+          if (Navigator.canPop(context)) Navigator.pop(context);
+        }
+      },
+      child: Scaffold(
+      appBar: AppBar(
+        title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
+        actions: [
+          if (widget.existing != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'حذف تراکنش',
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('حذف تراکنش'),
+                    content: const Text('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                    ],
+                  ),
+                );
+                if (confirm == true && mounted) {
+                  Navigator.pop(context, DeleteTransactionSignal(widget.existing!.id));
+                }
+              },
+            ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1849,6 +2030,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             onSelectionChanged: (s) => setState(() {
               type = s.first;
               selectedCategory = null;
+              _dirty = true;
             }),
           ),
           const SizedBox(height: 16),
@@ -1864,7 +2046,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
             items: widget.accounts
                 .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})')))
                 .toList(),
-            onChanged: (v) => setState(() => selectedAccount = v),
+            onChanged: (v) => setState(() {
+              selectedAccount = v;
+              _dirty = true;
+            }),
           ),
           const SizedBox(height: 16),
           ListTile(
@@ -1885,7 +2070,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 lastDate: DateTime(2100),
                 initialDate: date,
               );
-              if (d != null) setState(() => date = d);
+              if (d != null) {
+                setState(() {
+                  date = d;
+                  _dirty = true;
+                });
+              }
             },
           ),
           const SizedBox(height: 16),
@@ -1901,12 +2091,16 @@ class _TransactionEditorState extends State<TransactionEditor> {
             title: const Text('ذخیره به‌صورت پیش‌نویس'),
             subtitle: const Text('پیش‌نویس‌ها بعداً قابل بررسی و تأیید نهایی هستند.'),
             value: draft,
-            onChanged: (v) => setState(() => draft = v),
+            onChanged: (v) => setState(() {
+              draft = v;
+              _dirty = true;
+            }),
           ),
           const SizedBox(height: 12),
           FilledButton(onPressed: _save, child: const Text('ذخیره')),
         ],
       ),
+    ),
     );
   }
 }
@@ -1931,13 +2125,14 @@ class _CategoryPickerState extends State<CategoryPicker> {
     categories = List.of(widget.categories);
   }
 
-  Future<void> _addCategory() async {
+  Future<void> _addCategory({Category? underParent}) async {
     final ctrl = TextEditingController();
-    final parentId = stack.isEmpty ? null : stack.last.id;
+    final parentId = underParent?.id ?? (stack.isEmpty ? null : stack.last.id);
+    final parentName = underParent?.name ?? (stack.isEmpty ? null : stack.last.name);
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید در «${stack.last.name}»'),
+        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید در «$parentName»'),
         content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
@@ -1998,7 +2193,17 @@ class _CategoryPickerState extends State<CategoryPicker> {
                   return ListTile(
                     leading: Icon(iconForCategory(c, categories)),
                     title: Text(c.name),
-                    trailing: hasChildren ? const Icon(Icons.chevron_left) : null,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.add, size: 20),
+                          tooltip: 'افزودن زیرمجموعه در «${c.name}»',
+                          onPressed: () => _addCategory(underParent: c),
+                        ),
+                        if (hasChildren) const Icon(Icons.chevron_left),
+                      ],
+                    ),
                     onTap: () {
                       if (hasChildren) {
                         setState(() => stack.add(c));
