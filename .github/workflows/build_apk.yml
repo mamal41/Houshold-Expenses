@@ -21,6 +21,80 @@ jobs:
           cache: true
       - name: Generate Android project
         run: flutter create --platforms=android --org com.personalfinance .
+      - name: Configure stable release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          mkdir -p android/app
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+            cat > android/app/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEYSTORE_PASSWORD
+          keyAlias=release
+          storeFile=release.keystore
+          EOF
+            echo "Release signing secrets found; APK will be signed with the stable release key."
+          else
+            echo "No RELEASE_KEYSTORE_BASE64 secret set; falling back to the debug key (every build will need a manual uninstall to update)."
+          fi
+          if [ -f android/app/build.gradle.kts ]; then
+            cat >> android/app/build.gradle.kts <<'KTS'
+
+          val releaseKeystorePropertiesFile = file("key.properties")
+          val releaseKeystoreProperties = java.util.Properties()
+          if (releaseKeystorePropertiesFile.exists()) {
+              releaseKeystoreProperties.load(java.io.FileInputStream(releaseKeystorePropertiesFile))
+          }
+
+          android {
+              signingConfigs {
+                  create("release") {
+                      if (releaseKeystorePropertiesFile.exists()) {
+                          storeFile = file(releaseKeystoreProperties["storeFile"] as String)
+                          storePassword = releaseKeystoreProperties["storePassword"] as String
+                          keyAlias = releaseKeystoreProperties["keyAlias"] as String
+                          keyPassword = releaseKeystoreProperties["keyPassword"] as String
+                      }
+                  }
+              }
+              buildTypes {
+                  getByName("release") {
+                      signingConfig = if (releaseKeystorePropertiesFile.exists()) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+                  }
+              }
+          }
+          KTS
+          fi
+          if [ -f android/app/build.gradle ]; then
+            cat >> android/app/build.gradle <<'GROOVY'
+
+          def releaseKeystorePropertiesFile = file("key.properties")
+          def releaseKeystoreProperties = new Properties()
+          if (releaseKeystorePropertiesFile.exists()) {
+              releaseKeystoreProperties.load(new FileInputStream(releaseKeystorePropertiesFile))
+          }
+
+          android {
+              signingConfigs {
+                  release {
+                      if (releaseKeystorePropertiesFile.exists()) {
+                          storeFile file(releaseKeystoreProperties['storeFile'])
+                          storePassword releaseKeystoreProperties['storePassword']
+                          keyAlias releaseKeystoreProperties['keyAlias']
+                          keyPassword releaseKeystoreProperties['keyPassword']
+                      }
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig = releaseKeystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
+                  }
+              }
+          }
+          GROOVY
+          fi
       - name: Add ProGuard rules for ML Kit
         run: |
           mkdir -p android/app
