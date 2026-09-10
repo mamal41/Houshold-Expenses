@@ -43,19 +43,24 @@ jobs:
             cat >> android/app/build.gradle.kts <<'KTS'
 
           val releaseKeystorePropertiesFile = file("key.properties")
-          val releaseKeystoreProperties = java.util.Properties()
+          val releaseKeystoreProperties = mutableMapOf<String, String>()
           if (releaseKeystorePropertiesFile.exists()) {
-              releaseKeystoreProperties.load(java.io.FileInputStream(releaseKeystorePropertiesFile))
+              releaseKeystorePropertiesFile.readLines().forEach { line ->
+                  val idx = line.indexOf('=')
+                  if (idx > 0) {
+                      releaseKeystoreProperties[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
+                  }
+              }
           }
 
           android {
               signingConfigs {
                   create("release") {
                       if (releaseKeystorePropertiesFile.exists()) {
-                          storeFile = file(releaseKeystoreProperties["storeFile"] as String)
-                          storePassword = releaseKeystoreProperties["storePassword"] as String
-                          keyAlias = releaseKeystoreProperties["keyAlias"] as String
-                          keyPassword = releaseKeystoreProperties["keyPassword"] as String
+                          storeFile = file(releaseKeystoreProperties["storeFile"]!!)
+                          storePassword = releaseKeystoreProperties["storePassword"]
+                          keyAlias = releaseKeystoreProperties["keyAlias"]
+                          keyPassword = releaseKeystoreProperties["keyPassword"]
                       }
                   }
               }
