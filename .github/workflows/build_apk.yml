@@ -33,6 +33,18 @@ jobs:
           -dontwarn com.google.mlkit.vision.text.japanese.**
           -dontwarn com.google.mlkit.vision.text.korean.**
           -dontwarn com.google.mlkit.vision.text.devanagari.**
+
+          # R8 minification in release builds can otherwise strip or rename
+          # ML Kit / Play Services internal classes that are only reached via
+          # reflection, which crashes at runtime with a null-object exception
+          # on real devices even though the release build itself succeeds.
+          -keep class com.google.mlkit.** { *; }
+          -keep class com.google.android.gms.** { *; }
+          -keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }
+          -keep class com.google.android.gms.internal.mlkit_vision_text_bundled_common.** { *; }
+          -keep interface com.google.mlkit.** { *; }
+          -dontwarn com.google.mlkit.**
+          -dontwarn com.google.android.gms.**
           PROGUARD
       - name: Remove default test (uses old template)
         run: rm -f test/widget_test.dart
