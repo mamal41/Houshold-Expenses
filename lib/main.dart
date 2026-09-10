@@ -539,7 +539,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _save() async {
     await Store.saveGeminiKey(ctrl.text.trim());
-    if (!mounted) return;
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
   }
 
@@ -1176,7 +1176,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       if (source == ScanSource.pdf) {
         final res = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
         if (res == null || res.files.single.path == null) return;
-        if (!mounted) return;
+        if (!context.mounted) return;
         setState(() => busy = true);
         imagePath = await rasterizeFirstPdfPage(res.files.single.path!);
       } else {
@@ -1187,7 +1187,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
           maxHeight: 1800,
         );
         if (img == null) return;
-        if (!mounted) return;
+        if (!context.mounted) return;
         setState(() => busy = true);
         imagePath = img.path;
       }
@@ -1201,7 +1201,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
         throw Exception('فایل تصویر خوانده نشد. لطفاً دوباره امتحان کنید.');
       }
       final text = await extractTextFromImage(imagePath);
-      if (!mounted) return;
+      if (!context.mounted) return;
       Transaction? result;
       if (isPayslip) {
         final draft = parsePayslipText(text);
@@ -1212,7 +1212,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
         result = await Navigator.push<Transaction>(
             context, MaterialPageRoute(builder: (_) => ReceiptReviewScreen(imagePath: imagePath, initial: draft)));
       }
-      if (!mounted) return;
+      if (!context.mounted) return;
       if (result != null) Navigator.pop(context, result);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
@@ -1378,7 +1378,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       builder: (ctx) => CategoryPicker(type: TxType.expense, categories: categories),
     );
     categories = await Store.loadCategories();
-    if (!mounted) return;
+    if (!context.mounted) return;
     setState(() {
       if (picked != null) selectedCategory = picked;
     });
@@ -1409,7 +1409,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       note: note,
       draft: draft,
     );
-    if (!mounted) return;
+    if (!context.mounted) return;
     Navigator.pop(context, result);
   }
 
@@ -1589,7 +1589,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       builder: (ctx) => CategoryPicker(type: TxType.income, categories: categories),
     );
     categories = await Store.loadCategories();
-    if (!mounted) return;
+    if (!context.mounted) return;
     setState(() {
       if (picked != null) selectedCategory = picked;
     });
@@ -1627,7 +1627,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       note: lines.join('\n'),
       draft: draft,
     );
-    if (!mounted) return;
+    if (!context.mounted) return;
     Navigator.pop(context, result);
   }
 
@@ -1794,7 +1794,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     );
     // refresh in case a new category/subcategory was added inside the picker
     final refreshed = await Store.loadCategories();
-    if (!mounted) return;
+    if (!context.mounted) return;
     setState(() {
       categories = refreshed;
       if (picked != null) {
@@ -2016,7 +2016,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   ),
                 );
                 if (confirm == true) {
-                  if (!mounted) return;
+                  if (!context.mounted) return;
                   Navigator.pop(context, DeleteTransactionSignal(widget.existing!.id));
                 }
               },
@@ -2511,7 +2511,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
 
   Future<void> _delete(Account a) async {
     final tx = await Store.loadTransactions();
-    if (!mounted) return;
+    if (!context.mounted) return;
     final inUse = tx.any((t) => t.accountId == a.id);
     if (inUse) {
       showDialog(
