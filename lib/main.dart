@@ -342,6 +342,7 @@ const defaultCategories = <Category>[
   Category(id: 'e_car_service', name: 'تعمیر و سرویس', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_car_fuel', name: 'بنزین', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_car_fine', name: 'جریمه رانندگی', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_parking', name: 'پارکینگ', parentId: 'e_car', type: TxType.expense),
   Category(id: 'e_bills', name: 'قبوض', type: TxType.expense),
   Category(id: 'e_bills_power', name: 'برق', parentId: 'e_bills', type: TxType.expense),
   Category(id: 'e_bills_water', name: 'آب', parentId: 'e_bills', type: TxType.expense),
@@ -455,6 +456,10 @@ class Store {
       if (txChanged) await saveTransactions(newTx);
       changed = true;
     }
+    if (!list.any((c) => c.id == 'e_car_parking')) {
+      list = [...list, ...defaultCategories.where((c) => c.id == 'e_car_parking')];
+      changed = true;
+    }
     if (changed) await saveCategories(list);
     return list;
   }
@@ -533,6 +538,7 @@ class AppDrawer extends StatelessWidget {
             item(1, Icons.category_outlined, 'مدیریت دسته‌بندی‌ها', () => const CategoryManagementScreen()),
             item(2, Icons.account_balance_wallet_outlined, 'حساب‌ها', () => const AccountManagementScreen()),
             item(3, Icons.settings_outlined, 'تنظیمات', () => const SettingsScreen()),
+            item(4, Icons.repeat, 'تراکنش‌های تکرارشونده', () => const RecurringTransactionsScreen()),
           ],
         ),
       ),
@@ -1022,6 +1028,11 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (result == null) return;
+    // A new category/subcategory may have been created inside the editor;
+    // refresh so it's reflected immediately (otherwise the transaction
+    // would look "uncategorized" until the next full reload).
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
     if (result is DeleteTransactionSignal) {
       setState(() => tx.removeWhere((x) => x.id == result.id));
       await _save();
@@ -1043,6 +1054,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openScan() async {
     final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
     if (result == null) return;
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
     setState(() {
       tx.add(result);
       tx.sort((a, b) => b.date.compareTo(a.date));
@@ -1153,24 +1166,36 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ...tx.map((t) => Dismissible(
                   key: ValueKey(t.id),
-                  direction: DismissDirection.endToStart,
+                  direction: DismissDirection.horizontal,
                   background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    color: Colors.blue.shade400,
+                    child: const Icon(Icons.edit, color: Colors.white),
+                  ),
+                  secondaryBackground: Container(
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     color: Colors.red.shade400,
                     child: const Icon(Icons.delete, color: Colors.white),
                   ),
-                  confirmDismiss: (_) => showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('حذف تراکنش'),
-                      content: const Text('این تراکنش حذف شود؟'),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
-                      ],
-                    ),
-                  ),
+                  confirmDismiss: (direction) async {
+                    if (direction == DismissDirection.startToEnd) {
+                      await _openEditor(existing: t);
+                      return false;
+                    }
+                    return await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('حذف تراکنش'),
+                        content: const Text('این تراکنش حذف شود؟'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                        ],
+                      ),
+                    ) ?? false;
+                  },
                   onDismissed: (_) => _delete(t),
                   child: Card(
                     child: ListTile(
@@ -1360,6 +1385,155 @@ class _DraftsScreenState extends State<DraftsScreen> {
                     ),
                   ))
                   .toList(),
+            ),
+    );
+  }
+}
+
+// ============================== Recurring transactions ==============================
+
+class RecurringTransactionsScreen extends StatefulWidget {
+  const RecurringTransactionsScreen({super.key});
+  @override
+  State<RecurringTransactionsScreen> createState() => _RecurringTransactionsScreenState();
+}
+
+class _RecurringTransactionsScreenState extends State<RecurringTransactionsScreen> {
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final all = await Store.loadTransactions();
+    tx = all.where((t) => t.isRecurring).toList()..sort((a, b) => b.date.compareTo(a.date));
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String categoryName(String id) {
+    final c = categories.where((c) => c.id == id).toList();
+    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final a = accounts.where((a) => a.id == accountId).toList();
+    return a.isEmpty ? 'EUR' : a.first.currency;
+  }
+
+  String _recurrenceLabel(Transaction t) {
+    switch (t.recurrence) {
+      case RecurrenceFrequency.monthly:
+        return 'ماهانه (روز ${t.recurrenceDay ?? '?'})';
+      case RecurrenceFrequency.weekly:
+        return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
+      case RecurrenceFrequency.custom:
+        return 'هر ${t.recurrenceIntervalDays ?? '?'} روز';
+      case RecurrenceFrequency.none:
+        return '';
+    }
+  }
+
+  Future<void> _openEditor(Transaction t) async {
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+    );
+    if (result == null) return;
+    final all = await Store.loadTransactions();
+    final newCategories = await Store.loadCategories();
+    if (result is DeleteTransactionSignal) {
+      all.removeWhere((x) => x.id == result.id);
+    } else if (result is Transaction) {
+      final idx = all.indexWhere((x) => x.id == result.id);
+      if (idx >= 0) {
+        all[idx] = result;
+      } else {
+        all.add(result);
+      }
+    }
+    await Store.saveTransactions(all);
+    categories = newCategories;
+    await _load();
+  }
+
+  Future<void> _delete(Transaction t) async {
+    final all = await Store.loadTransactions();
+    all.removeWhere((x) => x.id == t.id);
+    await Store.saveTransactions(all);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('تراکنش‌های تکرارشونده')),
+      body: tx.isEmpty
+          ? const Center(child: Text('تراکنش تکرارشونده‌ای وجود ندارد.'))
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: tx.map((t) {
+                final next = nextOccurrencePreview(t);
+                return Dismissible(
+                  key: ValueKey(t.id),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    color: Colors.red.shade400,
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  confirmDismiss: (_) => showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('حذف تراکنش تکرارشونده'),
+                      content: const Text('این تراکنش تکرارشونده حذف شود؟'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                      ],
+                    ),
+                  ),
+                  onDismissed: (_) => _delete(t),
+                  child: Card(
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                        child: Icon(
+                          iconForCategory(
+                            categories.where((c) => c.id == t.categoryId).isEmpty
+                                ? Category(id: t.categoryId, name: '', type: t.type)
+                                : categories.firstWhere((c) => c.id == t.categoryId),
+                            categories,
+                          ),
+                          color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                        ),
+                      ),
+                      title: Text(categoryName(t.categoryId)),
+                      subtitle: Text(
+                        '${_recurrenceLabel(t)}'
+                        '${next != null ? ' • سررسید بعدی: ${ltr(DateFormat('dd.MM.yyyy').format(next))}' : ''}',
+                      ),
+                      trailing: Text(
+                        ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                        ),
+                      ),
+                      onTap: () => _openEditor(t),
+                    ),
+                  ),
+                );
+              }).toList(),
             ),
     );
   }
@@ -1777,7 +1951,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
-              final d = await showDatePicker(context: context, firstDate: DateTime(2000), lastDate: DateTime(2100), initialDate: date);
+              final d = await showDatePicker(
+                context: context,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100),
+                initialDate: date,
+                builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+              );
               if (d != null) setState(() => date = d);
             },
           ),
@@ -2073,7 +2253,13 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
-              final d = await showDatePicker(context: context, firstDate: DateTime(2000), lastDate: DateTime(2100), initialDate: date);
+              final d = await showDatePicker(
+                context: context,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100),
+                initialDate: date,
+                builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+              );
               if (d != null) setState(() => date = d);
             },
           ),
@@ -2135,7 +2321,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   RecurrenceFrequency recurrence = RecurrenceFrequency.none;
   int weekday = DateTime.now().weekday;
   DateTime? endDate;
-  bool useEndDate = false;
+  String endMode = 'unlimited'; // 'unlimited' | 'count' | 'date'
   bool draft = false;
   bool _dirty = false;
   List<Category> categories = [];
@@ -2160,7 +2346,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       intervalCtrl.text = e.recurrenceIntervalDays?.toString() ?? '';
       installmentsCtrl.text = e.installments?.toString() ?? '';
       endDate = e.recurrenceEndDate;
-      useEndDate = e.recurrenceEndDate != null;
+      endMode = e.recurrenceEndDate != null ? 'date' : (e.installments != null ? 'count' : 'unlimited');
       draft = e.draft;
       items = List.of(e.items);
       final match = categories.where((c) => c.id == e.categoryId).toList();
@@ -2227,11 +2413,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
       }
     }
     if (recurrence != RecurrenceFrequency.none) {
-      if (useEndDate) {
+      if (endMode == 'date') {
         recEndDate = endDate;
-      } else {
+      } else if (endMode == 'count') {
         recInstallments = int.tryParse(installmentsCtrl.text);
       }
+      // endMode == 'unlimited': leave both recEndDate and recInstallments null
     }
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
     final result = Transaction(
@@ -2359,16 +2546,22 @@ class _TransactionEditorState extends State<TransactionEditor> {
         ],
         if (recurrence != RecurrenceFrequency.none) ...[
           const SizedBox(height: 12),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('تاریخ آخرین پرداخت مشخص است (به‌جای تعداد قسط)'),
-            value: useEndDate,
-            onChanged: (v) => setState(() {
-              useEndDate = v;
+          Text('پایان تکرار', style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 6),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'unlimited', label: Text('نامحدود')),
+              ButtonSegment(value: 'count', label: Text('تعداد قسط')),
+              ButtonSegment(value: 'date', label: Text('تا تاریخ')),
+            ],
+            selected: {endMode},
+            onSelectionChanged: (s) => setState(() {
+              endMode = s.first;
               _dirty = true;
             }),
           ),
-          if (useEndDate)
+          if (endMode == 'date') ...[
+            const SizedBox(height: 12),
             ListTile(
               contentPadding: EdgeInsets.zero,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
@@ -2380,6 +2573,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   firstDate: date,
                   lastDate: DateTime(2100),
                   initialDate: endDate ?? date,
+                  builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
                 );
                 if (d != null) {
                   setState(() {
@@ -2388,13 +2582,15 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   });
                 }
               },
-            )
-          else
+            ),
+          ] else if (endMode == 'count') ...[
+            const SizedBox(height: 12),
             TextField(
               controller: installmentsCtrl,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'تعداد کل اقساط (اختیاری)', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'تعداد کل اقساط', border: OutlineInputBorder()),
             ),
+          ],
           if (preview != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -2500,6 +2696,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 firstDate: DateTime(2000),
                 lastDate: DateTime(2100),
                 initialDate: date,
+                builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
               );
               if (d != null) {
                 setState(() {
