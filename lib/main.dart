@@ -73,7 +73,7 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
 
 enum TxType { expense, income }
 
-enum RecurrenceFrequency { none, monthly, weekly, custom }
+enum RecurrenceFrequency { none, weekly, monthly, yearly, custom }
 
 enum AccountType { cash, bank, creditCard, savings, other }
 
@@ -190,6 +190,7 @@ class Transaction {
   final List<ReceiptItemEntry> items; // structured line items from a scanned receipt (optional)
   final bool notifyEnabled; // remind before the last 2 occurrences of a recurring transaction
   final String notifyMessage; // custom reminder text (e.g. "cancel this subscription")
+  final int? notifyDaysBeforeEach; // also remind this many days before EVERY installment's due date
 
   const Transaction({
     required this.id,
@@ -209,6 +210,7 @@ class Transaction {
     this.items = const [],
     this.notifyEnabled = false,
     this.notifyMessage = '',
+    this.notifyDaysBeforeEach,
   });
 
   bool get isRecurring => recurrence != RecurrenceFrequency.none;
@@ -230,6 +232,8 @@ class Transaction {
     List<ReceiptItemEntry>? items,
     bool? notifyEnabled,
     String? notifyMessage,
+    int? notifyDaysBeforeEach,
+    bool clearNotifyDaysBeforeEach = false,
     bool clearRecurrenceDay = false,
     bool clearRecurrenceWeekday = false,
     bool clearRecurrenceIntervalDays = false,
@@ -254,6 +258,7 @@ class Transaction {
         items: items ?? this.items,
         notifyEnabled: notifyEnabled ?? this.notifyEnabled,
         notifyMessage: notifyMessage ?? this.notifyMessage,
+        notifyDaysBeforeEach: clearNotifyDaysBeforeEach ? null : (notifyDaysBeforeEach ?? this.notifyDaysBeforeEach),
       );
 
   Map<String, dynamic> toJson() => {
@@ -274,6 +279,7 @@ class Transaction {
         'items': items.map((e) => e.toJson()).toList(),
         'notifyEnabled': notifyEnabled,
         'notifyMessage': notifyMessage,
+        'notifyDaysBeforeEach': notifyDaysBeforeEach,
       };
 
   factory Transaction.fromJson(Map<String, dynamic> j) {
@@ -304,6 +310,7 @@ class Transaction {
       items: (j['items'] as List<dynamic>?)?.map((e) => ReceiptItemEntry.fromJson(e)).toList() ?? const [],
       notifyEnabled: j['notifyEnabled'] ?? false,
       notifyMessage: j['notifyMessage'] ?? '',
+      notifyDaysBeforeEach: j['notifyDaysBeforeEach'],
     );
   }
 }
@@ -333,6 +340,10 @@ DateTime? nextOccurrencePreview(Transaction t) {
         next = next.add(Duration(days: t.recurrenceIntervalDays!));
       }
       return next;
+    case RecurrenceFrequency.yearly:
+      var d = clampedMonthDate(today.year, t.date.month, t.date.day);
+      if (d.isBefore(today)) d = clampedMonthDate(today.year + 1, t.date.month, t.date.day);
+      return d;
     case RecurrenceFrequency.none:
       return null;
   }
@@ -374,6 +385,9 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
       case RecurrenceFrequency.custom:
         next = current.add(Duration(days: t.recurrenceIntervalDays ?? 30));
         break;
+      case RecurrenceFrequency.yearly:
+        next = clampedMonthDate(current.year + 1, current.month, current.day);
+        break;
       case RecurrenceFrequency.none:
         return result;
     }
@@ -407,11 +421,14 @@ class NotificationService {
         ?.requestNotificationsPermission();
   }
 
-  int _idFor(String txId, int slot) => (txId.hashCode & 0x3fffffff) * 2 + slot;
+  int _idFor(String txId, int slot) => (txId.hashCode & 0xffff) * 1000 + slot;
 
   Future<void> cancelForTransaction(String txId) async {
-    await _plugin.cancel(_idFor(txId, 0));
-    await _plugin.cancel(_idFor(txId, 1));
+    // slot 0/1 = second-to-last/last reminders, slots 2..201 = optional
+    // per-installment reminders (capped at 200 upcoming installments).
+    for (var slot = 0; slot < 202; slot++) {
+      await _plugin.cancel(_idFor(txId, slot));
+    }
   }
 
   /// Computes an absolute schedule instant for a given local wall-clock
@@ -435,7 +452,7 @@ class NotificationService {
       android: AndroidNotificationDetails(
         'recurring_due',
         'یادآوری تراکنش‌های تکرارشونده',
-        channelDescription: 'یادآوری قبل از آخرین سررسیدهای یک تراکنش تکرارشونده',
+        channelDescription: 'یادآوری قبل از سررسیدهای یک تراکنش تکرارشونده',
         importance: Importance.high,
         priority: Priority.high,
       ),
@@ -455,6 +472,24 @@ class NotificationService {
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
       );
+    }
+    final days = t.notifyDaysBeforeEach;
+    if (days != null && days > 0) {
+      final capped = occurrences.take(200).toList();
+      for (var i = 0; i < capped.length; i++) {
+        final due = capped[i];
+        final when = DateTime(due.year, due.month, due.day, 9).subtract(Duration(days: days));
+        if (!when.isAfter(now)) continue;
+        await _plugin.zonedSchedule(
+          _idFor(t.id, 2 + i),
+          categoryName,
+          '$days روز تا سررسید این قسط (${ltr(DateFormat('dd.MM.yyyy').format(due))})${t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : ''}',
+          _asTZDateTime(when),
+          details,
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+        );
+      }
     }
   }
 }
@@ -1575,6 +1610,8 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
         return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
       case RecurrenceFrequency.custom:
         return 'هر ${t.recurrenceIntervalDays ?? '?'} روز';
+      case RecurrenceFrequency.yearly:
+        return 'سالانه (${ltr(DateFormat('dd.MM').format(t.date))})';
       case RecurrenceFrequency.none:
         return '';
     }
@@ -2464,6 +2501,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
   String endMode = 'unlimited'; // 'unlimited' | 'count' | 'date'
   bool notifyEnabled = false;
   final notifyMessageCtrl = TextEditingController();
+  bool notifyEachEnabled = false;
+  final notifyDaysCtrl = TextEditingController();
   bool draft = false;
   bool _dirty = false;
   List<Category> categories = [];
@@ -2491,6 +2530,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
       endMode = e.recurrenceEndDate != null ? 'date' : (e.installments != null ? 'count' : 'unlimited');
       notifyEnabled = e.notifyEnabled;
       notifyMessageCtrl.text = e.notifyMessage;
+      notifyEachEnabled = e.notifyDaysBeforeEach != null;
+      notifyDaysCtrl.text = e.notifyDaysBeforeEach?.toString() ?? '';
       draft = e.draft;
       items = List.of(e.items);
       final match = categories.where((c) => c.id == e.categoryId).toList();
@@ -2504,6 +2545,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     intervalCtrl.addListener(() => _dirty = true);
     installmentsCtrl.addListener(() => _dirty = true);
     notifyMessageCtrl.addListener(() => _dirty = true);
+    notifyDaysCtrl.addListener(() => _dirty = true);
   }
 
   Future<void> _pickCategory() async {
@@ -2584,6 +2626,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       items: items,
       notifyEnabled: notifyEnabled,
       notifyMessage: notifyMessageCtrl.text.trim(),
+      notifyDaysBeforeEach: notifyEnabled && notifyEachEnabled ? int.tryParse(notifyDaysCtrl.text) : null,
     );
     if (notifyEnabled) {
       await NotificationService.instance.scheduleForTransaction(result, selectedCategory!.name);
@@ -2653,8 +2696,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
           decoration: const InputDecoration(labelText: 'نوع تکرار', border: OutlineInputBorder()),
           items: const [
             DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
-            DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه (روز مشخصی از ماه)')),
             DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی (روز مشخصی از هفته)')),
+            DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه (روز مشخصی از ماه)')),
+            DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('سالانه (در همین تاریخ هر سال)')),
             DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
           ],
           onChanged: (v) => setState(() {
@@ -2766,7 +2810,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 });
               },
             ),
-            if (notifyEnabled)
+            if (notifyEnabled) ...[
               TextField(
                 controller: notifyMessageCtrl,
                 decoration: const InputDecoration(
@@ -2775,6 +2819,24 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   border: OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('یادآوری چند روز قبل از سررسید هر قسط هم ارسال شود'),
+                value: notifyEachEnabled,
+                onChanged: (v) => setState(() {
+                  notifyEachEnabled = v ?? false;
+                  _dirty = true;
+                }),
+              ),
+              if (notifyEachEnabled)
+                TextField(
+                  controller: notifyDaysCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'چند روز قبل از هر قسط؟', border: OutlineInputBorder()),
+                ),
+            ],
           ],
         ],
       ],
