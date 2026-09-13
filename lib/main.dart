@@ -624,6 +624,7 @@ const defaultCategories = <Category>[
   Category(id: 'e_loans_personal', name: 'وام شخصی', parentId: 'e_loans', type: TxType.expense),
   Category(id: 'e_loans_installment_purchase', name: 'خرید قسطی', parentId: 'e_loans', type: TxType.expense),
   Category(id: 'e_subscription', name: 'اشتراک', type: TxType.expense),
+  Category(id: 'e_subscription_software', name: 'اشتراک نرم‌افزار', parentId: 'e_subscription', type: TxType.expense),
   Category(id: 'e_insurance', name: 'بیمه', type: TxType.expense),
   Category(id: 'e_misc', name: 'متفرقه', type: TxType.expense),
   Category(id: 'i_salary', name: 'حقوق', type: TxType.income),
@@ -647,6 +648,7 @@ const kCategoryIcons = <String, IconData>{
   'e_loans': Icons.credit_card_outlined,
   'e_loans_installment_purchase': Icons.shopping_bag_outlined,
   'e_subscription': Icons.subscriptions_outlined,
+  'e_subscription_software': Icons.laptop_chromebook_outlined,
   'e_insurance': Icons.health_and_safety_outlined,
   'e_car_parking': Icons.local_parking_outlined,
   'e_misc': Icons.more_horiz,
@@ -845,7 +847,7 @@ class Store {
       list = [...list, ...defaultCategories.where((c) => c.id == 'e_car_parking')];
       changed = true;
     }
-    for (final newId in ['e_loans_installment_purchase', 'e_subscription', 'e_insurance']) {
+    for (final newId in ['e_loans_installment_purchase', 'e_subscription', 'e_insurance', 'e_subscription_software']) {
       if (!list.any((c) => c.id == newId)) {
         list = [...list, ...defaultCategories.where((c) => c.id == newId)];
         changed = true;
