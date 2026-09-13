@@ -1,5 +1,13 @@
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  errors:
+    # The app intentionally builds IconData from a runtime int (custom icon
+    # chosen per user-created category, stored as its codePoint). That
+    # opts the app out of Flutter's icon tree-shaking, which is fine here,
+    # but the analyzer otherwise flags it as an error.
+    non_const_argument_for_const_parameter: ignore
+
 linter:
   rules:
     curly_braces_in_flow_control_structures: false
