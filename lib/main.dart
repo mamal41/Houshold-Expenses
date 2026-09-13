@@ -1050,6 +1050,11 @@ class _HomeScreenState extends State<HomeScreen> {
     await _save();
   }
 
+  Future<void> _openDrafts() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen()));
+    await _load();
+  }
+
   Future<void> _delete(Transaction t) async {
     setState(() => tx.removeWhere((x) => x.id == t.id));
     await _save();
@@ -1075,6 +1080,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('مدیریت مالی شخصی'),
         actions: [
+          Badge(
+            label: Text('$draftCount'),
+            isLabelVisible: draftCount > 0,
+            child: IconButton(icon: const Icon(Icons.drafts_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
+          ),
           IconButton(icon: const Icon(Icons.document_scanner_outlined), tooltip: 'اسکن رسید/فیش حقوقی', onPressed: _openScan),
         ],
       ),
@@ -1222,6 +1232,135 @@ class _MonthStat extends StatelessWidget {
         Text(formatMoney(value, currency),
             style: TextStyle(color: color.shade700, fontWeight: FontWeight.bold, fontSize: 16)),
       ],
+    );
+  }
+}
+
+// ============================== Drafts ==============================
+
+class DraftsScreen extends StatefulWidget {
+  const DraftsScreen({super.key});
+  @override
+  State<DraftsScreen> createState() => _DraftsScreenState();
+}
+
+class _DraftsScreenState extends State<DraftsScreen> {
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final all = await Store.loadTransactions();
+    tx = all.where((t) => t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String categoryName(String id) {
+    final c = categories.where((c) => c.id == id).toList();
+    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final a = accounts.where((a) => a.id == accountId).toList();
+    return a.isEmpty ? 'EUR' : a.first.currency;
+  }
+
+  Future<void> _openEditor(Transaction t) async {
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+    );
+    if (result == null) return;
+    final all = await Store.loadTransactions();
+    if (result is DeleteTransactionSignal) {
+      all.removeWhere((x) => x.id == result.id);
+    } else if (result is Transaction) {
+      final idx = all.indexWhere((x) => x.id == result.id);
+      if (idx >= 0) {
+        all[idx] = result;
+      } else {
+        all.add(result);
+      }
+    }
+    await Store.saveTransactions(all);
+    await _load();
+  }
+
+  Future<void> _delete(Transaction t) async {
+    final all = await Store.loadTransactions();
+    all.removeWhere((x) => x.id == t.id);
+    await Store.saveTransactions(all);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('پیش‌نویس‌ها')),
+      body: tx.isEmpty
+          ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: tx.map((t) => Dismissible(
+                    key: ValueKey(t.id),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      color: Colors.red.shade400,
+                      child: const Icon(Icons.delete, color: Colors.white),
+                    ),
+                    confirmDismiss: (_) => showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('حذف پیش‌نویس'),
+                        content: const Text('این پیش‌نویس حذف شود؟'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                        ],
+                      ),
+                    ),
+                    onDismissed: (_) => _delete(t),
+                    child: Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                          child: Icon(
+                            iconForCategory(
+                              categories.where((c) => c.id == t.categoryId).isEmpty
+                                  ? Category(id: t.categoryId, name: '', type: t.type)
+                                  : categories.firstWhere((c) => c.id == t.categoryId),
+                              categories,
+                            ),
+                            color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                          ),
+                        ),
+                        title: Text(categoryName(t.categoryId)),
+                        subtitle: Text(ltr(DateFormat('dd.MM.yyyy').format(t.date))),
+                        trailing: Text(
+                          ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                          ),
+                        ),
+                        onTap: () => _openEditor(t),
+                      ),
+                    ),
+                  ))
+                  .toList(),
+            ),
     );
   }
 }
@@ -2000,6 +2139,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   bool draft = false;
   bool _dirty = false;
   List<Category> categories = [];
+  List<ReceiptItemEntry> items = [];
 
   @override
   void initState() {
@@ -2022,6 +2162,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       endDate = e.recurrenceEndDate;
       useEndDate = e.recurrenceEndDate != null;
       draft = e.draft;
+      items = List.of(e.items);
       final match = categories.where((c) => c.id == e.categoryId).toList();
       selectedCategory = match.isEmpty ? null : match.first;
     } else {
@@ -2108,9 +2249,45 @@ class _TransactionEditorState extends State<TransactionEditor> {
       installments: recInstallments,
       recurrenceEndDate: recEndDate,
       draft: draft,
+      items: items,
     );
     Navigator.pop(context, result);
     return true;
+  }
+
+  Future<void> _addItemRow() async {
+    final nameCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    final priceCtrl = TextEditingController();
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('افزودن کالا'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+            const SizedBox(height: 8),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+            const SizedBox(height: 8),
+            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('افزودن')),
+        ],
+      ),
+    );
+    if (added != true || nameCtrl.text.trim().isEmpty) return;
+    setState(() {
+      items.add(ReceiptItemEntry(
+        name: nameCtrl.text.trim(),
+        quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+        price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      ));
+      _dirty = true;
+    });
   }
 
   Widget _recurrenceSection() {
@@ -2337,6 +2514,40 @@ class _TransactionEditorState extends State<TransactionEditor> {
             controller: noteCtrl,
             decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder()),
           ),
+          if (type == TxType.expense) ...[
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('اقلام خرید', style: Theme.of(context).textTheme.titleMedium),
+                TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
+              ],
+            ),
+            if (items.isEmpty)
+              const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('کالایی ثبت نشده.', style: TextStyle(color: Colors.grey))),
+            ...items.asMap().entries.map((e) {
+              final i = e.key;
+              final it = e.value;
+              return Card(
+                child: ListTile(
+                  dense: true,
+                  title: Text(it.name),
+                  subtitle: Text(
+                    '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                    '${it.quantity != null && it.price != null ? ' • ' : ''}'
+                    '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    onPressed: () => setState(() {
+                      items.removeAt(i);
+                      _dirty = true;
+                    }),
+                  ),
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: 16),
           _recurrenceSection(),
           const SizedBox(height: 12),
