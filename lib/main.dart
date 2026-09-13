@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:fl_chart/fl_chart.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -73,7 +74,7 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
 
 enum TxType { expense, income }
 
-enum RecurrenceFrequency { none, weekly, monthly, yearly, custom }
+enum RecurrenceFrequency { none, weekly, monthly, quarterly, yearly, custom }
 
 enum AccountType { cash, bank, creditCard, savings, other }
 
@@ -117,21 +118,24 @@ class Category {
   final String name;
   final String? parentId;
   final TxType type;
-  const Category({required this.id, required this.name, this.parentId, required this.type});
+  final int? iconCodePoint; // custom icon for user-created categories (Material icon codePoint)
+  const Category({required this.id, required this.name, this.parentId, required this.type, this.iconCodePoint});
 
-  Category copyWith({String? name, String? parentId}) => Category(
+  Category copyWith({String? name, String? parentId, int? iconCodePoint}) => Category(
         id: id,
         name: name ?? this.name,
         parentId: parentId ?? this.parentId,
         type: type,
+        iconCodePoint: iconCodePoint ?? this.iconCodePoint,
       );
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'parentId': parentId, 'type': type.name};
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'parentId': parentId, 'type': type.name, 'iconCodePoint': iconCodePoint};
   factory Category.fromJson(Map<String, dynamic> j) => Category(
         id: j['id'],
         name: j['name'],
         parentId: j['parentId'],
         type: TxType.values.byName(j['type']),
+        iconCodePoint: j['iconCodePoint'],
       );
 }
 
@@ -172,6 +176,66 @@ class ReceiptItemEntry {
       );
 }
 
+class PayslipDetails {
+  final double? brutto;
+  final double? netto;
+  final double? lohnsteuer;
+  final double? solidaritaetszuschlag;
+  final double? kirchensteuer;
+  final double? krankenversicherung;
+  final double? pflegeversicherung;
+  final double? rentenversicherung;
+  final double? arbeitslosenversicherung;
+  final String? steuerklasse;
+  final String? arbeitgeber;
+  final String? abrechnungsmonat;
+
+  const PayslipDetails({
+    this.brutto,
+    this.netto,
+    this.lohnsteuer,
+    this.solidaritaetszuschlag,
+    this.kirchensteuer,
+    this.krankenversicherung,
+    this.pflegeversicherung,
+    this.rentenversicherung,
+    this.arbeitslosenversicherung,
+    this.steuerklasse,
+    this.arbeitgeber,
+    this.abrechnungsmonat,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'brutto': brutto,
+        'netto': netto,
+        'lohnsteuer': lohnsteuer,
+        'solidaritaetszuschlag': solidaritaetszuschlag,
+        'kirchensteuer': kirchensteuer,
+        'krankenversicherung': krankenversicherung,
+        'pflegeversicherung': pflegeversicherung,
+        'rentenversicherung': rentenversicherung,
+        'arbeitslosenversicherung': arbeitslosenversicherung,
+        'steuerklasse': steuerklasse,
+        'arbeitgeber': arbeitgeber,
+        'abrechnungsmonat': abrechnungsmonat,
+      };
+
+  factory PayslipDetails.fromJson(Map<String, dynamic> j) => PayslipDetails(
+        brutto: (j['brutto'] as num?)?.toDouble(),
+        netto: (j['netto'] as num?)?.toDouble(),
+        lohnsteuer: (j['lohnsteuer'] as num?)?.toDouble(),
+        solidaritaetszuschlag: (j['solidaritaetszuschlag'] as num?)?.toDouble(),
+        kirchensteuer: (j['kirchensteuer'] as num?)?.toDouble(),
+        krankenversicherung: (j['krankenversicherung'] as num?)?.toDouble(),
+        pflegeversicherung: (j['pflegeversicherung'] as num?)?.toDouble(),
+        rentenversicherung: (j['rentenversicherung'] as num?)?.toDouble(),
+        arbeitslosenversicherung: (j['arbeitslosenversicherung'] as num?)?.toDouble(),
+        steuerklasse: j['steuerklasse'],
+        arbeitgeber: j['arbeitgeber'],
+        abrechnungsmonat: j['abrechnungsmonat'],
+      );
+}
+
 class Transaction {
   final String id;
   final TxType type;
@@ -191,6 +255,7 @@ class Transaction {
   final bool notifyEnabled; // remind before the last 2 occurrences of a recurring transaction
   final String notifyMessage; // custom reminder text (e.g. "cancel this subscription")
   final int? notifyDaysBeforeEach; // also remind this many days before EVERY installment's due date
+  final PayslipDetails? payslipDetails; // structured fields extracted from a scanned payslip
 
   const Transaction({
     required this.id,
@@ -211,6 +276,7 @@ class Transaction {
     this.notifyEnabled = false,
     this.notifyMessage = '',
     this.notifyDaysBeforeEach,
+    this.payslipDetails,
   });
 
   bool get isRecurring => recurrence != RecurrenceFrequency.none;
@@ -234,6 +300,8 @@ class Transaction {
     String? notifyMessage,
     int? notifyDaysBeforeEach,
     bool clearNotifyDaysBeforeEach = false,
+    PayslipDetails? payslipDetails,
+    bool clearPayslipDetails = false,
     bool clearRecurrenceDay = false,
     bool clearRecurrenceWeekday = false,
     bool clearRecurrenceIntervalDays = false,
@@ -259,6 +327,7 @@ class Transaction {
         notifyEnabled: notifyEnabled ?? this.notifyEnabled,
         notifyMessage: notifyMessage ?? this.notifyMessage,
         notifyDaysBeforeEach: clearNotifyDaysBeforeEach ? null : (notifyDaysBeforeEach ?? this.notifyDaysBeforeEach),
+        payslipDetails: clearPayslipDetails ? null : (payslipDetails ?? this.payslipDetails),
       );
 
   Map<String, dynamic> toJson() => {
@@ -280,6 +349,7 @@ class Transaction {
         'notifyEnabled': notifyEnabled,
         'notifyMessage': notifyMessage,
         'notifyDaysBeforeEach': notifyDaysBeforeEach,
+        'payslipDetails': payslipDetails?.toJson(),
       };
 
   factory Transaction.fromJson(Map<String, dynamic> j) {
@@ -311,6 +381,7 @@ class Transaction {
       notifyEnabled: j['notifyEnabled'] ?? false,
       notifyMessage: j['notifyMessage'] ?? '',
       notifyDaysBeforeEach: j['notifyDaysBeforeEach'],
+      payslipDetails: j['payslipDetails'] != null ? PayslipDetails.fromJson(j['payslipDetails']) : null,
     );
   }
 }
@@ -340,6 +411,19 @@ DateTime? nextOccurrencePreview(Transaction t) {
         next = next.add(Duration(days: t.recurrenceIntervalDays!));
       }
       return next;
+    case RecurrenceFrequency.quarterly:
+      if (t.recurrenceDay == null) return null;
+      var probe = clampedMonthDate(t.date.year, t.date.month, t.recurrenceDay!);
+      while (!probe.isAfter(today)) {
+        var m = probe.month + 3;
+        var y = probe.year;
+        while (m > 12) {
+          m -= 12;
+          y++;
+        }
+        probe = clampedMonthDate(y, m, t.recurrenceDay!);
+      }
+      return probe;
     case RecurrenceFrequency.yearly:
       var d = clampedMonthDate(today.year, t.date.month, t.date.day);
       if (d.isBefore(today)) d = clampedMonthDate(today.year + 1, t.date.month, t.date.day);
@@ -384,6 +468,16 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
         break;
       case RecurrenceFrequency.custom:
         next = current.add(Duration(days: t.recurrenceIntervalDays ?? 30));
+        break;
+      case RecurrenceFrequency.quarterly:
+        final day = t.recurrenceDay ?? current.day;
+        var y = current.year;
+        var m = current.month + 3;
+        while (m > 12) {
+          m -= 12;
+          y++;
+        }
+        next = clampedMonthDate(y, m, day);
         break;
       case RecurrenceFrequency.yearly:
         next = clampedMonthDate(current.year + 1, current.month, current.day);
@@ -461,7 +555,7 @@ class NotificationService {
     if (occurrences.length >= 2) targets[0] = occurrences[occurrences.length - 2];
     targets[1] = occurrences.last;
     for (final entry in targets.entries) {
-      final when = DateTime(entry.value.year, entry.value.month, entry.value.day, 9);
+      final when = DateTime(entry.value.year, entry.value.month, entry.value.day, 9).subtract(const Duration(days: 1));
       if (!when.isAfter(now)) continue;
       await _plugin.zonedSchedule(
         _idFor(t.id, entry.key),
@@ -528,6 +622,9 @@ const defaultCategories = <Category>[
   Category(id: 'e_loans_car', name: 'قسط خودرو', parentId: 'e_loans', type: TxType.expense),
   Category(id: 'e_loans_home', name: 'قسط مسکن', parentId: 'e_loans', type: TxType.expense),
   Category(id: 'e_loans_personal', name: 'وام شخصی', parentId: 'e_loans', type: TxType.expense),
+  Category(id: 'e_loans_installment_purchase', name: 'خرید قسطی', parentId: 'e_loans', type: TxType.expense),
+  Category(id: 'e_subscription', name: 'اشتراک', type: TxType.expense),
+  Category(id: 'e_insurance', name: 'بیمه', type: TxType.expense),
   Category(id: 'e_misc', name: 'متفرقه', type: TxType.expense),
   Category(id: 'i_salary', name: 'حقوق', type: TxType.income),
   Category(id: 'i_freelance', name: 'فریلنسری', type: TxType.income),
@@ -548,6 +645,10 @@ const kCategoryIcons = <String, IconData>{
   'e_leisure': Icons.sports_esports_outlined,
   'e_clothing': Icons.checkroom_outlined,
   'e_loans': Icons.credit_card_outlined,
+  'e_loans_installment_purchase': Icons.shopping_bag_outlined,
+  'e_subscription': Icons.subscriptions_outlined,
+  'e_insurance': Icons.health_and_safety_outlined,
+  'e_car_parking': Icons.local_parking_outlined,
   'e_misc': Icons.more_horiz,
   'i_salary': Icons.payments_outlined,
   'i_freelance': Icons.laptop_mac_outlined,
@@ -557,6 +658,9 @@ const kCategoryIcons = <String, IconData>{
 };
 
 IconData iconForCategory(Category? c, List<Category> all) {
+  if (c?.iconCodePoint != null) {
+    return IconData(c!.iconCodePoint!, fontFamily: 'MaterialIcons');
+  }
   var cur = c;
   while (cur != null) {
     final icon = kCategoryIcons[cur.id];
@@ -566,6 +670,115 @@ IconData iconForCategory(Category? c, List<Category> all) {
     cur = matches.isEmpty ? null : matches.first;
   }
   return (c?.type ?? TxType.expense) == TxType.expense ? Icons.remove_circle_outline : Icons.add_circle_outline;
+}
+
+// Keyword -> icon hints used to pick an icon for a newly created category.
+// Checked first (fast, offline); Gemini is used as a fallback for names
+// that don't match any of these.
+const _iconKeywordHints = <String, IconData>{
+  'خوراک': Icons.restaurant_outlined,
+  'غذا': Icons.restaurant_outlined,
+  'رستوران': Icons.restaurant_outlined,
+  'کافه': Icons.local_cafe_outlined,
+  'قهوه': Icons.local_cafe_outlined,
+  'خانه': Icons.home_outlined,
+  'مسکن': Icons.home_outlined,
+  'اجاره': Icons.home_outlined,
+  'خودرو': Icons.directions_car_outlined,
+  'ماشین': Icons.directions_car_outlined,
+  'بنزین': Icons.local_gas_station_outlined,
+  'سوخت': Icons.local_gas_station_outlined,
+  'پارکینگ': Icons.local_parking_outlined,
+  'تعمیر': Icons.build_outlined,
+  'حمل‌ونقل': Icons.directions_bus_outlined,
+  'اتوبوس': Icons.directions_bus_outlined,
+  'مترو': Icons.subway_outlined,
+  'قطار': Icons.train_outlined,
+  'هواپیما': Icons.flight_outlined,
+  'سفر': Icons.flight_outlined,
+  'برق': Icons.bolt_outlined,
+  'آب': Icons.water_drop_outlined,
+  'گاز': Icons.local_fire_department_outlined,
+  'اینترنت': Icons.wifi_outlined,
+  'تلفن': Icons.phone_iphone_outlined,
+  'موبایل': Icons.phone_iphone_outlined,
+  'درمان': Icons.medical_services_outlined,
+  'دارو': Icons.medication_outlined,
+  'پزشک': Icons.medical_services_outlined,
+  'دندان': Icons.medical_services_outlined,
+  'بیمه': Icons.health_and_safety_outlined,
+  'ورزش': Icons.fitness_center_outlined,
+  'باشگاه': Icons.fitness_center_outlined,
+  'تفریح': Icons.sports_esports_outlined,
+  'سینما': Icons.movie_outlined,
+  'فیلم': Icons.movie_outlined,
+  'موسیقی': Icons.music_note_outlined,
+  'پوشاک': Icons.checkroom_outlined,
+  'لباس': Icons.checkroom_outlined,
+  'کفش': Icons.checkroom_outlined,
+  'قسط': Icons.credit_card_outlined,
+  'اقساط': Icons.credit_card_outlined,
+  'وام': Icons.credit_card_outlined,
+  'اشتراک': Icons.subscriptions_outlined,
+  'حقوق': Icons.payments_outlined,
+  'فریلنس': Icons.laptop_mac_outlined,
+  'سرمایه': Icons.trending_up,
+  'سهام': Icons.trending_up,
+  'هدیه': Icons.card_giftcard_outlined,
+  'کتاب': Icons.menu_book_outlined,
+  'آموزش': Icons.school_outlined,
+  'مدرسه': Icons.school_outlined,
+  'دانشگاه': Icons.school_outlined,
+  'بچه': Icons.child_care_outlined,
+  'کودک': Icons.child_care_outlined,
+  'حیوان': Icons.pets_outlined,
+  'خیریه': Icons.volunteer_activism_outlined,
+  'کمک': Icons.volunteer_activism_outlined,
+  'مالیات': Icons.receipt_long_outlined,
+  'جریمه': Icons.gavel_outlined,
+  'آرایش': Icons.face_retouching_natural_outlined,
+  'زیبایی': Icons.face_retouching_natural_outlined,
+};
+
+Future<IconData?> _suggestIconViaGemini(String categoryName) async {
+  final key = await Store.loadGeminiKey();
+  if (key == null || key.trim().isEmpty) return null;
+  try {
+    final options = _iconKeywordHints.keys.join('، ');
+    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$key');
+    final body = jsonEncode({
+      'contents': [
+        {
+          'parts': [
+            {
+              'text':
+                  'یک دسته‌بندی مالی با نام "$categoryName" داریم. از این لیست کلمات، فقط دقیقاً یکی را که مفهوماً نزدیک‌ترین به این دسته‌بندی است انتخاب کن و فقط همان یک کلمه را بدون هیچ توضیح دیگری برگردان: $options',
+            },
+          ],
+        },
+      ],
+    });
+    final resp = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: body).timeout(const Duration(seconds: 8));
+    if (resp.statusCode != 200) return null;
+    final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
+    final text = decoded['candidates']?[0]?['content']?['parts']?[0]?['text']?.toString().trim();
+    if (text == null) return null;
+    for (final k in _iconKeywordHints.keys) {
+      if (text.contains(k)) return _iconKeywordHints[k];
+    }
+  } catch (_) {
+    // best-effort only; fall back to a generic icon on any failure
+  }
+  return null;
+}
+
+Future<IconData> suggestIconForCategory(String name, TxType type) async {
+  for (final entry in _iconKeywordHints.entries) {
+    if (name.contains(entry.key)) return entry.value;
+  }
+  final aiIcon = await _suggestIconViaGemini(name);
+  if (aiIcon != null) return aiIcon;
+  return type == TxType.expense ? Icons.category_outlined : Icons.attach_money_outlined;
 }
 
 // ============================== Storage ==============================
@@ -632,13 +845,23 @@ class Store {
       list = [...list, ...defaultCategories.where((c) => c.id == 'e_car_parking')];
       changed = true;
     }
+    for (final newId in ['e_loans_installment_purchase', 'e_subscription', 'e_insurance']) {
+      if (!list.any((c) => c.id == newId)) {
+        list = [...list, ...defaultCategories.where((c) => c.id == newId)];
+        changed = true;
+      }
+    }
     if (changed) await saveCategories(list);
     return list;
   }
 
   static Future<void> saveCategories(List<Category> list) async {
+    // Sort alphabetically (by name) every time; since children are always
+    // filtered by parentId when rendered, a flat alphabetical sort keeps
+    // each level's items alphabetical too.
+    final sorted = List.of(list)..sort((a, b) => a.name.compareTo(b.name));
     final sp = await SharedPreferences.getInstance();
-    await sp.setStringList(_catKey, list.map((c) => jsonEncode(c.toJson())).toList());
+    await sp.setStringList(_catKey, sorted.map((c) => jsonEncode(c.toJson())).toList());
   }
 
   static Future<List<Account>> loadAccounts() async {
@@ -1192,6 +1415,68 @@ class _HomeScreenState extends State<HomeScreen> {
     return map;
   }
 
+  String get primaryCurrency => accounts.isNotEmpty ? accounts.first.currency : 'EUR';
+
+  /// Top-level category (parent rolled up) expense totals for the current
+  /// period (same period as [periodStatsByCurrency]), in [primaryCurrency].
+  Map<Category, double> get expenseByTopCategoryForPeriod {
+    final start = lastIncomeDate;
+    final now = DateTime.now();
+    final map = <String, double>{};
+    for (final t in tx) {
+      if (t.type != TxType.expense) continue;
+      if (currencyOf(t.accountId) != primaryCurrency) continue;
+      if (start != null) {
+        if (t.date.isBefore(DateTime(start.year, start.month, start.day))) continue;
+      } else {
+        if (!(t.date.year == now.year && t.date.month == now.month)) continue;
+      }
+      final match = categories.where((c) => c.id == t.categoryId).toList();
+      var cat = match.isEmpty ? null : match.first;
+      while (cat?.parentId != null) {
+        final parentMatch = categories.where((c) => c.id == cat!.parentId).toList();
+        if (parentMatch.isEmpty) break;
+        cat = parentMatch.first;
+      }
+      final key = cat?.id ?? '_uncategorized_';
+      map[key] = (map[key] ?? 0) + t.amount;
+    }
+    final result = <Category, double>{};
+    map.forEach((id, amount) {
+      final match = categories.where((c) => c.id == id).toList();
+      result[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = amount;
+    });
+    return result;
+  }
+
+  /// Income and expense totals (in [primaryCurrency]) for each of the last
+  /// [months] calendar months, oldest first.
+  List<({DateTime month, double income, double expense})> monthlyTotals(int months) {
+    final now = DateTime.now();
+    final result = <({DateTime month, double income, double expense})>[];
+    for (var i = months - 1; i >= 0; i--) {
+      var y = now.year;
+      var m = now.month - i;
+      while (m < 1) {
+        m += 12;
+        y--;
+      }
+      var income = 0.0, expense = 0.0;
+      for (final t in tx) {
+        if (currencyOf(t.accountId) != primaryCurrency) continue;
+        if (t.date.year == y && t.date.month == m) {
+          if (t.type == TxType.income) {
+            income += t.amount;
+          } else {
+            expense += t.amount;
+          }
+        }
+      }
+      result.add((month: DateTime(y, m), income: income, expense: expense));
+    }
+    return result;
+  }
+
   Future<void> _openEditor({Transaction? existing}) async {
     final result = await Navigator.push<Object>(
       context,
@@ -1330,6 +1615,18 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
+            if (tx.isNotEmpty)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: DashboardCharts(
+                    expenseByCategory: expenseByTopCategoryForPeriod,
+                    monthly: monthlyTotals(6),
+                    currency: primaryCurrency,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 16),
             Text('تراکنش‌ها', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             if (tx.isEmpty)
@@ -1434,7 +1731,199 @@ class _MonthStat extends StatelessWidget {
   }
 }
 
+// ============================== Dashboard charts ==============================
+
+class DashboardCharts extends StatelessWidget {
+  final Map<Category, double> expenseByCategory;
+  final List<({DateTime month, double income, double expense})> monthly;
+  final String currency;
+  const DashboardCharts({required this.expenseByCategory, required this.monthly, required this.currency, super.key});
+
+  static const _palette = [
+    Colors.indigo,
+    Colors.teal,
+    Colors.orange,
+    Colors.pink,
+    Colors.purple,
+    Colors.brown,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final total = expenseByCategory.values.fold(0.0, (a, b) => a + b);
+    final entries = expenseByCategory.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final top = entries.take(6).toList();
+    final otherSum = entries.skip(6).fold(0.0, (s, e) => s + e.value);
+    final maxMonthly = monthly.fold(0.0, (m, e) => [m, e.income, e.expense].reduce((a, b) => a > b ? a : b));
+    Widget? comparison;
+    if (monthly.length >= 2) {
+      final curr = monthly.last.expense;
+      final prev = monthly[monthly.length - 2].expense;
+      if (prev > 0) {
+        final change = (curr - prev) / prev * 100;
+        final up = change >= 0;
+        comparison = Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(
+            children: [
+              Icon(up ? Icons.trending_up : Icons.trending_down, color: up ? Colors.red : Colors.green, size: 18),
+              const SizedBox(width: 4),
+              Text(
+                'هزینه‌ی این ماه ${ltr('${change.abs().round()}%')} ${up ? 'بیشتر' : 'کمتر'} از ماه قبل',
+                style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (comparison != null) comparison,
+        if (total > 0) ...[
+          Text('هزینه‌ها بر اساس دسته‌بندی', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 170,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 150,
+                  child: PieChart(
+                    PieChartData(
+                      sectionsSpace: 2,
+                      centerSpaceRadius: 30,
+                      sections: [
+                        for (var i = 0; i < top.length; i++)
+                          PieChartSectionData(
+                            value: top[i].value,
+                            color: _palette[i % _palette.length],
+                            title: '${(top[i].value / total * 100).round()}%',
+                            radius: 46,
+                            titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        if (otherSum > 0)
+                          PieChartSectionData(
+                            value: otherSum,
+                            color: Colors.grey,
+                            title: '${(otherSum / total * 100).round()}%',
+                            radius: 46,
+                            titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (var i = 0; i < top.length; i++) _legendRow(_palette[i % _palette.length], top[i].key.name, top[i].value),
+                      if (otherSum > 0) _legendRow(Colors.grey, 'سایر', otherSum),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
+        Text('روند ۶ ماه اخیر', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 190,
+          child: maxMonthly <= 0
+              ? const Center(child: Text('داده‌ای برای نمایش وجود ندارد.', style: TextStyle(color: Colors.grey)))
+              : BarChart(
+                  BarChartData(
+                    maxY: maxMonthly * 1.15,
+                    barGroups: [
+                      for (var i = 0; i < monthly.length; i++)
+                        BarChartGroupData(x: i, barRods: [
+                          BarChartRodData(toY: monthly[i].income, color: Colors.green, width: 8),
+                          BarChartRodData(toY: monthly[i].expense, color: Colors.red, width: 8),
+                        ]),
+                    ],
+                    titlesData: FlTitlesData(
+                      leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (value, meta) {
+                            final i = value.toInt();
+                            if (i < 0 || i >= monthly.length) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(ltr(DateFormat('MM/yy').format(monthly[i].month)), style: const TextStyle(fontSize: 10)),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    gridData: const FlGridData(show: false),
+                    borderData: FlBorderData(show: false),
+                  ),
+                ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _dot(Colors.green),
+            const SizedBox(width: 4),
+            const Text('درآمد', style: TextStyle(fontSize: 12)),
+            const SizedBox(width: 16),
+            _dot(Colors.red),
+            const SizedBox(width: 4),
+            const Text('هزینه', style: TextStyle(fontSize: 12)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _legendRow(Color color, String label, double amount) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+            const SizedBox(width: 6),
+            Expanded(child: Text(label, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+            const SizedBox(width: 4),
+            Text(ltr(formatMoney(amount, currency)), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          ],
+        ),
+      );
+
+  Widget _dot(Color color) => Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
+}
+
 // ============================== Drafts ==============================
+
+// ============================== Full image viewer ==============================
+
+class FullImageViewer extends StatelessWidget {
+  final String imagePath;
+  const FullImageViewer({required this.imagePath, super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(backgroundColor: Colors.black, iconTheme: const IconThemeData(color: Colors.white)),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 6,
+          child: Image.file(File(imagePath), fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+}
 
 class DraftsScreen extends StatefulWidget {
   const DraftsScreen({super.key});
@@ -1610,6 +2099,8 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
         return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
       case RecurrenceFrequency.custom:
         return 'هر ${t.recurrenceIntervalDays ?? '?'} روز';
+      case RecurrenceFrequency.quarterly:
+        return 'فصلی (روز ${t.recurrenceDay ?? '?'})';
       case RecurrenceFrequency.yearly:
         return 'سالانه (${ltr(DateFormat('dd.MM').format(t.date))})';
       case RecurrenceFrequency.none:
@@ -2088,9 +2579,12 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.file(File(widget.imagePath), height: 180, width: double.infinity, fit: BoxFit.cover),
+          GestureDetector(
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FullImageViewer(imagePath: widget.imagePath))),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(File(widget.imagePath), height: 180, width: double.infinity, fit: BoxFit.cover),
+            ),
           ),
           const SizedBox(height: 12),
           if (hasGeminiKey)
@@ -2199,15 +2693,15 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 // ============================== Payslip review ==============================
 
 const _payslipLabels = <String, String>{
-  'brutto': 'Brutto',
-  'netto': 'Netto',
-  'lohnsteuer': 'Lohnsteuer',
-  'solidaritaetszuschlag': 'Solidaritätszuschlag',
-  'kirchensteuer': 'Kirchensteuer',
-  'krankenversicherung': 'Krankenversicherung',
-  'pflegeversicherung': 'Pflegeversicherung',
-  'rentenversicherung': 'Rentenversicherung',
-  'arbeitslosenversicherung': 'Arbeitslosenversicherung',
+  'brutto': 'حقوق ناخالص (Brutto)',
+  'netto': 'حقوق خالص (Netto)',
+  'lohnsteuer': 'مالیات بر درآمد (Lohnsteuer)',
+  'solidaritaetszuschlag': 'مالیات همبستگی (Solidaritätszuschlag)',
+  'kirchensteuer': 'مالیات کلیسا (Kirchensteuer)',
+  'krankenversicherung': 'بیمه درمانی (Krankenversicherung)',
+  'pflegeversicherung': 'بیمه مراقبت (Pflegeversicherung)',
+  'rentenversicherung': 'بیمه بازنشستگی (Rentenversicherung)',
+  'arbeitslosenversicherung': 'بیمه بیکاری (Arbeitslosenversicherung)',
 };
 
 class PayslipReviewScreen extends StatefulWidget {
@@ -2325,14 +2819,21 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
       return;
     }
-    final lines = <String>[];
-    if (arbeitgeberCtrl.text.trim().isNotEmpty) lines.add(arbeitgeberCtrl.text.trim());
-    if (monatCtrl.text.trim().isNotEmpty) lines.add('ماه: ${monatCtrl.text.trim()}');
-    if (steuerklasseCtrl.text.trim().isNotEmpty) lines.add('Steuerklasse: ${steuerklasseCtrl.text.trim()}');
-    for (final k in _payslipLabels.keys) {
-      final v = numCtrls[k]!.text.trim();
-      if (v.isNotEmpty) lines.add('${_payslipLabels[k]}: $v');
-    }
+    double? num_(String k) => double.tryParse(numCtrls[k]!.text.trim().replaceAll(',', '.'));
+    final details = PayslipDetails(
+      brutto: num_('brutto'),
+      netto: num_('netto'),
+      lohnsteuer: num_('lohnsteuer'),
+      solidaritaetszuschlag: num_('solidaritaetszuschlag'),
+      kirchensteuer: num_('kirchensteuer'),
+      krankenversicherung: num_('krankenversicherung'),
+      pflegeversicherung: num_('pflegeversicherung'),
+      rentenversicherung: num_('rentenversicherung'),
+      arbeitslosenversicherung: num_('arbeitslosenversicherung'),
+      steuerklasse: steuerklasseCtrl.text.trim().isEmpty ? null : steuerklasseCtrl.text.trim(),
+      arbeitgeber: arbeitgeberCtrl.text.trim().isEmpty ? null : arbeitgeberCtrl.text.trim(),
+      abrechnungsmonat: monatCtrl.text.trim().isEmpty ? null : monatCtrl.text.trim(),
+    );
     final duplicate = existingTx.any((t) =>
         t.type == TxType.income &&
         (t.amount - netto).abs() < 0.01 &&
@@ -2361,8 +2862,9 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       categoryId: selectedCategory?.id ?? '_uncategorized_',
       accountId: selectedAccount?.id ?? 'default',
       date: date,
-      note: lines.join('\n'),
+      note: '',
       draft: draft,
+      payslipDetails: details,
     );
     if (!context.mounted) return;
     Navigator.pop(context, result);
@@ -2384,9 +2886,12 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.file(File(widget.imagePath), height: 180, width: double.infinity, fit: BoxFit.cover),
+          GestureDetector(
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FullImageViewer(imagePath: widget.imagePath))),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(File(widget.imagePath), height: 180, width: double.infinity, fit: BoxFit.cover),
+            ),
           ),
           const SizedBox(height: 12),
           if (hasGeminiKey)
@@ -2507,6 +3012,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
   bool _dirty = false;
   List<Category> categories = [];
   List<ReceiptItemEntry> items = [];
+  final Map<String, TextEditingController> payslipNumCtrls = {
+    for (final k in _payslipLabels.keys) k: TextEditingController(),
+  };
+  final payslipSteuerklasseCtrl = TextEditingController();
+  final payslipArbeitgeberCtrl = TextEditingController();
+  final payslipMonatCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -2534,10 +3045,28 @@ class _TransactionEditorState extends State<TransactionEditor> {
       notifyDaysCtrl.text = e.notifyDaysBeforeEach?.toString() ?? '';
       draft = e.draft;
       items = List.of(e.items);
+      if (e.payslipDetails != null) {
+        final pd = e.payslipDetails!;
+        final map = {
+          'brutto': pd.brutto,
+          'netto': pd.netto,
+          'lohnsteuer': pd.lohnsteuer,
+          'solidaritaetszuschlag': pd.solidaritaetszuschlag,
+          'kirchensteuer': pd.kirchensteuer,
+          'krankenversicherung': pd.krankenversicherung,
+          'pflegeversicherung': pd.pflegeversicherung,
+          'rentenversicherung': pd.rentenversicherung,
+          'arbeitslosenversicherung': pd.arbeitslosenversicherung,
+        };
+        for (final k in _payslipLabels.keys) {
+          payslipNumCtrls[k]!.text = map[k] != null ? map[k]!.toStringAsFixed(2) : '';
+        }
+        payslipSteuerklasseCtrl.text = pd.steuerklasse ?? '';
+        payslipArbeitgeberCtrl.text = pd.arbeitgeber ?? '';
+        payslipMonatCtrl.text = pd.abrechnungsmonat ?? '';
+      }
       final match = categories.where((c) => c.id == e.categoryId).toList();
       selectedCategory = match.isEmpty ? null : match.first;
-    } else {
-      dayCtrl.text = date.day.toString();
     }
     amountCtrl.addListener(() => _dirty = true);
     noteCtrl.addListener(() => _dirty = true);
@@ -2546,6 +3075,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
     installmentsCtrl.addListener(() => _dirty = true);
     notifyMessageCtrl.addListener(() => _dirty = true);
     notifyDaysCtrl.addListener(() => _dirty = true);
+    for (final c in payslipNumCtrls.values) {
+      c.addListener(() => _dirty = true);
+    }
+    payslipSteuerklasseCtrl.addListener(() => _dirty = true);
+    payslipArbeitgeberCtrl.addListener(() => _dirty = true);
+    payslipMonatCtrl.addListener(() => _dirty = true);
   }
 
   Future<void> _pickCategory() async {
@@ -2586,8 +3121,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
     int? recInterval;
     int? recInstallments;
     DateTime? recEndDate;
-    if (recurrence == RecurrenceFrequency.monthly) {
-      recDay = int.tryParse(dayCtrl.text) ?? date.day;
+    if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
+      recDay = int.tryParse(dayCtrl.text);
+      if (recDay == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
+        return false;
+      }
       if (recDay < 1) recDay = 1;
       if (recDay > 31) recDay = 31;
     } else if (recurrence == RecurrenceFrequency.weekly) {
@@ -2608,6 +3147,34 @@ class _TransactionEditorState extends State<TransactionEditor> {
       // endMode == 'unlimited': leave both recEndDate and recInstallments null
     }
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
+    PayslipDetails? payslipDetails;
+    if (type == TxType.income) {
+      double? num_(String k) {
+        final t = payslipNumCtrls[k]!.text.trim();
+        return t.isEmpty ? null : double.tryParse(t.replaceAll(',', '.'));
+      }
+
+      final hasAny = payslipNumCtrls.values.any((c) => c.text.trim().isNotEmpty) ||
+          payslipSteuerklasseCtrl.text.trim().isNotEmpty ||
+          payslipArbeitgeberCtrl.text.trim().isNotEmpty ||
+          payslipMonatCtrl.text.trim().isNotEmpty;
+      if (hasAny) {
+        payslipDetails = PayslipDetails(
+          brutto: num_('brutto'),
+          netto: num_('netto'),
+          lohnsteuer: num_('lohnsteuer'),
+          solidaritaetszuschlag: num_('solidaritaetszuschlag'),
+          kirchensteuer: num_('kirchensteuer'),
+          krankenversicherung: num_('krankenversicherung'),
+          pflegeversicherung: num_('pflegeversicherung'),
+          rentenversicherung: num_('rentenversicherung'),
+          arbeitslosenversicherung: num_('arbeitslosenversicherung'),
+          steuerklasse: payslipSteuerklasseCtrl.text.trim().isEmpty ? null : payslipSteuerklasseCtrl.text.trim(),
+          arbeitgeber: payslipArbeitgeberCtrl.text.trim().isEmpty ? null : payslipArbeitgeberCtrl.text.trim(),
+          abrechnungsmonat: payslipMonatCtrl.text.trim().isEmpty ? null : payslipMonatCtrl.text.trim(),
+        );
+      }
+    }
     final result = Transaction(
       id: id,
       type: type,
@@ -2627,6 +3194,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       notifyEnabled: notifyEnabled,
       notifyMessage: notifyMessageCtrl.text.trim(),
       notifyDaysBeforeEach: notifyEnabled && notifyEachEnabled ? int.tryParse(notifyDaysCtrl.text) : null,
+      payslipDetails: payslipDetails,
     );
     if (notifyEnabled) {
       await NotificationService.instance.scheduleForTransaction(result, selectedCategory!.name);
@@ -2698,6 +3266,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
             DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی (روز مشخصی از هفته)')),
             DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه (روز مشخصی از ماه)')),
+            DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text('فصلی (هر سه ماه)')),
             DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('سالانه (در همین تاریخ هر سال)')),
             DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
           ],
@@ -2706,13 +3275,13 @@ class _TransactionEditorState extends State<TransactionEditor> {
             _dirty = true;
           }),
         ),
-        if (recurrence == RecurrenceFrequency.monthly) ...[
+        if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) ...[
           const SizedBox(height: 12),
           TextField(
             controller: dayCtrl,
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
-              labelText: 'روز سررسید در ماه (۱ تا ۳۱)',
+              labelText: 'روز سررسید در ماه (۱ تا ۳۱) *',
               helperText: 'برای ماه‌های کوتاه‌تر، به‌صورت خودکار آخرین روز همان ماه در نظر گرفته می‌شود.',
               border: OutlineInputBorder(),
             ),
@@ -2799,8 +3368,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
             const SizedBox(height: 12),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('یادآوری قبل از پایان اقساط'),
-              subtitle: const Text('یک نوتیفیکیشن پیش از آخرین قسط و یکی مانده به آخر ارسال می‌شود.'),
+              title: const Text('اعلان اقساط'),
+              subtitle: const Text('نمایش اعلان یک روز قبل از دو قسط آخر'),
               value: notifyEnabled,
               onChanged: (v) async {
                 if (v) await NotificationService.instance.requestPermission();
@@ -2904,7 +3473,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'مبلغ', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'مبلغ', hintText: 'مثلاً 12.50 یا 12,50', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
@@ -2987,6 +3556,34 @@ class _TransactionEditorState extends State<TransactionEditor> {
               );
             }),
           ],
+          if (type == TxType.income) ...[
+            const SizedBox(height: 16),
+            Text('جزئیات فیش حقوقی (اختیاری)', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            TextField(
+              controller: payslipArbeitgeberCtrl,
+              decoration: const InputDecoration(labelText: 'کارفرما (Arbeitgeber)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: payslipMonatCtrl,
+              decoration: const InputDecoration(labelText: 'ماه تسویه (Abrechnungsmonat)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: payslipSteuerklasseCtrl,
+              decoration: const InputDecoration(labelText: 'کلاس مالیاتی (Steuerklasse)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            ..._payslipLabels.keys.map((k) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: TextField(
+                    controller: payslipNumCtrls[k],
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(labelText: _payslipLabels[k], border: const OutlineInputBorder()),
+                  ),
+                )),
+          ],
           const SizedBox(height: 16),
           _recurrenceSection(),
           const SizedBox(height: 12),
@@ -3045,11 +3642,13 @@ class _CategoryPickerState extends State<CategoryPicker> {
       ),
     );
     if (name == null || name.isEmpty) return;
+    final icon = await suggestIconForCategory(name, widget.type);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
       parentId: parentId,
       type: widget.type,
+      iconCodePoint: icon.codePoint,
     );
     setState(() => categories = [...categories, newCat]);
     await Store.saveCategories(categories);
@@ -3171,11 +3770,13 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       ),
     );
     if (name == null || name.isEmpty) return;
+    final icon = await suggestIconForCategory(name, selectedType);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
       parentId: parentId,
       type: selectedType,
+      iconCodePoint: icon.codePoint,
     );
     setState(() => categories = [...categories, newCat]);
     await Store.saveCategories(categories);
@@ -3312,7 +3913,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
           Expanded(
             child: tree.isEmpty
                 ? const Center(child: Text('دسته‌بندی‌ای وجود ندارد.'))
-                : ListView(children: tree),
+                : ListView(padding: const EdgeInsets.only(bottom: 88), children: tree),
           ),
         ],
       ),
