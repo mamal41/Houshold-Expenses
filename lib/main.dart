@@ -35,11 +35,11 @@ Future<bool> confirmExitApp(BuildContext context) async {
   final result = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('خروج از برنامه'),
-      content: const Text('آیا می‌خواهید از برنامه خارج شوید؟'),
+      title: const Text('Ø®Ø±ÙˆØ¬ Ø§Ø² Ø¨Ø±Ù†Ø§Ù…Ù‡'),
+      content: const Text('Ø¢ÛŒØ§ Ù…ÛŒâ€ŒØ®ÙˆØ§Ù‡ÛŒØ¯ Ø§Ø² Ø¨Ø±Ù†Ø§Ù…Ù‡ Ø®Ø§Ø±Ø¬ Ø´ÙˆÛŒØ¯ØŸ'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø®ÛŒØ±')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø¨Ù„Ù‡')),
       ],
     ),
   );
@@ -52,12 +52,12 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
   final choice = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('تغییرات ذخیره نشده'),
-      content: const Text('چیزی تغییر کرده یا اضافه شده که هنوز ذخیره نشده. چه کار کنم؟'),
+      title: const Text('ØªØºÛŒÛŒØ±Ø§Øª Ø°Ø®ÛŒØ±Ù‡ Ù†Ø´Ø¯Ù‡'),
+      content: const Text('Ú†ÛŒØ²ÛŒ ØªØºÛŒÛŒØ± Ú©Ø±Ø¯Ù‡ ÛŒØ§ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯Ù‡ Ú©Ù‡ Ù‡Ù†ÙˆØ² Ø°Ø®ÛŒØ±Ù‡ Ù†Ø´Ø¯Ù‡. Ú†Ù‡ Ú©Ø§Ø± Ú©Ù†Ù…ØŸ'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('انصراف')),
-        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خروج بدون ذخیره')),
-        if (onSave != null) FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('ذخیره و خروج')),
+        TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('Ø®Ø±ÙˆØ¬ Ø¨Ø¯ÙˆÙ† Ø°Ø®ÛŒØ±Ù‡')),
+        if (onSave != null) FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Ø°Ø®ÛŒØ±Ù‡ Ùˆ Ø®Ø±ÙˆØ¬')),
       ],
     ),
   );
@@ -84,15 +84,15 @@ extension AccountTypeLabel on AccountType {
   String get label {
     switch (this) {
       case AccountType.cash:
-        return 'نقدی';
+        return 'Ù†Ù‚Ø¯ÛŒ';
       case AccountType.bank:
-        return 'بانکی';
+        return 'Ø¨Ø§Ù†Ú©ÛŒ';
       case AccountType.creditCard:
-        return 'کارت اعتباری';
+        return 'Ú©Ø§Ø±Øª Ø§Ø¹ØªØ¨Ø§Ø±ÛŒ';
       case AccountType.savings:
-        return 'پس‌انداز';
+        return 'Ù¾Ø³â€ŒØ§Ù†Ø¯Ø§Ø²';
       case AccountType.other:
-        return 'سایر';
+        return 'Ø³Ø§ÛŒØ±';
     }
   }
 }
@@ -252,7 +252,8 @@ class Transaction {
   final DateTime? recurrenceEndDate; // last payment date (optional, alternative to installments)
   final bool draft; // true = saved from a scan but not yet confirmed by the user
   final List<ReceiptItemEntry> items; // structured line items from a scanned receipt (optional)
-  final bool notifyEnabled; // remind before the last 2 occurrences of a recurring transaction
+  final bool notifyEnabled; // whether the notification section is active at all
+  final bool notifyLastTwoEnabled; // remind 1 day before the last 2 occurrences
   final String notifyMessage; // custom reminder text (e.g. "cancel this subscription")
   final int? notifyDaysBeforeEach; // also remind this many days before EVERY installment's due date
   final PayslipDetails? payslipDetails; // structured fields extracted from a scanned payslip
@@ -274,6 +275,7 @@ class Transaction {
     this.draft = false,
     this.items = const [],
     this.notifyEnabled = false,
+    this.notifyLastTwoEnabled = false,
     this.notifyMessage = '',
     this.notifyDaysBeforeEach,
     this.payslipDetails,
@@ -297,6 +299,7 @@ class Transaction {
     bool? draft,
     List<ReceiptItemEntry>? items,
     bool? notifyEnabled,
+    bool? notifyLastTwoEnabled,
     String? notifyMessage,
     int? notifyDaysBeforeEach,
     bool clearNotifyDaysBeforeEach = false,
@@ -325,6 +328,7 @@ class Transaction {
         draft: draft ?? this.draft,
         items: items ?? this.items,
         notifyEnabled: notifyEnabled ?? this.notifyEnabled,
+        notifyLastTwoEnabled: notifyLastTwoEnabled ?? this.notifyLastTwoEnabled,
         notifyMessage: notifyMessage ?? this.notifyMessage,
         notifyDaysBeforeEach: clearNotifyDaysBeforeEach ? null : (notifyDaysBeforeEach ?? this.notifyDaysBeforeEach),
         payslipDetails: clearPayslipDetails ? null : (payslipDetails ?? this.payslipDetails),
@@ -347,6 +351,7 @@ class Transaction {
         'draft': draft,
         'items': items.map((e) => e.toJson()).toList(),
         'notifyEnabled': notifyEnabled,
+        'notifyLastTwoEnabled': notifyLastTwoEnabled,
         'notifyMessage': notifyMessage,
         'notifyDaysBeforeEach': notifyDaysBeforeEach,
         'payslipDetails': payslipDetails?.toJson(),
@@ -379,6 +384,7 @@ class Transaction {
       draft: j['draft'] ?? false,
       items: (j['items'] as List<dynamic>?)?.map((e) => ReceiptItemEntry.fromJson(e)).toList() ?? const [],
       notifyEnabled: j['notifyEnabled'] ?? false,
+      notifyLastTwoEnabled: j['notifyLastTwoEnabled'] ?? false,
       notifyMessage: j['notifyMessage'] ?? '',
       notifyDaysBeforeEach: j['notifyDaysBeforeEach'],
       payslipDetails: j['payslipDetails'] != null ? PayslipDetails.fromJson(j['payslipDetails']) : null,
@@ -441,11 +447,14 @@ DateTime? nextOccurrencePreview(Transaction t) {
 /// has no meaning for those.
 List<DateTime> computeRecurrenceOccurrences(Transaction t) {
   if (!t.isRecurring) return [];
-  if (t.installments == null && t.recurrenceEndDate == null) return [];
+  final unlimited = t.installments == null && t.recurrenceEndDate == null;
   final result = <DateTime>[];
   var current = t.date;
   var count = 0;
-  const hardCap = 1000; // safety guard against runaway loops
+  // For a truly unlimited series there is no real "last" occurrence; cap
+  // generation to a reasonable window (used only for the optional
+  // per-installment reminder, never for the "last 2" reminder).
+  final hardCap = unlimited ? 200 : 1000;
   while (count < hardCap) {
     if (t.recurrenceEndDate != null && current.isAfter(t.recurrenceEndDate!)) break;
     result.add(current);
@@ -541,19 +550,22 @@ class NotificationService {
     final occurrences = computeRecurrenceOccurrences(t);
     if (occurrences.isEmpty) return;
     final now = DateTime.now();
-    final body = t.notifyMessage.trim().isNotEmpty ? t.notifyMessage.trim() : 'سررسید این تراکنش تکرارشونده نزدیک است.';
+    final body = t.notifyMessage.trim().isNotEmpty ? t.notifyMessage.trim() : 'Ø³Ø±Ø±Ø³ÛŒØ¯ Ø§ÛŒÙ† ØªØ±Ø§Ú©Ù†Ø´ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡ Ù†Ø²Ø¯ÛŒÚ© Ø§Ø³Øª.';
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
         'recurring_due',
-        'یادآوری تراکنش‌های تکرارشونده',
-        channelDescription: 'یادآوری قبل از سررسیدهای یک تراکنش تکرارشونده',
+        'ÛŒØ§Ø¯Ø¢ÙˆØ±ÛŒ ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡',
+        channelDescription: 'ÛŒØ§Ø¯Ø¢ÙˆØ±ÛŒ Ù‚Ø¨Ù„ Ø§Ø² Ø³Ø±Ø±Ø³ÛŒØ¯Ù‡Ø§ÛŒ ÛŒÚ© ØªØ±Ø§Ú©Ù†Ø´ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡',
         importance: Importance.high,
         priority: Priority.high,
       ),
     );
     final targets = <int, DateTime>{};
-    if (occurrences.length >= 2) targets[0] = occurrences[occurrences.length - 2];
-    targets[1] = occurrences.last;
+    final unlimited = t.installments == null && t.recurrenceEndDate == null;
+    if (t.notifyLastTwoEnabled && !unlimited) {
+      if (occurrences.length >= 2) targets[0] = occurrences[occurrences.length - 2];
+      targets[1] = occurrences.last;
+    }
     for (final entry in targets.entries) {
       final when = DateTime(entry.value.year, entry.value.month, entry.value.day, 9).subtract(const Duration(days: 1));
       if (!when.isAfter(now)) continue;
@@ -577,7 +589,7 @@ class NotificationService {
         await _plugin.zonedSchedule(
           _idFor(t.id, 2 + i),
           categoryName,
-          '$days روز تا سررسید این قسط (${ltr(DateFormat('dd.MM.yyyy').format(due))})${t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : ''}',
+          '$days Ø±ÙˆØ² ØªØ§ Ø³Ø±Ø±Ø³ÛŒØ¯ Ø§ÛŒÙ† Ù‚Ø³Ø· (${ltr(DateFormat('dd.MM.yyyy').format(due))})${t.notifyMessage.trim().isNotEmpty ? ' â€¢ ${t.notifyMessage.trim()}' : ''}',
           _asTZDateTime(when),
           details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -591,50 +603,50 @@ class NotificationService {
 // ============================== Default seed data ==============================
 
 const defaultCategories = <Category>[
-  Category(id: 'e_food', name: 'خوراک و خواربار', type: TxType.expense),
-  Category(id: 'e_food_market', name: 'سوپرمارکت', parentId: 'e_food', type: TxType.expense),
-  Category(id: 'e_food_restaurant', name: 'رستوران', parentId: 'e_food', type: TxType.expense),
-  Category(id: 'e_food_produce', name: 'میوه و تره‌بار', parentId: 'e_food', type: TxType.expense),
-  Category(id: 'e_housing', name: 'مسکن', type: TxType.expense),
-  Category(id: 'e_housing_rent', name: 'اجاره / رهن', parentId: 'e_housing', type: TxType.expense),
-  Category(id: 'e_housing_fee', name: 'شارژ ساختمان', parentId: 'e_housing', type: TxType.expense),
-  Category(id: 'e_housing_repair', name: 'تعمیرات', parentId: 'e_housing', type: TxType.expense),
-  Category(id: 'e_transport', name: 'حمل و نقل', type: TxType.expense),
-  Category(id: 'e_transport_fuel', name: 'بنزین', parentId: 'e_transport', type: TxType.expense),
-  Category(id: 'e_transport_repair', name: 'تعمیر خودرو', parentId: 'e_transport', type: TxType.expense),
-  Category(id: 'e_transport_public', name: 'حمل‌ونقل عمومی', parentId: 'e_transport', type: TxType.expense),
-  Category(id: 'e_car', name: 'خودرو', type: TxType.expense),
-  Category(id: 'e_car_insurance', name: 'بیمه خودرو', parentId: 'e_car', type: TxType.expense),
-  Category(id: 'e_car_service', name: 'تعمیر و سرویس', parentId: 'e_car', type: TxType.expense),
-  Category(id: 'e_car_fuel', name: 'بنزین', parentId: 'e_car', type: TxType.expense),
-  Category(id: 'e_car_fine', name: 'جریمه رانندگی', parentId: 'e_car', type: TxType.expense),
-  Category(id: 'e_car_parking', name: 'پارکینگ', parentId: 'e_car', type: TxType.expense),
-  Category(id: 'e_bills', name: 'قبوض', type: TxType.expense),
-  Category(id: 'e_bills_power', name: 'برق', parentId: 'e_bills', type: TxType.expense),
-  Category(id: 'e_bills_water', name: 'آب', parentId: 'e_bills', type: TxType.expense),
-  Category(id: 'e_bills_gas', name: 'گاز', parentId: 'e_bills', type: TxType.expense),
-  Category(id: 'e_bills_internet', name: 'اینترنت', parentId: 'e_bills', type: TxType.expense),
-  Category(id: 'e_bills_phone', name: 'تلفن', parentId: 'e_bills', type: TxType.expense),
-  Category(id: 'e_health', name: 'درمان', type: TxType.expense),
-  Category(id: 'e_leisure', name: 'تفریح', type: TxType.expense),
-  Category(id: 'e_clothing', name: 'پوشاک', type: TxType.expense),
-  Category(id: 'e_loans', name: 'اقساط و وام', type: TxType.expense),
-  Category(id: 'e_loans_car', name: 'قسط خودرو', parentId: 'e_loans', type: TxType.expense),
-  Category(id: 'e_loans_home', name: 'قسط مسکن', parentId: 'e_loans', type: TxType.expense),
-  Category(id: 'e_loans_personal', name: 'وام شخصی', parentId: 'e_loans', type: TxType.expense),
-  Category(id: 'e_loans_installment_purchase', name: 'خرید قسطی', parentId: 'e_loans', type: TxType.expense),
-  Category(id: 'e_subscription', name: 'اشتراک', type: TxType.expense),
-  Category(id: 'e_subscription_software', name: 'اشتراک نرم‌افزار', parentId: 'e_subscription', type: TxType.expense),
-  Category(id: 'e_insurance', name: 'بیمه', type: TxType.expense),
-  Category(id: 'e_misc', name: 'متفرقه', type: TxType.expense),
-  Category(id: 'i_salary', name: 'حقوق', type: TxType.income),
-  Category(id: 'i_freelance', name: 'فریلنسری', type: TxType.income),
-  Category(id: 'i_investment', name: 'سرمایه‌گذاری', type: TxType.income),
-  Category(id: 'i_gift', name: 'هدیه', type: TxType.income),
-  Category(id: 'i_misc', name: 'متفرقه', type: TxType.income),
+  Category(id: 'e_food', name: 'Ø®ÙˆØ±Ø§Ú© Ùˆ Ø®ÙˆØ§Ø±Ø¨Ø§Ø±', type: TxType.expense),
+  Category(id: 'e_food_market', name: 'Ø³ÙˆÙ¾Ø±Ù…Ø§Ø±Ú©Øª', parentId: 'e_food', type: TxType.expense),
+  Category(id: 'e_food_restaurant', name: 'Ø±Ø³ØªÙˆØ±Ø§Ù†', parentId: 'e_food', type: TxType.expense),
+  Category(id: 'e_food_produce', name: 'Ù…ÛŒÙˆÙ‡ Ùˆ ØªØ±Ù‡â€ŒØ¨Ø§Ø±', parentId: 'e_food', type: TxType.expense),
+  Category(id: 'e_housing', name: 'Ù…Ø³Ú©Ù†', type: TxType.expense),
+  Category(id: 'e_housing_rent', name: 'Ø§Ø¬Ø§Ø±Ù‡ / Ø±Ù‡Ù†', parentId: 'e_housing', type: TxType.expense),
+  Category(id: 'e_housing_fee', name: 'Ø´Ø§Ø±Ú˜ Ø³Ø§Ø®ØªÙ…Ø§Ù†', parentId: 'e_housing', type: TxType.expense),
+  Category(id: 'e_housing_repair', name: 'ØªØ¹Ù…ÛŒØ±Ø§Øª', parentId: 'e_housing', type: TxType.expense),
+  Category(id: 'e_transport', name: 'Ø­Ù…Ù„ Ùˆ Ù†Ù‚Ù„', type: TxType.expense),
+  Category(id: 'e_transport_fuel', name: 'Ø¨Ù†Ø²ÛŒÙ†', parentId: 'e_transport', type: TxType.expense),
+  Category(id: 'e_transport_repair', name: 'ØªØ¹Ù…ÛŒØ± Ø®ÙˆØ¯Ø±Ùˆ', parentId: 'e_transport', type: TxType.expense),
+  Category(id: 'e_transport_public', name: 'Ø­Ù…Ù„â€ŒÙˆÙ†Ù‚Ù„ Ø¹Ù…ÙˆÙ…ÛŒ', parentId: 'e_transport', type: TxType.expense),
+  Category(id: 'e_car', name: 'Ø®ÙˆØ¯Ø±Ùˆ', type: TxType.expense),
+  Category(id: 'e_car_insurance', name: 'Ø¨ÛŒÙ…Ù‡ Ø®ÙˆØ¯Ø±Ùˆ', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_service', name: 'ØªØ¹Ù…ÛŒØ± Ùˆ Ø³Ø±ÙˆÛŒØ³', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_fuel', name: 'Ø¨Ù†Ø²ÛŒÙ†', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_fine', name: 'Ø¬Ø±ÛŒÙ…Ù‡ Ø±Ø§Ù†Ù†Ø¯Ú¯ÛŒ', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_car_parking', name: 'Ù¾Ø§Ø±Ú©ÛŒÙ†Ú¯', parentId: 'e_car', type: TxType.expense),
+  Category(id: 'e_bills', name: 'Ù‚Ø¨ÙˆØ¶', type: TxType.expense),
+  Category(id: 'e_bills_power', name: 'Ø¨Ø±Ù‚', parentId: 'e_bills', type: TxType.expense),
+  Category(id: 'e_bills_water', name: 'Ø¢Ø¨', parentId: 'e_bills', type: TxType.expense),
+  Category(id: 'e_bills_gas', name: 'Ú¯Ø§Ø²', parentId: 'e_bills', type: TxType.expense),
+  Category(id: 'e_bills_internet', name: 'Ø§ÛŒÙ†ØªØ±Ù†Øª', parentId: 'e_bills', type: TxType.expense),
+  Category(id: 'e_bills_phone', name: 'ØªÙ„ÙÙ†', parentId: 'e_bills', type: TxType.expense),
+  Category(id: 'e_health', name: 'Ø¯Ø±Ù…Ø§Ù†', type: TxType.expense),
+  Category(id: 'e_leisure', name: 'ØªÙØ±ÛŒØ­', type: TxType.expense),
+  Category(id: 'e_clothing', name: 'Ù¾ÙˆØ´Ø§Ú©', type: TxType.expense),
+  Category(id: 'e_loans', name: 'Ø§Ù‚Ø³Ø§Ø· Ùˆ ÙˆØ§Ù…', type: TxType.expense),
+  Category(id: 'e_loans_car', name: 'Ù‚Ø³Ø· Ø®ÙˆØ¯Ø±Ùˆ', parentId: 'e_loans', type: TxType.expense),
+  Category(id: 'e_loans_home', name: 'Ù‚Ø³Ø· Ù…Ø³Ú©Ù†', parentId: 'e_loans', type: TxType.expense),
+  Category(id: 'e_loans_personal', name: 'ÙˆØ§Ù… Ø´Ø®ØµÛŒ', parentId: 'e_loans', type: TxType.expense),
+  Category(id: 'e_loans_installment_purchase', name: 'Ø®Ø±ÛŒØ¯ Ù‚Ø³Ø·ÛŒ', parentId: 'e_loans', type: TxType.expense),
+  Category(id: 'e_subscription', name: 'Ø§Ø´ØªØ±Ø§Ú©', type: TxType.expense),
+  Category(id: 'e_subscription_software', name: 'Ø§Ø´ØªØ±Ø§Ú© Ù†Ø±Ù…â€ŒØ§ÙØ²Ø§Ø±', parentId: 'e_subscription', type: TxType.expense),
+  Category(id: 'e_insurance', name: 'Ø¨ÛŒÙ…Ù‡', type: TxType.expense),
+  Category(id: 'e_misc', name: 'Ù…ØªÙØ±Ù‚Ù‡', type: TxType.expense),
+  Category(id: 'i_salary', name: 'Ø­Ù‚ÙˆÙ‚', type: TxType.income),
+  Category(id: 'i_freelance', name: 'ÙØ±ÛŒÙ„Ù†Ø³Ø±ÛŒ', type: TxType.income),
+  Category(id: 'i_investment', name: 'Ø³Ø±Ù…Ø§ÛŒÙ‡â€ŒÚ¯Ø°Ø§Ø±ÛŒ', type: TxType.income),
+  Category(id: 'i_gift', name: 'Ù‡Ø¯ÛŒÙ‡', type: TxType.income),
+  Category(id: 'i_misc', name: 'Ù…ØªÙØ±Ù‚Ù‡', type: TxType.income),
 ];
 
-const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'EUR');
+const defaultAccount = Account(id: 'default', name: 'Ø­Ø³Ø§Ø¨ Ø§ØµÙ„ÛŒ', type: AccountType.bank, currency: 'EUR');
 
 const kCategoryIcons = <String, IconData>{
   'e_food': Icons.restaurant_outlined,
@@ -678,75 +690,75 @@ IconData iconForCategory(Category? c, List<Category> all) {
 // Checked first (fast, offline); Gemini is used as a fallback for names
 // that don't match any of these.
 const _iconKeywordHints = <String, IconData>{
-  'خوراک': Icons.restaurant_outlined,
-  'غذا': Icons.restaurant_outlined,
-  'رستوران': Icons.restaurant_outlined,
-  'کافه': Icons.local_cafe_outlined,
-  'قهوه': Icons.local_cafe_outlined,
-  'خانه': Icons.home_outlined,
-  'مسکن': Icons.home_outlined,
-  'اجاره': Icons.home_outlined,
-  'خودرو': Icons.directions_car_outlined,
-  'ماشین': Icons.directions_car_outlined,
-  'بنزین': Icons.local_gas_station_outlined,
-  'سوخت': Icons.local_gas_station_outlined,
-  'پارکینگ': Icons.local_parking_outlined,
-  'تعمیر': Icons.build_outlined,
-  'حمل‌ونقل': Icons.directions_bus_outlined,
-  'اتوبوس': Icons.directions_bus_outlined,
-  'مترو': Icons.subway_outlined,
-  'قطار': Icons.train_outlined,
-  'هواپیما': Icons.flight_outlined,
-  'سفر': Icons.flight_outlined,
-  'برق': Icons.bolt_outlined,
-  'آب': Icons.water_drop_outlined,
-  'گاز': Icons.local_fire_department_outlined,
-  'اینترنت': Icons.wifi_outlined,
-  'تلفن': Icons.phone_iphone_outlined,
-  'موبایل': Icons.phone_iphone_outlined,
-  'درمان': Icons.medical_services_outlined,
-  'دارو': Icons.medication_outlined,
-  'پزشک': Icons.medical_services_outlined,
-  'دندان': Icons.medical_services_outlined,
-  'بیمه': Icons.health_and_safety_outlined,
-  'ورزش': Icons.fitness_center_outlined,
-  'باشگاه': Icons.fitness_center_outlined,
-  'تفریح': Icons.sports_esports_outlined,
-  'سینما': Icons.movie_outlined,
-  'فیلم': Icons.movie_outlined,
-  'موسیقی': Icons.music_note_outlined,
-  'پوشاک': Icons.checkroom_outlined,
-  'لباس': Icons.checkroom_outlined,
-  'کفش': Icons.checkroom_outlined,
-  'قسط': Icons.credit_card_outlined,
-  'اقساط': Icons.credit_card_outlined,
-  'وام': Icons.credit_card_outlined,
-  'اشتراک': Icons.subscriptions_outlined,
-  'حقوق': Icons.payments_outlined,
-  'فریلنس': Icons.laptop_mac_outlined,
-  'سرمایه': Icons.trending_up,
-  'سهام': Icons.trending_up,
-  'هدیه': Icons.card_giftcard_outlined,
-  'کتاب': Icons.menu_book_outlined,
-  'آموزش': Icons.school_outlined,
-  'مدرسه': Icons.school_outlined,
-  'دانشگاه': Icons.school_outlined,
-  'بچه': Icons.child_care_outlined,
-  'کودک': Icons.child_care_outlined,
-  'حیوان': Icons.pets_outlined,
-  'خیریه': Icons.volunteer_activism_outlined,
-  'کمک': Icons.volunteer_activism_outlined,
-  'مالیات': Icons.receipt_long_outlined,
-  'جریمه': Icons.gavel_outlined,
-  'آرایش': Icons.face_retouching_natural_outlined,
-  'زیبایی': Icons.face_retouching_natural_outlined,
+  'Ø®ÙˆØ±Ø§Ú©': Icons.restaurant_outlined,
+  'ØºØ°Ø§': Icons.restaurant_outlined,
+  'Ø±Ø³ØªÙˆØ±Ø§Ù†': Icons.restaurant_outlined,
+  'Ú©Ø§ÙÙ‡': Icons.local_cafe_outlined,
+  'Ù‚Ù‡ÙˆÙ‡': Icons.local_cafe_outlined,
+  'Ø®Ø§Ù†Ù‡': Icons.home_outlined,
+  'Ù…Ø³Ú©Ù†': Icons.home_outlined,
+  'Ø§Ø¬Ø§Ø±Ù‡': Icons.home_outlined,
+  'Ø®ÙˆØ¯Ø±Ùˆ': Icons.directions_car_outlined,
+  'Ù…Ø§Ø´ÛŒÙ†': Icons.directions_car_outlined,
+  'Ø¨Ù†Ø²ÛŒÙ†': Icons.local_gas_station_outlined,
+  'Ø³ÙˆØ®Øª': Icons.local_gas_station_outlined,
+  'Ù¾Ø§Ø±Ú©ÛŒÙ†Ú¯': Icons.local_parking_outlined,
+  'ØªØ¹Ù…ÛŒØ±': Icons.build_outlined,
+  'Ø­Ù…Ù„â€ŒÙˆÙ†Ù‚Ù„': Icons.directions_bus_outlined,
+  'Ø§ØªÙˆØ¨ÙˆØ³': Icons.directions_bus_outlined,
+  'Ù…ØªØ±Ùˆ': Icons.subway_outlined,
+  'Ù‚Ø·Ø§Ø±': Icons.train_outlined,
+  'Ù‡ÙˆØ§Ù¾ÛŒÙ…Ø§': Icons.flight_outlined,
+  'Ø³ÙØ±': Icons.flight_outlined,
+  'Ø¨Ø±Ù‚': Icons.bolt_outlined,
+  'Ø¢Ø¨': Icons.water_drop_outlined,
+  'Ú¯Ø§Ø²': Icons.local_fire_department_outlined,
+  'Ø§ÛŒÙ†ØªØ±Ù†Øª': Icons.wifi_outlined,
+  'ØªÙ„ÙÙ†': Icons.phone_iphone_outlined,
+  'Ù…ÙˆØ¨Ø§ÛŒÙ„': Icons.phone_iphone_outlined,
+  'Ø¯Ø±Ù…Ø§Ù†': Icons.medical_services_outlined,
+  'Ø¯Ø§Ø±Ùˆ': Icons.medication_outlined,
+  'Ù¾Ø²Ø´Ú©': Icons.medical_services_outlined,
+  'Ø¯Ù†Ø¯Ø§Ù†': Icons.medical_services_outlined,
+  'Ø¨ÛŒÙ…Ù‡': Icons.health_and_safety_outlined,
+  'ÙˆØ±Ø²Ø´': Icons.fitness_center_outlined,
+  'Ø¨Ø§Ø´Ú¯Ø§Ù‡': Icons.fitness_center_outlined,
+  'ØªÙØ±ÛŒØ­': Icons.sports_esports_outlined,
+  'Ø³ÛŒÙ†Ù…Ø§': Icons.movie_outlined,
+  'ÙÛŒÙ„Ù…': Icons.movie_outlined,
+  'Ù…ÙˆØ³ÛŒÙ‚ÛŒ': Icons.music_note_outlined,
+  'Ù¾ÙˆØ´Ø§Ú©': Icons.checkroom_outlined,
+  'Ù„Ø¨Ø§Ø³': Icons.checkroom_outlined,
+  'Ú©ÙØ´': Icons.checkroom_outlined,
+  'Ù‚Ø³Ø·': Icons.credit_card_outlined,
+  'Ø§Ù‚Ø³Ø§Ø·': Icons.credit_card_outlined,
+  'ÙˆØ§Ù…': Icons.credit_card_outlined,
+  'Ø§Ø´ØªØ±Ø§Ú©': Icons.subscriptions_outlined,
+  'Ø­Ù‚ÙˆÙ‚': Icons.payments_outlined,
+  'ÙØ±ÛŒÙ„Ù†Ø³': Icons.laptop_mac_outlined,
+  'Ø³Ø±Ù…Ø§ÛŒÙ‡': Icons.trending_up,
+  'Ø³Ù‡Ø§Ù…': Icons.trending_up,
+  'Ù‡Ø¯ÛŒÙ‡': Icons.card_giftcard_outlined,
+  'Ú©ØªØ§Ø¨': Icons.menu_book_outlined,
+  'Ø¢Ù…ÙˆØ²Ø´': Icons.school_outlined,
+  'Ù…Ø¯Ø±Ø³Ù‡': Icons.school_outlined,
+  'Ø¯Ø§Ù†Ø´Ú¯Ø§Ù‡': Icons.school_outlined,
+  'Ø¨Ú†Ù‡': Icons.child_care_outlined,
+  'Ú©ÙˆØ¯Ú©': Icons.child_care_outlined,
+  'Ø­ÛŒÙˆØ§Ù†': Icons.pets_outlined,
+  'Ø®ÛŒØ±ÛŒÙ‡': Icons.volunteer_activism_outlined,
+  'Ú©Ù…Ú©': Icons.volunteer_activism_outlined,
+  'Ù…Ø§Ù„ÛŒØ§Øª': Icons.receipt_long_outlined,
+  'Ø¬Ø±ÛŒÙ…Ù‡': Icons.gavel_outlined,
+  'Ø¢Ø±Ø§ÛŒØ´': Icons.face_retouching_natural_outlined,
+  'Ø²ÛŒØ¨Ø§ÛŒÛŒ': Icons.face_retouching_natural_outlined,
 };
 
 Future<IconData?> _suggestIconViaGemini(String categoryName) async {
   final key = await Store.loadGeminiKey();
   if (key == null || key.trim().isEmpty) return null;
   try {
-    final options = _iconKeywordHints.keys.join('، ');
+    final options = _iconKeywordHints.keys.join('ØŒ ');
     final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$key');
     final body = jsonEncode({
       'contents': [
@@ -754,7 +766,7 @@ Future<IconData?> _suggestIconViaGemini(String categoryName) async {
           'parts': [
             {
               'text':
-                  'یک دسته‌بندی مالی با نام "$categoryName" داریم. از این لیست کلمات، فقط دقیقاً یکی را که مفهوماً نزدیک‌ترین به این دسته‌بندی است انتخاب کن و فقط همان یک کلمه را بدون هیچ توضیح دیگری برگردان: $options',
+                  'ÛŒÚ© Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ù…Ø§Ù„ÛŒ Ø¨Ø§ Ù†Ø§Ù… "$categoryName" Ø¯Ø§Ø±ÛŒÙ…. Ø§Ø² Ø§ÛŒÙ† Ù„ÛŒØ³Øª Ú©Ù„Ù…Ø§ØªØŒ ÙÙ‚Ø· Ø¯Ù‚ÛŒÙ‚Ø§Ù‹ ÛŒÚ©ÛŒ Ø±Ø§ Ú©Ù‡ Ù…ÙÙ‡ÙˆÙ…Ø§Ù‹ Ù†Ø²Ø¯ÛŒÚ©â€ŒØªØ±ÛŒÙ† Ø¨Ù‡ Ø§ÛŒÙ† Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø§Ø³Øª Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù† Ùˆ ÙÙ‚Ø· Ù‡Ù…Ø§Ù† ÛŒÚ© Ú©Ù„Ù…Ù‡ Ø±Ø§ Ø¨Ø¯ÙˆÙ† Ù‡ÛŒÚ† ØªÙˆØ¶ÛŒØ­ Ø¯ÛŒÚ¯Ø±ÛŒ Ø¨Ø±Ú¯Ø±Ø¯Ø§Ù†: $options',
             },
           ],
         },
@@ -829,7 +841,7 @@ class Store {
     }
     if (list.any((c) => c.id == 'e_car_installment')) {
       // duplicate of e_loans_car, removed after the fact: reassign any
-      // transactions that used it to the parent "خودرو" category instead.
+      // transactions that used it to the parent "Ø®ÙˆØ¯Ø±Ùˆ" category instead.
       list = list.where((c) => c.id != 'e_car_installment').toList();
       final tx = await loadTransactions();
       var txChanged = false;
@@ -843,13 +855,18 @@ class Store {
       if (txChanged) await saveTransactions(newTx);
       changed = true;
     }
-    if (!list.any((c) => c.id == 'e_car_parking')) {
+    if (!list.any((c) => c.id == 'e_car_parking') &&
+        !list.any((c) => c.parentId == 'e_car' && c.type == TxType.expense && c.name.trim() == 'Ù¾Ø§Ø±Ú©ÛŒÙ†Ú¯')) {
       list = [...list, ...defaultCategories.where((c) => c.id == 'e_car_parking')];
       changed = true;
     }
     for (final newId in ['e_loans_installment_purchase', 'e_subscription', 'e_insurance', 'e_subscription_software']) {
-      if (!list.any((c) => c.id == newId)) {
-        list = [...list, ...defaultCategories.where((c) => c.id == newId)];
+      final def = defaultCategories.firstWhere((c) => c.id == newId);
+      final alreadyById = list.any((c) => c.id == newId);
+      final alreadyByName =
+          list.any((c) => c.parentId == def.parentId && c.type == def.type && c.name.trim() == def.name.trim());
+      if (!alreadyById && !alreadyByName) {
+        list = [...list, def];
         changed = true;
       }
     }
@@ -889,7 +906,7 @@ class MoneyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'مدیریت مالی شخصی',
+      title: 'Ù…Ø¯ÛŒØ±ÛŒØª Ù…Ø§Ù„ÛŒ Ø´Ø®ØµÛŒ',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
       builder: (context, child) => Directionality(textDirection: TextDirection.rtl, child: child!),
@@ -928,14 +945,15 @@ class AppDrawer extends StatelessWidget {
             const DrawerHeader(
               child: Align(
                 alignment: Alignment.centerRight,
-                child: Text('مدیریت مالی شخصی', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                child: Text('Ù…Ø¯ÛŒØ±ÛŒØª Ù…Ø§Ù„ÛŒ Ø´Ø®ØµÛŒ', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
             ),
-            item(0, Icons.home_outlined, 'خانه', () => const HomeScreen()),
-            item(1, Icons.category_outlined, 'مدیریت دسته‌بندی‌ها', () => const CategoryManagementScreen()),
-            item(2, Icons.account_balance_wallet_outlined, 'حساب‌ها', () => const AccountManagementScreen()),
-            item(3, Icons.settings_outlined, 'تنظیمات', () => const SettingsScreen()),
-            item(4, Icons.repeat, 'تراکنش‌های تکرارشونده', () => const RecurringTransactionsScreen()),
+            item(0, Icons.home_outlined, 'Ø®Ø§Ù†Ù‡', () => const HomeScreen()),
+            item(1, Icons.category_outlined, 'Ù…Ø¯ÛŒØ±ÛŒØª Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒâ€ŒÙ‡Ø§', () => const CategoryManagementScreen()),
+            item(2, Icons.account_balance_wallet_outlined, 'Ø­Ø³Ø§Ø¨â€ŒÙ‡Ø§', () => const AccountManagementScreen()),
+            item(3, Icons.settings_outlined, 'ØªÙ†Ø¸ÛŒÙ…Ø§Øª', () => const SettingsScreen()),
+            item(4, Icons.repeat, 'ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡', () => const RecurringTransactionsScreen()),
+            item(5, Icons.category_outlined, 'ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ ØªØ­Øªâ€ŒØªØ£Ø«ÛŒØ± Ø­Ø°Ù Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ', () => const AffectedTransactionsScreen()),
           ],
         ),
       ),
@@ -970,22 +988,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _save() async {
     await Store.saveGeminiKey(ctrl.text.trim());
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø°Ø®ÛŒØ±Ù‡ Ø´Ø¯.')));
   }
 
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('تنظیمات')),
+      appBar: AppBar(title: const Text('ØªÙ†Ø¸ÛŒÙ…Ø§Øª')),
       drawer: const AppDrawer(currentIndex: 3),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('کلید Gemini API', style: Theme.of(context).textTheme.titleMedium),
+          Text('Ú©Ù„ÛŒØ¯ Gemini API', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           const Text(
-            'برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.',
+            'Ø¨Ø±Ø§ÛŒ Ø¨Ù‡Ø¨ÙˆØ¯ Ø®ÙˆØ§Ù†Ø¯Ù† Ø±Ø³ÛŒØ¯ Ùˆ ÙÛŒØ´ Ø­Ù‚ÙˆÙ‚ÛŒ Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ (Ø§Ø®ØªÛŒØ§Ø±ÛŒ). Ø§Ú¯Ø± Ø®Ø§Ù„ÛŒ Ø¨Ú¯Ø°Ø§Ø±ÛŒØ¯ØŒ ÙÙ‚Ø· Ø§Ø² ØªØ´Ø®ÛŒØµ Ù…ØªÙ† Ø¢ÙÙ„Ø§ÛŒÙ† Ø§Ø³ØªÙØ§Ø¯Ù‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.',
             style: TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 12),
@@ -1002,7 +1020,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          FilledButton(onPressed: _save, child: const Text('ذخیره')),
+          FilledButton(onPressed: _save, child: const Text('Ø°Ø®ÛŒØ±Ù‡')),
         ],
       ),
     );
@@ -1016,9 +1034,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 Future<String> rasterizeFirstPdfPage(String path) async {
   final doc = await PdfDocument.openFile(path);
   final page = await doc.getPage(1);
+  // Cap the rendered size (matches the max dimension used for camera/gallery
+  // photos) so large PDF pages don't produce oversized uploads to Gemini.
+  const maxDim = 1800.0;
+  var scale = 2.0;
+  final longest = page.width > page.height ? page.width : page.height;
+  if (longest * scale > maxDim) scale = maxDim / longest;
   final rendered = await page.render(
-    width: page.width * 2,
-    height: page.height * 2,
+    width: page.width * scale,
+    height: page.height * scale,
     format: PdfPageImageFormat.jpeg,
   );
   await page.close();
@@ -1072,7 +1096,7 @@ class ReceiptDraft {
   ReceiptDraft({this.merchant = '', this.date, this.total, this.items = const [], this.categoryHint});
 }
 
-const _totalKeywords = ['zu zahlen', 'endbetrag', 'gesamtbetrag', 'betrag', 'total', 'summe', 'gesamt', 'جمع', 'مبلغ کل'];
+const _totalKeywords = ['zu zahlen', 'endbetrag', 'gesamtbetrag', 'betrag', 'total', 'summe', 'gesamt', 'Ø¬Ù…Ø¹', 'Ù…Ø¨Ù„Øº Ú©Ù„'];
 
 const _knownMerchants = <String, String>{
   'Lidl': 'e_food_market',
@@ -1177,7 +1201,7 @@ const _payslipFieldKeywords = <String, List<String>>{
   'brutto': ['brutto', 'gesamtbrutto'],
   'netto': ['netto', 'auszahlungsbetrag'],
   'lohnsteuer': ['lohnsteuer'],
-  'solidaritaetszuschlag': ['solidaritätszuschlag', 'soli'],
+  'solidaritaetszuschlag': ['solidaritÃ¤tszuschlag', 'soli'],
   'kirchensteuer': ['kirchensteuer'],
   'krankenversicherung': ['krankenversicherung', 'kv'],
   'pflegeversicherung': ['pflegeversicherung', 'pv'],
@@ -1258,7 +1282,15 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   // retry a couple of times with a short backoff before giving up.
   http.Response? resp;
   for (var attempt = 0; attempt < 3; attempt++) {
-    resp = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: body);
+    try {
+      resp = await http
+          .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+          .timeout(const Duration(seconds: 45));
+    } on Exception {
+      if (attempt == 2) rethrow;
+      await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+      continue;
+    }
     if (resp.statusCode == 200) break;
     if (resp.statusCode == 503 && attempt < 2) {
       await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
@@ -1269,14 +1301,35 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   if (resp == null || resp.statusCode != 200) {
     final code = resp?.statusCode;
     if (code == 503) {
-      throw Exception('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.');
+      throw Exception('Ø³Ø±ÙˆØ±Ù‡Ø§ÛŒ Gemini Ù…ÙˆÙ‚ØªØ§Ù‹ Ø´Ù„ÙˆØº Ù‡Ø³ØªÙ†Ø¯. Ù„Ø·ÙØ§Ù‹ Ú†Ù†Ø¯ Ù„Ø­Ø¸Ù‡ Ø¯ÛŒÚ¯Ø± Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†ÛŒØ¯.');
     }
-    throw Exception('خطای Gemini API (${code ?? '—'}): ${resp?.body ?? ''}');
+    throw Exception('Ø®Ø·Ø§ÛŒ Gemini API (${code ?? 'â€”'}): ${resp?.body ?? ''}');
   }
   final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
-  final text = decoded['candidates']?[0]?['content']?['parts']?[0]?['text'];
-  if (text == null) return null;
-  return jsonDecode(text) as Map<String, dynamic>;
+  final candidates = decoded['candidates'];
+  if (candidates == null || candidates is! List || candidates.isEmpty) {
+    final blockReason = decoded['promptFeedback']?['blockReason'];
+    if (blockReason != null) {
+      throw Exception('Gemini Ø§ÛŒÙ† ØªØµÙˆÛŒØ± Ø±Ø§ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ù†Ú©Ø±Ø¯ (Ø¯Ù„ÛŒÙ„: $blockReason).');
+    }
+    throw Exception('Ù¾Ø§Ø³Ø® Ù†Ø§Ù…Ø¹ØªØ¨Ø± Ø§Ø² Gemini Ø¯Ø±ÛŒØ§ÙØª Ø´Ø¯ (Ø¨Ø¯ÙˆÙ† Ù†ØªÛŒØ¬Ù‡).');
+  }
+  final finishReason = candidates[0]?['finishReason'];
+  var text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
+  if (text == null) {
+    throw Exception('Ù¾Ø§Ø³Ø® Gemini Ù‚Ø§Ø¨Ù„ Ø®ÙˆØ§Ù†Ø¯Ù† Ù†Ø¨ÙˆØ¯${finishReason != null ? ' (finishReason: $finishReason)' : ''}.');
+  }
+  // The API is asked for pure JSON, but occasionally still wraps it in a
+  // ```json ... ``` markdown fence - strip that defensively before parsing.
+  text = text.trim();
+  if (text.startsWith('```')) {
+    text = text.replaceFirst(RegExp(r'^```[a-zA-Z]*\n?'), '').replaceFirst(RegExp(r'```\s*$'), '').trim();
+  }
+  try {
+    return jsonDecode(text) as Map<String, dynamic>;
+  } on FormatException {
+    throw Exception('Ù¾Ø§Ø³Ø® Gemini Ø¨Ù‡â€ŒØµÙˆØ±Øª JSON Ù…Ø¹ØªØ¨Ø± Ù†Ø¨ÙˆØ¯.');
+  }
 }
 
 const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the attached receipt image '
@@ -1288,7 +1341,7 @@ const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the at
     "language as the receipt) - never leave a short code or cut-off abbreviation as the name if you can "
     'reasonably infer the full name from context and common branded products. "quantity" is the number '
     'of units purchased (default 1 if not shown separately). For "category", give a short one- or '
-    "two-word general shopping category for this receipt (e.g. \"خوراک\", \"پوشاک\", \"دارو\") in the "
+    "two-word general shopping category for this receipt (e.g. \"Ø®ÙˆØ±Ø§Ú©\", \"Ù¾ÙˆØ´Ø§Ú©\", \"Ø¯Ø§Ø±Ùˆ\") in the "
     "receipt's language. Keep merchant name in the receipt's own language/script. Numbers must be plain "
     '(no currency symbols). If a field is unreadable, use null.';
 
@@ -1315,19 +1368,19 @@ String formatMoney(double amount, String currency) {
   final n = amount.toStringAsFixed(2);
   switch (currency) {
     case 'EUR':
-      return ltr('€$n');
+      return ltr('â‚¬$n');
     case 'USD':
       return ltr('\$$n');
     case 'GBP':
-      return ltr('£$n');
+      return ltr('Â£$n');
     case 'CHF':
       return ltr('$n CHF');
     case 'TRY':
-      return ltr('₺$n');
+      return ltr('â‚º$n');
     case 'AED':
-      return '${ltr(n)} د.إ';
+      return '${ltr(n)} Ø¯.Ø¥';
     case 'IRR':
-      return '${ltr(n)} ریال';
+      return '${ltr(n)} Ø±ÛŒØ§Ù„';
     default:
       return ltr('$n $currency');
   }
@@ -1367,7 +1420,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? 'Ø¨Ø¯ÙˆÙ†â€ŒØ¯Ø³ØªÙ‡' : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -1421,34 +1474,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Top-level category (parent rolled up) expense totals for the current
   /// period (same period as [periodStatsByCurrency]), in [primaryCurrency].
-  Map<Category, double> get expenseByTopCategoryForPeriod {
+  /// Expense transactions for the current period, in [primaryCurrency] -
+  /// aggregation (including drill-down by category) happens inside
+  /// [DashboardCharts] itself.
+  List<Transaction> get expenseTransactionsForPeriod {
     final start = lastIncomeDate;
     final now = DateTime.now();
-    final map = <String, double>{};
-    for (final t in tx) {
-      if (t.type != TxType.expense) continue;
-      if (currencyOf(t.accountId) != primaryCurrency) continue;
+    return tx.where((t) {
+      if (t.type != TxType.expense) return false;
+      if (currencyOf(t.accountId) != primaryCurrency) return false;
       if (start != null) {
-        if (t.date.isBefore(DateTime(start.year, start.month, start.day))) continue;
-      } else {
-        if (!(t.date.year == now.year && t.date.month == now.month)) continue;
+        return !t.date.isBefore(DateTime(start.year, start.month, start.day));
       }
-      final match = categories.where((c) => c.id == t.categoryId).toList();
-      var cat = match.isEmpty ? null : match.first;
-      while (cat?.parentId != null) {
-        final parentMatch = categories.where((c) => c.id == cat!.parentId).toList();
-        if (parentMatch.isEmpty) break;
-        cat = parentMatch.first;
-      }
-      final key = cat?.id ?? '_uncategorized_';
-      map[key] = (map[key] ?? 0) + t.amount;
-    }
-    final result = <Category, double>{};
-    map.forEach((id, amount) {
-      final match = categories.where((c) => c.id == id).toList();
-      result[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = amount;
-    });
-    return result;
+      return t.date.year == now.year && t.date.month == now.month;
+    }).toList();
   }
 
   /// Income and expense totals (in [primaryCurrency]) for each of the last
@@ -1540,8 +1579,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final period = periodStatsByCurrency;
     final start = lastIncomeDate;
     final periodLabel = start == null
-        ? 'این ماه'
-        : 'از ${ltr(DateFormat('dd.MM').format(start))} تا امروز (بعد از آخرین حقوق)';
+        ? 'Ø§ÛŒÙ† Ù…Ø§Ù‡'
+        : 'Ø§Ø² ${ltr(DateFormat('dd.MM').format(start))} ØªØ§ Ø§Ù…Ø±ÙˆØ² (Ø¨Ø¹Ø¯ Ø§Ø² Ø¢Ø®Ø±ÛŒÙ† Ø­Ù‚ÙˆÙ‚)';
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -1551,14 +1590,14 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: const Text('مدیریت مالی شخصی'),
+        title: const Text('Ù…Ø¯ÛŒØ±ÛŒØª Ù…Ø§Ù„ÛŒ Ø´Ø®ØµÛŒ'),
         actions: [
           Badge(
             label: Text('$draftCount'),
             isLabelVisible: draftCount > 0,
-            child: IconButton(icon: const Icon(Icons.drafts_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
+            child: IconButton(icon: const Icon(Icons.drafts_outlined), tooltip: 'Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³â€ŒÙ‡Ø§', onPressed: _openDrafts),
           ),
-          IconButton(icon: const Icon(Icons.document_scanner_outlined), tooltip: 'اسکن رسید/فیش حقوقی', onPressed: _openScan),
+          IconButton(icon: const Icon(Icons.document_scanner_outlined), tooltip: 'Ø§Ø³Ú©Ù† Ø±Ø³ÛŒØ¯/ÙÛŒØ´ Ø­Ù‚ÙˆÙ‚ÛŒ', onPressed: _openScan),
         ],
       ),
       drawer: const AppDrawer(currentIndex: 0),
@@ -1576,17 +1615,17 @@ class _HomeScreenState extends State<HomeScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('موجودی کل', style: Theme.of(context).textTheme.titleMedium),
+                        Text('Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ú©Ù„', style: Theme.of(context).textTheme.titleMedium),
                         if (draftCount > 0)
                           Chip(
-                            label: Text('$draftCount پیش‌نویس'),
+                            label: Text('$draftCount Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³'),
                             backgroundColor: Colors.amber.shade100,
                             visualDensity: VisualDensity.compact,
                           ),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    if (balances.isEmpty) const Text('هنوز تراکنشی ثبت نشده.'),
+                    if (balances.isEmpty) const Text('Ù‡Ù†ÙˆØ² ØªØ±Ø§Ú©Ù†Ø´ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡.'),
                     ...balances.entries.map((e) => Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Text(
@@ -1601,14 +1640,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Divider(height: 24),
                     Text(periodLabel, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     const SizedBox(height: 6),
-                    if (period.isEmpty) const Text('در این دوره تراکنشی ثبت نشده.'),
+                    if (period.isEmpty) const Text('Ø¯Ø± Ø§ÛŒÙ† Ø¯ÙˆØ±Ù‡ ØªØ±Ø§Ú©Ù†Ø´ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡.'),
                     ...period.entries.map((e) => Padding(
                           padding: const EdgeInsets.only(bottom: 6),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              _MonthStat(label: 'درآمد', value: e.value['income']!, currency: e.key, color: Colors.green),
-                              _MonthStat(label: 'هزینه', value: e.value['expense']!, currency: e.key, color: Colors.red),
+                              _MonthStat(label: 'Ø¯Ø±Ø¢Ù…Ø¯', value: e.value['income']!, currency: e.key, color: Colors.green),
+                              _MonthStat(label: 'Ù‡Ø²ÛŒÙ†Ù‡', value: e.value['expense']!, currency: e.key, color: Colors.red),
                             ],
                           ),
                         )),
@@ -1622,19 +1661,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: DashboardCharts(
-                    expenseByCategory: expenseByTopCategoryForPeriod,
+                    expenseTransactions: expenseTransactionsForPeriod,
+                    categories: categories,
                     monthly: monthlyTotals(6),
                     currency: primaryCurrency,
                   ),
                 ),
               ),
             const SizedBox(height: 16),
-            Text('تراکنش‌ها', style: Theme.of(context).textTheme.titleLarge),
+            Text('ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             if (tx.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 32),
-                child: Center(child: Text('هنوز تراکنشی ثبت نشده. با دکمه + شروع کنید.')),
+                child: Center(child: Text('Ù‡Ù†ÙˆØ² ØªØ±Ø§Ú©Ù†Ø´ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡. Ø¨Ø§ Ø¯Ú©Ù…Ù‡ + Ø´Ø±ÙˆØ¹ Ú©Ù†ÛŒØ¯.')),
               ),
             ...tx.map((t) => Dismissible(
                   key: ValueKey(t.id),
@@ -1659,11 +1699,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     return await showDialog<bool>(
                       context: context,
                       builder: (ctx) => AlertDialog(
-                        title: const Text('حذف تراکنش'),
-                        content: const Text('این تراکنش حذف شود؟'),
+                        title: const Text('Ø­Ø°Ù ØªØ±Ø§Ú©Ù†Ø´'),
+                        content: const Text('Ø§ÛŒÙ† ØªØ±Ø§Ú©Ù†Ø´ Ø­Ø°Ù Ø´ÙˆØ¯ØŸ'),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø­Ø°Ù')),
                         ],
                       ),
                     ) ?? false;
@@ -1686,8 +1726,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       title: Text(categoryName(t.categoryId)),
                       subtitle: Text(
                         '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
-                        '${t.isRecurring ? ' • تکرارشونده' : ''}'
-                        '${t.draft ? ' • پیش‌نویس' : ''}',
+                        '${t.isRecurring ? ' â€¢ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡' : ''}'
+                        '${t.draft ? ' â€¢ Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³' : ''}',
                       ),
                       trailing: Text(
                         ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -1707,7 +1747,7 @@ class _HomeScreenState extends State<HomeScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(),
         icon: const Icon(Icons.add),
-        label: const Text('تراکنش جدید'),
+        label: const Text('ØªØ±Ø§Ú©Ù†Ø´ Ø¬Ø¯ÛŒØ¯'),
       ),
     ),
     );
@@ -1735,11 +1775,25 @@ class _MonthStat extends StatelessWidget {
 
 // ============================== Dashboard charts ==============================
 
-class DashboardCharts extends StatelessWidget {
-  final Map<Category, double> expenseByCategory;
+class DashboardCharts extends StatefulWidget {
+  final List<Transaction> expenseTransactions;
+  final List<Category> categories;
   final List<({DateTime month, double income, double expense})> monthly;
   final String currency;
-  const DashboardCharts({required this.expenseByCategory, required this.monthly, required this.currency, super.key});
+  const DashboardCharts({
+    required this.expenseTransactions,
+    required this.categories,
+    required this.monthly,
+    required this.currency,
+    super.key,
+  });
+
+  @override
+  State<DashboardCharts> createState() => _DashboardChartsState();
+}
+
+class _DashboardChartsState extends State<DashboardCharts> {
+  Category? drilldown;
 
   static const _palette = [
     Colors.indigo,
@@ -1750,15 +1804,46 @@ class DashboardCharts extends StatelessWidget {
     Colors.brown,
   ];
 
+  bool _hasChildren(Category c) => widget.categories.any((x) => x.parentId == c.id);
+
+  /// Aggregates [widget.expenseTransactions] by the direct child of [parent]
+  /// (top-level categories when parent is null) - this is what powers the
+  /// pie-chart drill-down.
+  Map<Category, double> _aggregateFor(Category? parent) {
+    final map = <String, double>{};
+    for (final t in widget.expenseTransactions) {
+      final match = widget.categories.where((c) => c.id == t.categoryId).toList();
+      var cat = match.isEmpty ? null : match.first;
+      while (cat != null && cat.parentId != parent?.id) {
+        if (cat.parentId == null) {
+          cat = null;
+          break;
+        }
+        final pm = widget.categories.where((c) => c.id == cat!.parentId).toList();
+        cat = pm.isEmpty ? null : pm.first;
+      }
+      if (cat == null) continue;
+      map[cat.id] = (map[cat.id] ?? 0) + t.amount;
+    }
+    final result = <Category, double>{};
+    map.forEach((id, amount) {
+      final match = widget.categories.where((c) => c.id == id).toList();
+      result[match.isEmpty ? Category(id: id, name: 'Ø¨Ø¯ÙˆÙ†â€ŒØ¯Ø³ØªÙ‡', type: TxType.expense) : match.first] = amount;
+    });
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final expenseByCategory = _aggregateFor(drilldown);
     final total = expenseByCategory.values.fold(0.0, (a, b) => a + b);
     final entries = expenseByCategory.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     final top = entries.take(6).toList();
     final otherSum = entries.skip(6).fold(0.0, (s, e) => s + e.value);
+    final monthly = widget.monthly;
     final maxMonthly = monthly.fold(0.0, (m, e) => [m, e.income, e.expense].reduce((a, b) => a > b ? a : b));
     Widget? comparison;
-    if (monthly.length >= 2) {
+    if (drilldown == null && monthly.length >= 2) {
       final curr = monthly.last.expense;
       final prev = monthly[monthly.length - 2].expense;
       if (prev > 0) {
@@ -1771,7 +1856,7 @@ class DashboardCharts extends StatelessWidget {
               Icon(up ? Icons.trending_up : Icons.trending_down, color: up ? Colors.red : Colors.green, size: 18),
               const SizedBox(width: 4),
               Text(
-                'هزینه‌ی این ماه ${ltr('${change.abs().round()}%')} ${up ? 'بیشتر' : 'کمتر'} از ماه قبل',
+                'Ù‡Ø²ÛŒÙ†Ù‡â€ŒÛŒ Ø§ÛŒÙ† Ù…Ø§Ù‡ ${ltr('${change.abs().round()}%')} ${up ? 'Ø¨ÛŒØ´ØªØ±' : 'Ú©Ù…ØªØ±'} Ø§Ø² Ù…Ø§Ù‡ Ù‚Ø¨Ù„',
                 style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
               ),
             ],
@@ -1784,60 +1869,85 @@ class DashboardCharts extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (comparison != null) comparison,
-        if (total > 0) ...[
-          Text('هزینه‌ها بر اساس دسته‌بندی', style: Theme.of(context).textTheme.titleMedium),
+        if (total > 0 || drilldown != null) ...[
+          Row(
+            children: [
+              if (drilldown != null)
+                IconButton(
+                  icon: const Icon(Icons.arrow_back, size: 20),
+                  tooltip: 'Ø¨Ø§Ø²Ú¯Ø´Øª',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: () => setState(() => drilldown = null),
+                ),
+              if (drilldown != null) const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  drilldown == null ? 'Ù‡Ø²ÛŒÙ†Ù‡â€ŒÙ‡Ø§ Ø¨Ø± Ø§Ø³Ø§Ø³ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ' : 'Ø²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡â€ŒÙ‡Ø§ÛŒ Â«${drilldown!.name}Â»',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
-          SizedBox(
-            height: 170,
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 150,
-                  child: PieChart(
-                    PieChartData(
-                      sectionsSpace: 2,
-                      centerSpaceRadius: 30,
-                      sections: [
-                        for (var i = 0; i < top.length; i++)
-                          PieChartSectionData(
-                            value: top[i].value,
-                            color: _palette[i % _palette.length],
-                            title: '${(top[i].value / total * 100).round()}%',
-                            radius: 46,
-                            titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
+          if (total > 0)
+            SizedBox(
+              height: 170,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 150,
+                    child: PieChart(
+                      PieChartData(
+                        sectionsSpace: 2,
+                        centerSpaceRadius: 30,
+                        sections: [
+                          for (var i = 0; i < top.length; i++)
+                            PieChartSectionData(
+                              value: top[i].value,
+                              color: _palette[i % _palette.length],
+                              title: '${(top[i].value / total * 100).round()}%',
+                              radius: 46,
+                              titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                          if (otherSum > 0)
+                            PieChartSectionData(
+                              value: otherSum,
+                              color: Colors.grey,
+                              title: '${(otherSum / total * 100).round()}%',
+                              radius: 46,
+                              titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        for (var i = 0; i < top.length; i++) _legendRow(_palette[i % _palette.length], top[i].key, top[i].value),
                         if (otherSum > 0)
-                          PieChartSectionData(
-                            value: otherSum,
-                            color: Colors.grey,
-                            title: '${(otherSum / total * 100).round()}%',
-                            radius: 46,
-                            titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
+                          _legendRow(Colors.grey, const Category(id: '_other_', name: 'Ø³Ø§ÛŒØ±', type: TxType.expense), otherSum),
                       ],
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ListView(
-                    children: [
-                      for (var i = 0; i < top.length; i++) _legendRow(_palette[i % _palette.length], top[i].key.name, top[i].value),
-                      if (otherSum > 0) _legendRow(Colors.grey, 'سایر', otherSum),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
+            )
+          else
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('Ù‡Ø²ÛŒÙ†Ù‡â€ŒØ§ÛŒ Ø¯Ø± Ø§ÛŒÙ† Ø¯ÙˆØ±Ù‡ Ø¨Ø±Ø§ÛŒ Ø§ÛŒÙ† Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡.', style: TextStyle(color: Colors.grey)),
             ),
-          ),
           const SizedBox(height: 24),
         ],
-        Text('روند ۶ ماه اخیر', style: Theme.of(context).textTheme.titleMedium),
+        Text('Ø±ÙˆÙ†Ø¯ Û¶ Ù…Ø§Ù‡ Ø§Ø®ÛŒØ±', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         SizedBox(
           height: 190,
           child: maxMonthly <= 0
-              ? const Center(child: Text('داده‌ای برای نمایش وجود ندارد.', style: TextStyle(color: Colors.grey)))
+              ? const Center(child: Text('Ø¯Ø§Ø¯Ù‡â€ŒØ§ÛŒ Ø¨Ø±Ø§ÛŒ Ù†Ù…Ø§ÛŒØ´ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯.', style: TextStyle(color: Colors.grey)))
               : BarChart(
                   BarChartData(
                     maxY: maxMonthly * 1.15,
@@ -1877,29 +1987,42 @@ class DashboardCharts extends StatelessWidget {
           children: [
             _dot(Colors.green),
             const SizedBox(width: 4),
-            const Text('درآمد', style: TextStyle(fontSize: 12)),
+            const Text('Ø¯Ø±Ø¢Ù…Ø¯', style: TextStyle(fontSize: 12)),
             const SizedBox(width: 16),
             _dot(Colors.red),
             const SizedBox(width: 4),
-            const Text('هزینه', style: TextStyle(fontSize: 12)),
+            const Text('Ù‡Ø²ÛŒÙ†Ù‡', style: TextStyle(fontSize: 12)),
           ],
         ),
       ],
     );
   }
 
-  Widget _legendRow(Color color, String label, double amount) => Padding(
+  Widget _legendRow(Color color, Category category, double amount) {
+    final canDrill = _hasChildren(category);
+    return InkWell(
+      onTap: canDrill ? () => setState(() => drilldown = category) : null,
+      child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
         child: Row(
           children: [
             Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
             const SizedBox(width: 6),
-            Expanded(child: Text(label, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis)),
+            Expanded(
+              child: Text(
+                category.name,
+                style: TextStyle(fontSize: 12, decoration: canDrill ? TextDecoration.underline : null),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             const SizedBox(width: 4),
-            Text(ltr(formatMoney(amount, currency)), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            Text(ltr(formatMoney(amount, widget.currency)), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            if (canDrill) const Icon(Icons.chevron_left, size: 16, color: Colors.grey),
           ],
         ),
-      );
+      ),
+    );
+  }
 
   Widget _dot(Color color) => Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
 }
@@ -1955,7 +2078,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? 'Ø¨Ø¯ÙˆÙ†â€ŒØ¯Ø³ØªÙ‡' : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -1996,9 +2119,9 @@ class _DraftsScreenState extends State<DraftsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('پیش‌نویس‌ها')),
+      appBar: AppBar(title: const Text('Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³â€ŒÙ‡Ø§')),
       body: tx.isEmpty
-          ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
+          ? const Center(child: Text('Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³ÛŒ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯.'))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: tx.map((t) => Dismissible(
@@ -2013,11 +2136,11 @@ class _DraftsScreenState extends State<DraftsScreen> {
                     confirmDismiss: (_) => showDialog<bool>(
                       context: context,
                       builder: (ctx) => AlertDialog(
-                        title: const Text('حذف پیش‌نویس'),
-                        content: const Text('این پیش‌نویس حذف شود؟'),
+                        title: const Text('Ø­Ø°Ù Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³'),
+                        content: const Text('Ø§ÛŒÙ† Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³ Ø­Ø°Ù Ø´ÙˆØ¯ØŸ'),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø­Ø°Ù')),
                         ],
                       ),
                     ),
@@ -2085,7 +2208,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? 'Ø¨Ø¯ÙˆÙ†â€ŒØ¯Ø³ØªÙ‡' : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -2096,15 +2219,15 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
   String _recurrenceLabel(Transaction t) {
     switch (t.recurrence) {
       case RecurrenceFrequency.monthly:
-        return 'ماهانه (روز ${t.recurrenceDay ?? '?'})';
+        return 'Ù…Ø§Ù‡Ø§Ù†Ù‡ (Ø±ÙˆØ² ${t.recurrenceDay ?? '?'})';
       case RecurrenceFrequency.weekly:
-        return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
+        return 'Ù‡ÙØªÚ¯ÛŒ (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
       case RecurrenceFrequency.custom:
-        return 'هر ${t.recurrenceIntervalDays ?? '?'} روز';
+        return 'Ù‡Ø± ${t.recurrenceIntervalDays ?? '?'} Ø±ÙˆØ²';
       case RecurrenceFrequency.quarterly:
-        return 'فصلی (روز ${t.recurrenceDay ?? '?'})';
+        return 'ÙØµÙ„ÛŒ (Ø±ÙˆØ² ${t.recurrenceDay ?? '?'})';
       case RecurrenceFrequency.yearly:
-        return 'سالانه (${ltr(DateFormat('dd.MM').format(t.date))})';
+        return 'Ø³Ø§Ù„Ø§Ù†Ù‡ (${ltr(DateFormat('dd.MM').format(t.date))})';
       case RecurrenceFrequency.none:
         return '';
     }
@@ -2145,9 +2268,9 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('تراکنش‌های تکرارشونده')),
+      appBar: AppBar(title: const Text('ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡')),
       body: tx.isEmpty
-          ? const Center(child: Text('تراکنش تکرارشونده‌ای وجود ندارد.'))
+          ? const Center(child: Text('ØªØ±Ø§Ú©Ù†Ø´ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡â€ŒØ§ÛŒ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯.'))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: tx.map((t) {
@@ -2164,11 +2287,11 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                   confirmDismiss: (_) => showDialog<bool>(
                     context: context,
                     builder: (ctx) => AlertDialog(
-                      title: const Text('حذف تراکنش تکرارشونده'),
-                      content: const Text('این تراکنش تکرارشونده حذف شود؟'),
+                      title: const Text('Ø­Ø°Ù ØªØ±Ø§Ú©Ù†Ø´ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡'),
+                      content: const Text('Ø§ÛŒÙ† ØªØ±Ø§Ú©Ù†Ø´ ØªÚ©Ø±Ø§Ø±Ø´ÙˆÙ†Ø¯Ù‡ Ø­Ø°Ù Ø´ÙˆØ¯ØŸ'),
                       actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø­Ø°Ù')),
                       ],
                     ),
                   ),
@@ -2190,7 +2313,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                       title: Text(categoryName(t.categoryId)),
                       subtitle: Text(
                         '${_recurrenceLabel(t)}'
-                        '${next != null ? ' • سررسید بعدی: ${ltr(DateFormat('dd.MM.yyyy').format(next))}' : ''}',
+                        '${next != null ? ' â€¢ Ø³Ø±Ø±Ø³ÛŒØ¯ Ø¨Ø¹Ø¯ÛŒ: ${ltr(DateFormat('dd.MM.yyyy').format(next))}' : ''}',
                       ),
                       trailing: Text(
                         ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -2209,9 +2332,112 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
   }
 }
 
+// ============================== Affected-by-deletion transactions ==============================
+
+class AffectedTransactionsScreen extends StatefulWidget {
+  const AffectedTransactionsScreen({super.key});
+  @override
+  State<AffectedTransactionsScreen> createState() => _AffectedTransactionsScreenState();
+}
+
+class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen> {
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final all = await Store.loadTransactions();
+    tx = all.where((t) => t.categoryId == '_uncategorized_' || t.note.contains('Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ù‚Ø¨Ù„ÛŒ:')).toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String categoryName(String id) {
+    if (id == '_uncategorized_') return 'Ø¨Ø¯ÙˆÙ†â€ŒØ¯Ø³ØªÙ‡';
+    final c = categories.where((c) => c.id == id).toList();
+    return c.isEmpty ? 'Ø¨Ø¯ÙˆÙ†â€ŒØ¯Ø³ØªÙ‡' : c.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final a = accounts.where((a) => a.id == accountId).toList();
+    return a.isEmpty ? 'EUR' : a.first.currency;
+  }
+
+  Future<void> _openEditor(Transaction t) async {
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+    );
+    if (result == null) return;
+    final all = await Store.loadTransactions();
+    if (result is DeleteTransactionSignal) {
+      all.removeWhere((x) => x.id == result.id);
+    } else if (result is Transaction) {
+      final idx = all.indexWhere((x) => x.id == result.id);
+      if (idx >= 0) {
+        all[idx] = result;
+      } else {
+        all.add(result);
+      }
+    }
+    await Store.saveTransactions(all);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ ØªØ­Øªâ€ŒØªØ£Ø«ÛŒØ± Ø­Ø°Ù Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ')),
+      body: tx.isEmpty
+          ? const Center(child: Text('ØªØ±Ø§Ú©Ù†Ø´ÛŒ Ú©Ù‡ ØªØ­Øªâ€ŒØªØ£Ø«ÛŒØ± Ø­Ø°Ù Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ù‚Ø±Ø§Ø± Ú¯Ø±ÙØªÙ‡ Ø¨Ø§Ø´Ø¯ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯.'))
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: tx
+                  .map((t) => Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                            child: Icon(
+                              t.type == TxType.income ? Icons.add : Icons.remove,
+                              color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                            ),
+                          ),
+                          title: Text(categoryName(t.categoryId)),
+                          subtitle: Text(
+                            '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
+                            '${t.note.isNotEmpty ? ' â€¢ ${t.note}' : ''}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Text(
+                            ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                            ),
+                          ),
+                          onTap: () => _openEditor(t),
+                        ),
+                      ))
+                  .toList(),
+            ),
+    );
+  }
+}
+
 // ============================== Transaction editor ==============================
 
-const _weekdayNames = ['دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه', 'یکشنبه'];
+const _weekdayNames = ['Ø¯ÙˆØ´Ù†Ø¨Ù‡', 'Ø³Ù‡â€ŒØ´Ù†Ø¨Ù‡', 'Ú†Ù‡Ø§Ø±Ø´Ù†Ø¨Ù‡', 'Ù¾Ù†Ø¬Ø´Ù†Ø¨Ù‡', 'Ø¬Ù…Ø¹Ù‡', 'Ø´Ù†Ø¨Ù‡', 'ÛŒÚ©Ø´Ù†Ø¨Ù‡'];
 
 // ============================== Scan entry ==============================
 
@@ -2252,7 +2478,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       await Future.delayed(const Duration(milliseconds: 300));
       final imgFile = File(imagePath);
       if (!await imgFile.exists() || await imgFile.length() == 0) {
-        throw Exception('فایل تصویر خوانده نشد. لطفاً دوباره امتحان کنید.');
+        throw Exception('ÙØ§ÛŒÙ„ ØªØµÙˆÛŒØ± Ø®ÙˆØ§Ù†Ø¯Ù‡ Ù†Ø´Ø¯. Ù„Ø·ÙØ§Ù‹ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†ÛŒØ¯.');
       }
       final text = await extractTextFromImage(imagePath);
       if (!context.mounted) return;
@@ -2269,7 +2495,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       if (!context.mounted) return;
       if (result != null) Navigator.pop(context, result);
     } catch (e) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ø®Ø·Ø§: $e')));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -2287,7 +2513,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
               style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.camera),
               icon: const Icon(Icons.camera_alt, size: 18),
-              label: const Text('دوربین', softWrap: false, overflow: TextOverflow.visible),
+              label: const Text('Ø¯ÙˆØ±Ø¨ÛŒÙ†', softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
           const SizedBox(width: 6),
@@ -2296,7 +2522,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
               style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.gallery),
               icon: const Icon(Icons.photo_library, size: 18),
-              label: const Text('گالری', softWrap: false, overflow: TextOverflow.visible),
+              label: const Text('Ú¯Ø§Ù„Ø±ÛŒ', softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
           const SizedBox(width: 6),
@@ -2331,15 +2557,15 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('اسکن رسید یا فیش حقوقی')),
+      appBar: AppBar(title: const Text('Ø§Ø³Ú©Ù† Ø±Ø³ÛŒØ¯ ÛŒØ§ ÙÛŒØ´ Ø­Ù‚ÙˆÙ‚ÛŒ')),
       body: Stack(
         children: [
           ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _section('رسید جدید', 'تشخیص آفلاین + امکان بهبود با هوش مصنوعی', Icons.receipt_long, false),
+              _section('Ø±Ø³ÛŒØ¯ Ø¬Ø¯ÛŒØ¯', 'ØªØ´Ø®ÛŒØµ Ø¢ÙÙ„Ø§ÛŒÙ† + Ø§Ù…Ú©Ø§Ù† Ø¨Ù‡Ø¨ÙˆØ¯ Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ', Icons.receipt_long, false),
               const SizedBox(height: 16),
-              _section('فیش حقوقی جدید', 'استخراج Brutto/Netto، مالیات، بیمه و کلاس مالیاتی', Icons.badge_outlined, true),
+              _section('ÙÛŒØ´ Ø­Ù‚ÙˆÙ‚ÛŒ Ø¬Ø¯ÛŒØ¯', 'Ø§Ø³ØªØ®Ø±Ø§Ø¬ Brutto/NettoØŒ Ù…Ø§Ù„ÛŒØ§ØªØŒ Ø¨ÛŒÙ…Ù‡ Ùˆ Ú©Ù„Ø§Ø³ Ù…Ø§Ù„ÛŒØ§ØªÛŒ', Icons.badge_outlined, true),
             ],
           ),
           if (busy)
@@ -2351,7 +2577,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
                     padding: EdgeInsets.all(24),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      children: [CircularProgressIndicator(), SizedBox(height: 12), Text('در حال تشخیص متن...')],
+                      children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Ø¯Ø± Ø­Ø§Ù„ ØªØ´Ø®ÛŒØµ Ù…ØªÙ†...')],
                     ),
                   ),
                 ),
@@ -2459,7 +2685,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       geminiFailed = true;
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+          content: Text('Ø®ÙˆØ§Ù†Ø¯Ù† Ù‡ÙˆØ´Ù…Ù†Ø¯ Ø§ÛŒÙ†â€ŒØ¨Ø§Ø± Ù…Ù…Ú©Ù† Ù†Ø´Ø¯ (Ø³Ø±ÙˆØ± Ø´Ù„ÙˆØº Ø§Ø³Øª ÛŒØ§ Ø®Ø·Ø§ÛŒ Ù…ÙˆÙ‚ØªÛŒ Ø±Ø® Ø¯Ø§Ø¯). Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒØ¯ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†ÛŒØ¯ ÛŒØ§ ÙÛŒÙ„Ø¯Ù‡Ø§ Ø±Ø§ Ø¯Ø³ØªÛŒ ØªÚ©Ù…ÛŒÙ„ Ùˆ Ø«Ø¨Øª Ú©Ù†ÛŒØ¯.'),
           duration: Duration(seconds: 6),
         ));
       }
@@ -2482,52 +2708,58 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     });
   }
 
-  Future<void> _addItemRow() async {
-    final nameCtrl = TextEditingController();
-    final qtyCtrl = TextEditingController(text: '1');
-    final priceCtrl = TextEditingController();
+  Future<void> _addItemRow({int? editIndex}) async {
+    final existing = editIndex != null ? items[editIndex] : null;
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
+    final priceCtrl = TextEditingController(text: existing?.price?.toString() ?? '');
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('افزودن کالا'),
+        title: Text(editIndex == null ? 'Ø§ÙØ²ÙˆØ¯Ù† Ú©Ø§Ù„Ø§' : 'ÙˆÛŒØ±Ø§ÛŒØ´ Ú©Ø§Ù„Ø§'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Ù†Ø§Ù… Ú©Ø§Ù„Ø§'), autofocus: true),
             const SizedBox(height: 8),
-            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'ØªØ¹Ø¯Ø§Ø¯')),
             const SizedBox(height: 8),
-            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Ù‚ÛŒÙ…Øª')),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('افزودن')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? 'Ø§ÙØ²ÙˆØ¯Ù†' : 'Ø°Ø®ÛŒØ±Ù‡')),
         ],
       ),
     );
     if (added != true || nameCtrl.text.trim().isEmpty) return;
+    final entry = ReceiptItemEntry(
+      name: nameCtrl.text.trim(),
+      quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+      price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+    );
     setState(() {
-      items.add(ReceiptItemEntry(
-        name: nameCtrl.text.trim(),
-        quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
-        price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
-      ));
+      if (editIndex != null) {
+        items[editIndex] = entry;
+      } else {
+        items.add(entry);
+      }
     });
   }
 
   Future<void> _save({required bool draft}) async {
     final total = double.tryParse(totalCtrl.text.replaceAll(',', '.'));
     if (total == null || total <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ کل معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ù…Ø¨Ù„Øº Ú©Ù„ Ù…Ø¹ØªØ¨Ø± ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.')));
       return;
     }
     if (!draft && selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø¨Ø±Ø§ÛŒ Ø«Ø¨Øª Ù†Ù‡Ø§ÛŒÛŒØŒ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø±Ø§ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯.')));
       return;
     }
     if (!draft && selectedAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø¨Ø±Ø§ÛŒ Ø«Ø¨Øª Ù†Ù‡Ø§ÛŒÛŒØŒ Ø­Ø³Ø§Ø¨ Ø±Ø§ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯.')));
       return;
     }
     final duplicate = existingTx.any((t) =>
@@ -2540,11 +2772,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تراکنش مشابه'),
-          content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین رسید باشد. باز هم ثبت شود؟'),
+          title: const Text('ØªØ±Ø§Ú©Ù†Ø´ Ù…Ø´Ø§Ø¨Ù‡'),
+          content: const Text('ÛŒÚ© ØªØ±Ø§Ú©Ù†Ø´ Ø¨Ø§ Ù‡Ù…ÛŒÙ† Ù…Ø¨Ù„Øº Ùˆ ØªØ§Ø±ÛŒØ® Ù‚Ø¨Ù„Ø§Ù‹ Ø«Ø¨Øª Ø´Ø¯Ù‡. Ø§ÛŒÙ† Ù…Ù…Ú©Ù† Ø§Ø³Øª Ø§Ø³Ú©Ù† ØªÚ©Ø±Ø§Ø±ÛŒ Ù‡Ù…ÛŒÙ† Ø±Ø³ÛŒØ¯ Ø¨Ø§Ø´Ø¯. Ø¨Ø§Ø² Ù‡Ù… Ø«Ø¨Øª Ø´ÙˆØ¯ØŸ'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø¨Ù„Ù‡ØŒ Ø«Ø¨Øª Ø´ÙˆØ¯')),
           ],
         ),
       );
@@ -2577,7 +2809,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
-      appBar: AppBar(title: const Text('بررسی رسید')),
+      appBar: AppBar(title: const Text('Ø¨Ø±Ø±Ø³ÛŒ Ø±Ø³ÛŒØ¯')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -2595,33 +2827,33 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               icon: improving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
-              label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
+              label: Text(improving ? 'Ø¯Ø± Ø­Ø§Ù„ Ø¨Ù‡Ø¨ÙˆØ¯...' : (geminiFailed ? 'ØªÙ„Ø§Ø´ Ù…Ø¬Ø¯Ø¯ Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ' : 'Ø¨Ù‡Ø¨ÙˆØ¯ Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ')),
             )
           else
             const Text(
-              'برای بهبود دقت با هوش مصنوعی، کلید Gemini را از منوی «تنظیمات» وارد کنید.',
+              'Ø¨Ø±Ø§ÛŒ Ø¨Ù‡Ø¨ÙˆØ¯ Ø¯Ù‚Øª Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒØŒ Ú©Ù„ÛŒØ¯ Gemini Ø±Ø§ Ø§Ø² Ù…Ù†ÙˆÛŒ Â«ØªÙ†Ø¸ÛŒÙ…Ø§ØªÂ» ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           if (geminiFailed)
             const Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
-                'خواندن هوشمند ممکن نشد. فیلدهای زیر را بررسی و در صورت نیاز دستی اصلاح کنید.',
+                'Ø®ÙˆØ§Ù†Ø¯Ù† Ù‡ÙˆØ´Ù…Ù†Ø¯ Ù…Ù…Ú©Ù† Ù†Ø´Ø¯. ÙÛŒÙ„Ø¯Ù‡Ø§ÛŒ Ø²ÛŒØ± Ø±Ø§ Ø¨Ø±Ø±Ø³ÛŒ Ùˆ Ø¯Ø± ØµÙˆØ±Øª Ù†ÛŒØ§Ø² Ø¯Ø³ØªÛŒ Ø§ØµÙ„Ø§Ø­ Ú©Ù†ÛŒØ¯.',
                 style: TextStyle(color: Colors.orange, fontSize: 12),
               ),
             ),
           const SizedBox(height: 16),
-          TextField(controller: merchantCtrl, decoration: const InputDecoration(labelText: 'فروشگاه', border: OutlineInputBorder())),
+          TextField(controller: merchantCtrl, decoration: const InputDecoration(labelText: 'ÙØ±ÙˆØ´Ú¯Ø§Ù‡', border: OutlineInputBorder())),
           const SizedBox(height: 12),
           TextField(
             controller: totalCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'مبلغ کل', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ù…Ø¨Ù„Øº Ú©Ù„', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
+            title: Text('ØªØ§Ø±ÛŒØ®: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showDatePicker(
@@ -2637,14 +2869,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? 'انتخاب دسته‌بندی'),
+            title: Text(selectedCategory?.name ?? 'Ø§Ù†ØªØ®Ø§Ø¨ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'),
             trailing: const Icon(Icons.chevron_left),
             onTap: _pickCategory,
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
-            decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ø­Ø³Ø§Ø¨', border: OutlineInputBorder()),
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
@@ -2652,12 +2884,12 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('اقلام خرید', style: Theme.of(context).textTheme.titleMedium),
-              TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
+              Text('Ø§Ù‚Ù„Ø§Ù… Ø®Ø±ÛŒØ¯', style: Theme.of(context).textTheme.titleMedium),
+              TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('Ø§ÙØ²ÙˆØ¯Ù†')),
             ],
           ),
           if (items.isEmpty)
-            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('کالایی ثبت نشده.', style: TextStyle(color: Colors.grey))),
+            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('Ú©Ø§Ù„Ø§ÛŒÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡.', style: TextStyle(color: Colors.grey))),
           ...items.asMap().entries.map((e) {
             final i = e.key;
             final it = e.value;
@@ -2666,23 +2898,24 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                 dense: true,
                 title: Text(it.name),
                 subtitle: Text(
-                  '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
-                  '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                  '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                  '${it.quantity != null ? 'ØªØ¹Ø¯Ø§Ø¯: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                  '${it.quantity != null && it.price != null ? ' â€¢ ' : ''}'
+                  '${it.price != null ? ltr('â‚¬${it.price!.toStringAsFixed(2)}') : ''}',
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),
                   onPressed: () => setState(() => items.removeAt(i)),
                 ),
+                onTap: () => _addItemRow(editIndex: i),
               ),
             );
           }),
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: OutlinedButton(onPressed: () => _save(draft: true), child: const Text('ذخیره پیش‌نویس'))),
+              Expanded(child: OutlinedButton(onPressed: () => _save(draft: true), child: const Text('Ø°Ø®ÛŒØ±Ù‡ Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³'))),
               const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('تأیید و ثبت نهایی'))),
+              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('ØªØ£ÛŒÛŒØ¯ Ùˆ Ø«Ø¨Øª Ù†Ù‡Ø§ÛŒÛŒ'))),
             ],
           ),
         ],
@@ -2695,15 +2928,15 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 // ============================== Payslip review ==============================
 
 const _payslipLabels = <String, String>{
-  'brutto': 'حقوق ناخالص (Brutto)',
-  'netto': 'حقوق خالص (Netto)',
-  'lohnsteuer': 'مالیات بر درآمد (Lohnsteuer)',
-  'solidaritaetszuschlag': 'مالیات همبستگی (Solidaritätszuschlag)',
-  'kirchensteuer': 'مالیات کلیسا (Kirchensteuer)',
-  'krankenversicherung': 'بیمه درمانی (Krankenversicherung)',
-  'pflegeversicherung': 'بیمه مراقبت (Pflegeversicherung)',
-  'rentenversicherung': 'بیمه بازنشستگی (Rentenversicherung)',
-  'arbeitslosenversicherung': 'بیمه بیکاری (Arbeitslosenversicherung)',
+  'brutto': 'Ø­Ù‚ÙˆÙ‚ Ù†Ø§Ø®Ø§Ù„Øµ (Brutto)',
+  'netto': 'Ø­Ù‚ÙˆÙ‚ Ø®Ø§Ù„Øµ (Netto)',
+  'lohnsteuer': 'Ù…Ø§Ù„ÛŒØ§Øª Ø¨Ø± Ø¯Ø±Ø¢Ù…Ø¯ (Lohnsteuer)',
+  'solidaritaetszuschlag': 'Ù…Ø§Ù„ÛŒØ§Øª Ù‡Ù…Ø¨Ø³ØªÚ¯ÛŒ (SolidaritÃ¤tszuschlag)',
+  'kirchensteuer': 'Ù…Ø§Ù„ÛŒØ§Øª Ú©Ù„ÛŒØ³Ø§ (Kirchensteuer)',
+  'krankenversicherung': 'Ø¨ÛŒÙ…Ù‡ Ø¯Ø±Ù…Ø§Ù†ÛŒ (Krankenversicherung)',
+  'pflegeversicherung': 'Ø¨ÛŒÙ…Ù‡ Ù…Ø±Ø§Ù‚Ø¨Øª (Pflegeversicherung)',
+  'rentenversicherung': 'Ø¨ÛŒÙ…Ù‡ Ø¨Ø§Ø²Ù†Ø´Ø³ØªÚ¯ÛŒ (Rentenversicherung)',
+  'arbeitslosenversicherung': 'Ø¨ÛŒÙ…Ù‡ Ø¨ÛŒÚ©Ø§Ø±ÛŒ (Arbeitslosenversicherung)',
 };
 
 class PayslipReviewScreen extends StatefulWidget {
@@ -2784,7 +3017,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       geminiFailed = true;
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+          content: Text('Ø®ÙˆØ§Ù†Ø¯Ù† Ù‡ÙˆØ´Ù…Ù†Ø¯ Ø§ÛŒÙ†â€ŒØ¨Ø§Ø± Ù…Ù…Ú©Ù† Ù†Ø´Ø¯ (Ø³Ø±ÙˆØ± Ø´Ù„ÙˆØº Ø§Ø³Øª ÛŒØ§ Ø®Ø·Ø§ÛŒ Ù…ÙˆÙ‚ØªÛŒ Ø±Ø® Ø¯Ø§Ø¯). Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒØ¯ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†ÛŒØ¯ ÛŒØ§ ÙÛŒÙ„Ø¯Ù‡Ø§ Ø±Ø§ Ø¯Ø³ØªÛŒ ØªÚ©Ù…ÛŒÙ„ Ùˆ Ø«Ø¨Øª Ú©Ù†ÛŒØ¯.'),
           duration: Duration(seconds: 6),
         ));
       }
@@ -2810,15 +3043,15 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   Future<void> _save({required bool draft}) async {
     final netto = double.tryParse(numCtrls['netto']!.text.replaceAll(',', '.'));
     if (netto == null || netto <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ Netto معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ù…Ø¨Ù„Øº Netto Ù…Ø¹ØªØ¨Ø± ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.')));
       return;
     }
     if (!draft && selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø¨Ø±Ø§ÛŒ Ø«Ø¨Øª Ù†Ù‡Ø§ÛŒÛŒØŒ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø±Ø§ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯.')));
       return;
     }
     if (!draft && selectedAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø¨Ø±Ø§ÛŒ Ø«Ø¨Øª Ù†Ù‡Ø§ÛŒÛŒØŒ Ø­Ø³Ø§Ø¨ Ø±Ø§ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯.')));
       return;
     }
     double? num_(String k) => double.tryParse(numCtrls[k]!.text.trim().replaceAll(',', '.'));
@@ -2846,11 +3079,11 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تراکنش مشابه'),
-          content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین فیش باشد. باز هم ثبت شود؟'),
+          title: const Text('ØªØ±Ø§Ú©Ù†Ø´ Ù…Ø´Ø§Ø¨Ù‡'),
+          content: const Text('ÛŒÚ© ØªØ±Ø§Ú©Ù†Ø´ Ø¨Ø§ Ù‡Ù…ÛŒÙ† Ù…Ø¨Ù„Øº Ùˆ ØªØ§Ø±ÛŒØ® Ù‚Ø¨Ù„Ø§Ù‹ Ø«Ø¨Øª Ø´Ø¯Ù‡. Ø§ÛŒÙ† Ù…Ù…Ú©Ù† Ø§Ø³Øª Ø§Ø³Ú©Ù† ØªÚ©Ø±Ø§Ø±ÛŒ Ù‡Ù…ÛŒÙ† ÙÛŒØ´ Ø¨Ø§Ø´Ø¯. Ø¨Ø§Ø² Ù‡Ù… Ø«Ø¨Øª Ø´ÙˆØ¯ØŸ'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø¨Ù„Ù‡ØŒ Ø«Ø¨Øª Ø´ÙˆØ¯')),
           ],
         ),
       );
@@ -2884,7 +3117,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
-      appBar: AppBar(title: const Text('بررسی فیش حقوقی')),
+      appBar: AppBar(title: const Text('Ø¨Ø±Ø±Ø³ÛŒ ÙÛŒØ´ Ø­Ù‚ÙˆÙ‚ÛŒ')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -2902,27 +3135,27 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               icon: improving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
-              label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
+              label: Text(improving ? 'Ø¯Ø± Ø­Ø§Ù„ Ø¨Ù‡Ø¨ÙˆØ¯...' : (geminiFailed ? 'ØªÙ„Ø§Ø´ Ù…Ø¬Ø¯Ø¯ Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ' : 'Ø¨Ù‡Ø¨ÙˆØ¯ Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ')),
             )
           else
             const Text(
-              'برای بهبود دقت با هوش مصنوعی، کلید Gemini را از منوی «تنظیمات» وارد کنید.',
+              'Ø¨Ø±Ø§ÛŒ Ø¨Ù‡Ø¨ÙˆØ¯ Ø¯Ù‚Øª Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒØŒ Ú©Ù„ÛŒØ¯ Gemini Ø±Ø§ Ø§Ø² Ù…Ù†ÙˆÛŒ Â«ØªÙ†Ø¸ÛŒÙ…Ø§ØªÂ» ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.',
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           if (geminiFailed)
             const Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
-                'خواندن هوشمند ممکن نشد. فیلدهای زیر را بررسی و در صورت نیاز دستی اصلاح کنید.',
+                'Ø®ÙˆØ§Ù†Ø¯Ù† Ù‡ÙˆØ´Ù…Ù†Ø¯ Ù…Ù…Ú©Ù† Ù†Ø´Ø¯. ÙÛŒÙ„Ø¯Ù‡Ø§ÛŒ Ø²ÛŒØ± Ø±Ø§ Ø¨Ø±Ø±Ø³ÛŒ Ùˆ Ø¯Ø± ØµÙˆØ±Øª Ù†ÛŒØ§Ø² Ø¯Ø³ØªÛŒ Ø§ØµÙ„Ø§Ø­ Ú©Ù†ÛŒØ¯.',
                 style: TextStyle(color: Colors.orange, fontSize: 12),
               ),
             ),
           const SizedBox(height: 16),
-          TextField(controller: arbeitgeberCtrl, decoration: const InputDecoration(labelText: 'کارفرما (Arbeitgeber)', border: OutlineInputBorder())),
+          TextField(controller: arbeitgeberCtrl, decoration: const InputDecoration(labelText: 'Ú©Ø§Ø±ÙØ±Ù…Ø§ (Arbeitgeber)', border: OutlineInputBorder())),
           const SizedBox(height: 12),
-          TextField(controller: monatCtrl, decoration: const InputDecoration(labelText: 'ماه (Abrechnungsmonat)', border: OutlineInputBorder())),
+          TextField(controller: monatCtrl, decoration: const InputDecoration(labelText: 'Ù…Ø§Ù‡ (Abrechnungsmonat)', border: OutlineInputBorder())),
           const SizedBox(height: 12),
-          TextField(controller: steuerklasseCtrl, decoration: const InputDecoration(labelText: 'کلاس مالیاتی (Steuerklasse)', border: OutlineInputBorder())),
+          TextField(controller: steuerklasseCtrl, decoration: const InputDecoration(labelText: 'Ú©Ù„Ø§Ø³ Ù…Ø§Ù„ÛŒØ§ØªÛŒ (Steuerklasse)', border: OutlineInputBorder())),
           const SizedBox(height: 12),
           ...(_payslipLabels.keys.map((k) => Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -2934,7 +3167,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               ))),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
+            title: Text('ØªØ§Ø±ÛŒØ®: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showDatePicker(
@@ -2950,23 +3183,23 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? 'انتخاب دسته‌بندی'),
+            title: Text(selectedCategory?.name ?? 'Ø§Ù†ØªØ®Ø§Ø¨ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'),
             trailing: const Icon(Icons.chevron_left),
             onTap: _pickCategory,
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
-            decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ø­Ø³Ø§Ø¨', border: OutlineInputBorder()),
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: OutlinedButton(onPressed: () => _save(draft: true), child: const Text('ذخیره پیش‌نویس'))),
+              Expanded(child: OutlinedButton(onPressed: () => _save(draft: true), child: const Text('Ø°Ø®ÛŒØ±Ù‡ Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³'))),
               const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('تأیید و ثبت نهایی'))),
+              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('ØªØ£ÛŒÛŒØ¯ Ùˆ Ø«Ø¨Øª Ù†Ù‡Ø§ÛŒÛŒ'))),
             ],
           ),
         ],
@@ -3007,6 +3240,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   DateTime? endDate;
   String endMode = 'unlimited'; // 'unlimited' | 'count' | 'date'
   bool notifyEnabled = false;
+  bool notifyLastTwoEnabled = false;
   final notifyMessageCtrl = TextEditingController();
   bool notifyEachEnabled = false;
   final notifyDaysCtrl = TextEditingController();
@@ -3042,6 +3276,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       endDate = e.recurrenceEndDate;
       endMode = e.recurrenceEndDate != null ? 'date' : (e.installments != null ? 'count' : 'unlimited');
       notifyEnabled = e.notifyEnabled;
+      notifyLastTwoEnabled = e.notifyLastTwoEnabled;
       notifyMessageCtrl.text = e.notifyMessage;
       notifyEachEnabled = e.notifyDaysBeforeEach != null;
       notifyDaysCtrl.text = e.notifyDaysBeforeEach?.toString() ?? '';
@@ -3107,15 +3342,15 @@ class _TransactionEditorState extends State<TransactionEditor> {
   Future<bool> _save() async {
     final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ù…Ø¨Ù„Øº Ù…Ø¹ØªØ¨Ø± ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.')));
       return false;
     }
     if (selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک دسته‌بندی انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ÛŒÚ© Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯.')));
       return false;
     }
     if (selectedAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک حساب انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ÛŒÚ© Ø­Ø³Ø§Ø¨ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯.')));
       return false;
     }
     int? recDay;
@@ -3126,7 +3361,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
       recDay = int.tryParse(dayCtrl.text);
       if (recDay == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø±ÙˆØ² Ø³Ø±Ø±Ø³ÛŒØ¯ Ø¯Ø± Ù…Ø§Ù‡ Ø±Ø§ ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.')));
         return false;
       }
       if (recDay < 1) recDay = 1;
@@ -3136,7 +3371,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     } else if (recurrence == RecurrenceFrequency.custom) {
       recInterval = int.tryParse(intervalCtrl.text);
       if (recInterval == null || recInterval <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ØªØ¹Ø¯Ø§Ø¯ Ø±ÙˆØ² Ø¨Ø§Ø²Ù‡ Ø±Ø§ Ø¯Ø±Ø³Øª ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯.')));
         return false;
       }
     }
@@ -3194,6 +3429,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       draft: draft,
       items: items,
       notifyEnabled: notifyEnabled,
+      notifyLastTwoEnabled: notifyEnabled && notifyLastTwoEnabled,
       notifyMessage: notifyMessageCtrl.text.trim(),
       notifyDaysBeforeEach: notifyEnabled && notifyEachEnabled ? int.tryParse(notifyDaysCtrl.text) : null,
       payslipDetails: payslipDetails,
@@ -3208,37 +3444,43 @@ class _TransactionEditorState extends State<TransactionEditor> {
     return true;
   }
 
-  Future<void> _addItemRow() async {
-    final nameCtrl = TextEditingController();
-    final qtyCtrl = TextEditingController(text: '1');
-    final priceCtrl = TextEditingController();
+  Future<void> _addItemRow({int? editIndex}) async {
+    final existing = editIndex != null ? items[editIndex] : null;
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
+    final priceCtrl = TextEditingController(text: existing?.price?.toString() ?? '');
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('افزودن کالا'),
+        title: Text(editIndex == null ? 'Ø§ÙØ²ÙˆØ¯Ù† Ú©Ø§Ù„Ø§' : 'ÙˆÛŒØ±Ø§ÛŒØ´ Ú©Ø§Ù„Ø§'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Ù†Ø§Ù… Ú©Ø§Ù„Ø§'), autofocus: true),
             const SizedBox(height: 8),
-            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'ØªØ¹Ø¯Ø§Ø¯')),
             const SizedBox(height: 8),
-            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Ù‚ÛŒÙ…Øª')),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('افزودن')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? 'Ø§ÙØ²ÙˆØ¯Ù†' : 'Ø°Ø®ÛŒØ±Ù‡')),
         ],
       ),
     );
     if (added != true || nameCtrl.text.trim().isEmpty) return;
+    final entry = ReceiptItemEntry(
+      name: nameCtrl.text.trim(),
+      quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+      price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+    );
     setState(() {
-      items.add(ReceiptItemEntry(
-        name: nameCtrl.text.trim(),
-        quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
-        price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
-      ));
+      if (editIndex != null) {
+        items[editIndex] = entry;
+      } else {
+        items.add(entry);
+      }
       _dirty = true;
     });
   }
@@ -3263,14 +3505,14 @@ class _TransactionEditorState extends State<TransactionEditor> {
       children: [
         DropdownButtonFormField<RecurrenceFrequency>(
           initialValue: recurrence,
-          decoration: const InputDecoration(labelText: 'نوع تکرار', border: OutlineInputBorder()),
+          decoration: const InputDecoration(labelText: 'Ù†ÙˆØ¹ ØªÚ©Ø±Ø§Ø±', border: OutlineInputBorder()),
           items: const [
-            DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
-            DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی (روز مشخصی از هفته)')),
-            DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه (روز مشخصی از ماه)')),
-            DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text('فصلی (هر سه ماه)')),
-            DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('سالانه (در همین تاریخ هر سال)')),
-            DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
+            DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('Ø¨Ø¯ÙˆÙ† ØªÚ©Ø±Ø§Ø±')),
+            DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('Ù‡ÙØªÚ¯ÛŒ (Ø±ÙˆØ² Ù…Ø´Ø®ØµÛŒ Ø§Ø² Ù‡ÙØªÙ‡)')),
+            DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('Ù…Ø§Ù‡Ø§Ù†Ù‡ (Ø±ÙˆØ² Ù…Ø´Ø®ØµÛŒ Ø§Ø² Ù…Ø§Ù‡)')),
+            DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text('ÙØµÙ„ÛŒ (Ù‡Ø± Ø³Ù‡ Ù…Ø§Ù‡)')),
+            DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('Ø³Ø§Ù„Ø§Ù†Ù‡ (Ø¯Ø± Ù‡Ù…ÛŒÙ† ØªØ§Ø±ÛŒØ® Ù‡Ø± Ø³Ø§Ù„)')),
+            DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('Ø¨Ø§Ø²Ù‡â€ŒÛŒ Ø¯Ù„Ø®ÙˆØ§Ù‡ (Ù‡Ø± N Ø±ÙˆØ²)')),
           ],
           onChanged: (v) => setState(() {
             recurrence = v ?? RecurrenceFrequency.none;
@@ -3283,8 +3525,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
             controller: dayCtrl,
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
-              labelText: 'روز سررسید در ماه (۱ تا ۳۱) *',
-              helperText: 'برای ماه‌های کوتاه‌تر، به‌صورت خودکار آخرین روز همان ماه در نظر گرفته می‌شود.',
+              labelText: 'Ø±ÙˆØ² Ø³Ø±Ø±Ø³ÛŒØ¯ Ø¯Ø± Ù…Ø§Ù‡ (Û± ØªØ§ Û³Û±) *',
+              helperText: 'Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù‡â€ŒÙ‡Ø§ÛŒ Ú©ÙˆØªØ§Ù‡â€ŒØªØ±ØŒ Ø¨Ù‡â€ŒØµÙˆØ±Øª Ø®ÙˆØ¯Ú©Ø§Ø± Ø¢Ø®Ø±ÛŒÙ† Ø±ÙˆØ² Ù‡Ù…Ø§Ù† Ù…Ø§Ù‡ Ø¯Ø± Ù†Ø¸Ø± Ú¯Ø±ÙØªÙ‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.',
               border: OutlineInputBorder(),
             ),
           ),
@@ -3293,7 +3535,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
             initialValue: weekday,
-            decoration: const InputDecoration(labelText: 'روز هفته', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ø±ÙˆØ² Ù‡ÙØªÙ‡', border: OutlineInputBorder()),
             items: List.generate(
               7,
               (i) => DropdownMenuItem(value: i + 1, child: Text(_weekdayNames[i])),
@@ -3309,18 +3551,18 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: intervalCtrl,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'هر چند روز یک‌بار؟', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ù‡Ø± Ú†Ù†Ø¯ Ø±ÙˆØ² ÛŒÚ©â€ŒØ¨Ø§Ø±ØŸ', border: OutlineInputBorder()),
           ),
         ],
         if (recurrence != RecurrenceFrequency.none) ...[
           const SizedBox(height: 12),
-          Text('پایان تکرار', style: Theme.of(context).textTheme.bodyMedium),
+          Text('Ù¾Ø§ÛŒØ§Ù† ØªÚ©Ø±Ø§Ø±', style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 6),
           SegmentedButton<String>(
             segments: const [
-              ButtonSegment(value: 'unlimited', label: Text('نامحدود')),
-              ButtonSegment(value: 'count', label: Text('تعداد قسط')),
-              ButtonSegment(value: 'date', label: Text('تا تاریخ')),
+              ButtonSegment(value: 'unlimited', label: Text('Ù†Ø§Ù…Ø­Ø¯ÙˆØ¯')),
+              ButtonSegment(value: 'count', label: Text('ØªØ¹Ø¯Ø§Ø¯ Ù‚Ø³Ø·')),
+              ButtonSegment(value: 'date', label: Text('ØªØ§ ØªØ§Ø±ÛŒØ®')),
             ],
             selected: {endMode},
             onSelectionChanged: (s) => setState(() {
@@ -3333,7 +3575,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-              title: Text(endDate == null ? 'انتخاب تاریخ آخرین پرداخت' : 'تا: ${ltr(DateFormat('dd.MM.yyyy').format(endDate!))}'),
+              title: Text(endDate == null ? 'Ø§Ù†ØªØ®Ø§Ø¨ ØªØ§Ø±ÛŒØ® Ø¢Ø®Ø±ÛŒÙ† Ù¾Ø±Ø¯Ø§Ø®Øª' : 'ØªØ§: ${ltr(DateFormat('dd.MM.yyyy').format(endDate!))}'),
               trailing: const Icon(Icons.event),
               onTap: () async {
                 final d = await showDatePicker(
@@ -3356,58 +3598,75 @@ class _TransactionEditorState extends State<TransactionEditor> {
             TextField(
               controller: installmentsCtrl,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'تعداد کل اقساط', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ø§Ù‚Ø³Ø§Ø·', border: OutlineInputBorder()),
             ),
           ],
           if (preview != null) ...[
             const SizedBox(height: 8),
             Text(
-              'سررسید بعدی: ${ltr(DateFormat('dd.MM.yyyy').format(preview))}',
+              'Ø³Ø±Ø±Ø³ÛŒØ¯ Ø¨Ø¹Ø¯ÛŒ: ${ltr(DateFormat('dd.MM.yyyy').format(preview))}',
               style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.w600),
             ),
           ],
-          if (endMode != 'unlimited') ...[
-            const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('اعلان اقساط'),
-              subtitle: const Text('نمایش اعلان یک روز قبل از دو قسط آخر'),
-              value: notifyEnabled,
-              onChanged: (v) async {
-                if (v) await NotificationService.instance.requestPermission();
-                setState(() {
-                  notifyEnabled = v;
-                  _dirty = true;
-                });
-              },
-            ),
-            if (notifyEnabled) ...[
-              TextField(
-                controller: notifyMessageCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'پیام یادآوری (اختیاری)',
-                  hintText: 'مثلاً: یادت نره اشتراک رو کنسل کنی',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Ø§Ø¹Ù„Ø§Ù† Ø§Ù‚Ø³Ø§Ø·'),
+            value: notifyEnabled,
+            onChanged: (v) async {
+              if (v) await NotificationService.instance.requestPermission();
+              setState(() {
+                notifyEnabled = v;
+                _dirty = true;
+              });
+            },
+          ),
+          if (notifyEnabled) ...[
+            if (endMode != 'unlimited')
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
-                title: const Text('یادآوری چند روز قبل از سررسید هر قسط هم ارسال شود'),
-                value: notifyEachEnabled,
+                title: const Text('ÛŒØ§Ø¯Ø¢ÙˆØ±ÛŒ Ø±ÙˆØ² Ù‚Ø¨Ù„ Ø§Ø² Ø¯Ùˆ Ù‚Ø³Ø· Ø¢Ø®Ø±'),
+                value: notifyLastTwoEnabled,
                 onChanged: (v) => setState(() {
-                  notifyEachEnabled = v ?? false;
+                  notifyLastTwoEnabled = v ?? false;
                   _dirty = true;
                 }),
               ),
-              if (notifyEachEnabled)
-                TextField(
-                  controller: notifyDaysCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'چند روز قبل از هر قسط؟', border: OutlineInputBorder()),
-                ),
-            ],
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: Row(
+                children: [
+                  const Text('ÛŒØ§Ø¯Ø¢ÙˆØ±ÛŒ '),
+                  SizedBox(
+                    width: 48,
+                    child: TextField(
+                      controller: notifyDaysCtrl,
+                      enabled: notifyEachEnabled,
+                      keyboardType: TextInputType.number,
+                      textAlign: TextAlign.center,
+                      decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4)),
+                    ),
+                  ),
+                  const Text(' Ø±ÙˆØ² Ù‚Ø¨Ù„ Ø§Ø² Ù‡Ø± Ù‚Ø³Ø·'),
+                ],
+              ),
+              value: notifyEachEnabled,
+              onChanged: (v) => setState(() {
+                notifyEachEnabled = v ?? false;
+                _dirty = true;
+              }),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: notifyMessageCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Ù¾ÛŒØ§Ù… ÛŒØ§Ø¯Ø¢ÙˆØ±ÛŒ (Ø§Ø®ØªÛŒØ§Ø±ÛŒ)',
+                hintText: 'Ù…Ø«Ù„Ø§Ù‹: ÛŒØ§Ø¯Øª Ù†Ø±Ù‡ Ø§Ø´ØªØ±Ø§Ú© Ø±Ùˆ Ú©Ù†Ø³Ù„ Ú©Ù†ÛŒ',
+                border: OutlineInputBorder(),
+              ),
+            ),
           ],
         ],
       ],
@@ -3430,21 +3689,21 @@ class _TransactionEditorState extends State<TransactionEditor> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
+        title: Text(widget.existing == null ? 'ØªØ±Ø§Ú©Ù†Ø´ Ø¬Ø¯ÛŒØ¯' : 'ÙˆÛŒØ±Ø§ÛŒØ´ ØªØ±Ø§Ú©Ù†Ø´'),
         actions: [
           if (widget.existing != null)
             IconButton(
               icon: const Icon(Icons.delete_outline),
-              tooltip: 'حذف تراکنش',
+              tooltip: 'Ø­Ø°Ù ØªØ±Ø§Ú©Ù†Ø´',
               onPressed: () async {
                 final confirm = await showDialog<bool>(
                   context: context,
                   builder: (ctx) => AlertDialog(
-                    title: const Text('حذف تراکنش'),
-                    content: const Text('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.'),
+                    title: const Text('Ø­Ø°Ù ØªØ±Ø§Ú©Ù†Ø´'),
+                    content: const Text('Ø§ÛŒÙ† ØªØ±Ø§Ú©Ù†Ø´ Ø­Ø°Ù Ø´ÙˆØ¯ØŸ Ø§ÛŒÙ† Ú©Ø§Ø± Ù‚Ø§Ø¨Ù„ Ø¨Ø§Ø²Ú¯Ø´Øª Ù†ÛŒØ³Øª.'),
                     actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø­Ø°Ù')),
                     ],
                   ),
                 );
@@ -3461,8 +3720,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
         children: [
           SegmentedButton<TxType>(
             segments: const [
-              ButtonSegment(value: TxType.expense, label: Text('هزینه'), icon: Icon(Icons.arrow_upward)),
-              ButtonSegment(value: TxType.income, label: Text('درآمد'), icon: Icon(Icons.arrow_downward)),
+              ButtonSegment(value: TxType.expense, label: Text('Ù‡Ø²ÛŒÙ†Ù‡'), icon: Icon(Icons.arrow_upward)),
+              ButtonSegment(value: TxType.income, label: Text('Ø¯Ø±Ø¢Ù…Ø¯'), icon: Icon(Icons.arrow_downward)),
             ],
             selected: {type},
             onSelectionChanged: (s) => setState(() {
@@ -3475,12 +3734,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'مبلغ', hintText: 'مثلاً 12.50 یا 12,50', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ù…Ø¨Ù„Øº', hintText: 'Ù…Ø«Ù„Ø§Ù‹ 12.50 ÛŒØ§ 12,50', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
-            decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+            decoration: const InputDecoration(labelText: 'Ø­Ø³Ø§Ø¨', border: OutlineInputBorder()),
             items: widget.accounts
                 .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})')))
                 .toList(),
@@ -3492,14 +3751,14 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 16),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? 'انتخاب دسته‌بندی'),
+            title: Text(selectedCategory?.name ?? 'Ø§Ù†ØªØ®Ø§Ø¨ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'),
             trailing: const Icon(Icons.chevron_left),
             onTap: _pickCategory,
           ),
           const SizedBox(height: 16),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
+            title: Text('ØªØ§Ø±ÛŒØ®: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showDatePicker(
@@ -3522,19 +3781,19 @@ class _TransactionEditorState extends State<TransactionEditor> {
             controller: noteCtrl,
             maxLines: null,
             minLines: 1,
-            decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder(), alignLabelWithHint: true),
+            decoration: const InputDecoration(labelText: 'ØªÙˆØ¶ÛŒØ­Ø§Øª (Ø§Ø®ØªÛŒØ§Ø±ÛŒ)', border: OutlineInputBorder(), alignLabelWithHint: true),
           ),
           if (type == TxType.expense) ...[
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('اقلام خرید', style: Theme.of(context).textTheme.titleMedium),
-                TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
+                Text('Ø§Ù‚Ù„Ø§Ù… Ø®Ø±ÛŒØ¯', style: Theme.of(context).textTheme.titleMedium),
+                TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('Ø§ÙØ²ÙˆØ¯Ù†')),
               ],
             ),
             if (items.isEmpty)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('کالایی ثبت نشده.', style: TextStyle(color: Colors.grey))),
+              const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('Ú©Ø§Ù„Ø§ÛŒÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡.', style: TextStyle(color: Colors.grey))),
             ...items.asMap().entries.map((e) {
               final i = e.key;
               final it = e.value;
@@ -3543,9 +3802,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   dense: true,
                   title: Text(it.name),
                   subtitle: Text(
-                    '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
-                    '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                    '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                    '${it.quantity != null ? 'ØªØ¹Ø¯Ø§Ø¯: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                    '${it.quantity != null && it.price != null ? ' â€¢ ' : ''}'
+                    '${it.price != null ? ltr('â‚¬${it.price!.toStringAsFixed(2)}') : ''}',
                   ),
                   trailing: IconButton(
                     icon: const Icon(Icons.delete_outline, size: 20),
@@ -3554,27 +3813,28 @@ class _TransactionEditorState extends State<TransactionEditor> {
                       _dirty = true;
                     }),
                   ),
+                  onTap: () => _addItemRow(editIndex: i),
                 ),
               );
             }),
           ],
           if (type == TxType.income) ...[
             const SizedBox(height: 16),
-            Text('جزئیات فیش حقوقی (اختیاری)', style: Theme.of(context).textTheme.titleMedium),
+            Text('Ø¬Ø²Ø¦ÛŒØ§Øª ÙÛŒØ´ Ø­Ù‚ÙˆÙ‚ÛŒ (Ø§Ø®ØªÛŒØ§Ø±ÛŒ)', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             TextField(
               controller: payslipArbeitgeberCtrl,
-              decoration: const InputDecoration(labelText: 'کارفرما (Arbeitgeber)', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'Ú©Ø§Ø±ÙØ±Ù…Ø§ (Arbeitgeber)', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: payslipMonatCtrl,
-              decoration: const InputDecoration(labelText: 'ماه تسویه (Abrechnungsmonat)', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'Ù…Ø§Ù‡ ØªØ³ÙˆÛŒÙ‡ (Abrechnungsmonat)', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: payslipSteuerklasseCtrl,
-              decoration: const InputDecoration(labelText: 'کلاس مالیاتی (Steuerklasse)', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'Ú©Ù„Ø§Ø³ Ù…Ø§Ù„ÛŒØ§ØªÛŒ (Steuerklasse)', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             ..._payslipLabels.keys.map((k) => Padding(
@@ -3591,8 +3851,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('ذخیره به‌صورت پیش‌نویس'),
-            subtitle: const Text('پیش‌نویس‌ها بعداً قابل بررسی و تأیید نهایی هستند.'),
+            title: const Text('Ø°Ø®ÛŒØ±Ù‡ Ø¨Ù‡â€ŒØµÙˆØ±Øª Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³'),
+            subtitle: const Text('Ù¾ÛŒØ´â€ŒÙ†ÙˆÛŒØ³â€ŒÙ‡Ø§ Ø¨Ø¹Ø¯Ø§Ù‹ Ù‚Ø§Ø¨Ù„ Ø¨Ø±Ø±Ø³ÛŒ Ùˆ ØªØ£ÛŒÛŒØ¯ Ù†Ù‡Ø§ÛŒÛŒ Ù‡Ø³ØªÙ†Ø¯.'),
             value: draft,
             onChanged: (v) => setState(() {
               draft = v;
@@ -3600,7 +3860,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             }),
           ),
           const SizedBox(height: 12),
-          FilledButton(onPressed: _save, child: const Text('ذخیره')),
+          FilledButton(onPressed: _save, child: const Text('Ø°Ø®ÛŒØ±Ù‡')),
         ],
       ),
     ),
@@ -3635,15 +3895,23 @@ class _CategoryPickerState extends State<CategoryPicker> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید در «$parentName»'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
+        title: Text(parentId == null ? 'Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø¬Ø¯ÛŒØ¯' : 'Ø²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡â€ŒÛŒ Ø¬Ø¯ÛŒØ¯ Ø¯Ø± Â«$parentNameÂ»'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'Ù†Ø§Ù… Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'), autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('افزودن')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Ø§ÙØ²ÙˆØ¯Ù†')),
         ],
       ),
     );
     if (name == null || name.isEmpty) return;
+    final duplicate = categories.any(
+        (c) => c.parentId == parentId && c.type == widget.type && c.name.trim().toLowerCase() == name.trim().toLowerCase());
+    if (duplicate) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø§ÛŒÙ† Ù†Ø§Ù… Ù‚Ø¨Ù„Ø§Ù‹ Ø¯Ø± Ù‡Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø´Ø¯Ù‡ Ø§Ø³Øª.')));
+      }
+      return;
+    }
     final icon = await suggestIconForCategory(name, widget.type);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
@@ -3669,26 +3937,26 @@ class _CategoryPickerState extends State<CategoryPicker> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: Text(
-                stack.isEmpty ? 'دسته‌بندی‌ها' : stack.last.name,
+                stack.isEmpty ? 'Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒâ€ŒÙ‡Ø§' : stack.last.name,
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
             if (stack.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.arrow_forward),
-                title: const Text('بازگشت'),
+                title: const Text('Ø¨Ø§Ø²Ú¯Ø´Øª'),
                 onTap: () => setState(() => stack.removeLast()),
               ),
             if (stack.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.check_circle_outline),
-                title: Text('انتخاب «${stack.last.name}»'),
+                title: Text('Ø§Ù†ØªØ®Ø§Ø¨ Â«${stack.last.name}Â»'),
                 onTap: () => Navigator.pop(context, stack.last),
               ),
             if (items.isEmpty && stack.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('هنوز دسته‌بندی‌ای وجود ندارد. با دکمه‌ی زیر یکی اضافه کنید.'),
+                child: Text('Ù‡Ù†ÙˆØ² Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒâ€ŒØ§ÛŒ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯. Ø¨Ø§ Ø¯Ú©Ù…Ù‡â€ŒÛŒ Ø²ÛŒØ± ÛŒÚ©ÛŒ Ø§Ø¶Ø§ÙÙ‡ Ú©Ù†ÛŒØ¯.'),
               ),
             Flexible(
               child: ListView(
@@ -3703,7 +3971,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
                       children: [
                         IconButton(
                           icon: const Icon(Icons.add, size: 20),
-                          tooltip: 'افزودن زیرمجموعه در «${c.name}»',
+                          tooltip: 'Ø§ÙØ²ÙˆØ¯Ù† Ø²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡ Ø¯Ø± Â«${c.name}Â»',
                           onPressed: () => _addCategory(underParent: c),
                         ),
                         if (hasChildren) const Icon(Icons.chevron_left),
@@ -3723,7 +3991,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
             const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.add),
-              title: Text(stack.isEmpty ? 'افزودن دسته‌بندی جدید' : 'افزودن زیرمجموعه‌ی جدید'),
+              title: Text(stack.isEmpty ? 'Ø§ÙØ²ÙˆØ¯Ù† Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø¬Ø¯ÛŒØ¯' : 'Ø§ÙØ²ÙˆØ¯Ù† Ø²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡â€ŒÛŒ Ø¬Ø¯ÛŒØ¯'),
               onTap: _addCategory,
             ),
           ],
@@ -3763,15 +4031,23 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
+        title: Text(parentId == null ? 'Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø¬Ø¯ÛŒØ¯' : 'Ø²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡â€ŒÛŒ Ø¬Ø¯ÛŒØ¯'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'Ù†Ø§Ù… Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'), autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('افزودن')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Ø§ÙØ²ÙˆØ¯Ù†')),
         ],
       ),
     );
     if (name == null || name.isEmpty) return;
+    final duplicate = categories
+        .any((c) => c.parentId == parentId && c.type == selectedType && c.name.trim().toLowerCase() == name.trim().toLowerCase());
+    if (duplicate) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø§ÛŒÙ† Ù†Ø§Ù… Ù‚Ø¨Ù„Ø§Ù‹ Ø¯Ø± Ù‡Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø´Ø¯Ù‡ Ø§Ø³Øª.')));
+      }
+      return;
+    }
     final icon = await suggestIconForCategory(name, selectedType);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
@@ -3789,17 +4065,33 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('تغییر نام دسته‌بندی'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام جدید'), autofocus: true),
+        title: const Text('ØªØºÛŒÛŒØ± Ù†Ø§Ù… Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'Ù†Ø§Ù… Ø¬Ø¯ÛŒØ¯'), autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('ذخیره')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Ø°Ø®ÛŒØ±Ù‡')),
         ],
       ),
     );
     if (name == null || name.isEmpty) return;
+    final duplicate = categories.any(
+        (x) => x.id != c.id && x.parentId == c.parentId && x.type == c.type && x.name.trim().toLowerCase() == name.trim().toLowerCase());
+    if (duplicate) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ø§ÛŒÙ† Ù†Ø§Ù… Ù‚Ø¨Ù„Ø§Ù‹ Ø¯Ø± Ù‡Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø´Ø¯Ù‡ Ø§Ø³Øª.')));
+      }
+      return;
+    }
     setState(() {
       categories = categories.map((x) => x.id == c.id ? x.copyWith(name: name) : x).toList();
+    });
+    await Store.saveCategories(categories);
+  }
+
+  Future<void> _regenerateIcon(Category c) async {
+    final icon = await suggestIconForCategory(c.name, c.type);
+    setState(() {
+      categories = categories.map((x) => x.id == c.id ? x.copyWith(iconCodePoint: icon.codePoint) : x).toList();
     });
     await Store.saveCategories(categories);
   }
@@ -3809,15 +4101,15 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف دسته‌بندی'),
+        title: const Text('Ø­Ø°Ù Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ'),
         content: Text(
-          '«${c.name}» حذف شود؟'
-          '${hasChildren ? '\nزیرمجموعه‌های آن یک سطح بالاتر منتقل می‌شوند.' : ''}'
-          '\nتراکنش‌هایی که از این دسته‌بندی استفاده کرده‌اند، به دسته‌بندی بالاتر منتقل می‌شوند و نام «${c.name}» به توضیحات آن‌ها اضافه می‌شود.',
+          'Â«${c.name}Â» Ø­Ø°Ù Ø´ÙˆØ¯ØŸ'
+          '${hasChildren ? '\nØ²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡â€ŒÙ‡Ø§ÛŒ Ø¢Ù† ÛŒÚ© Ø³Ø·Ø­ Ø¨Ø§Ù„Ø§ØªØ± Ù…Ù†ØªÙ‚Ù„ Ù…ÛŒâ€ŒØ´ÙˆÙ†Ø¯.' : ''}'
+          '\nØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒÛŒ Ú©Ù‡ Ø§Ø² Ø§ÛŒÙ† Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ú©Ø±Ø¯Ù‡â€ŒØ§Ù†Ø¯ØŒ Ø¨Ù‡ Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø¨Ø§Ù„Ø§ØªØ± Ù…Ù†ØªÙ‚Ù„ Ù…ÛŒâ€ŒØ´ÙˆÙ†Ø¯ Ùˆ Ù†Ø§Ù… Â«${c.name}Â» Ø¨Ù‡ ØªÙˆØ¶ÛŒØ­Ø§Øª Ø¢Ù†â€ŒÙ‡Ø§ Ø§Ø¶Ø§ÙÙ‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø­Ø°Ù')),
         ],
       ),
     );
@@ -3833,7 +4125,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final newTx = tx.map((t) {
       if (t.categoryId == c.id) {
         txChanged = true;
-        final newNote = t.note.isEmpty ? 'دسته‌بندی قبلی: ${c.name}' : '${t.note} (دسته‌بندی قبلی: ${c.name})';
+        final newNote = t.note.isEmpty ? 'Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ù‚Ø¨Ù„ÛŒ: ${c.name}' : '${t.note} (Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ù‚Ø¨Ù„ÛŒ: ${c.name})';
         return t.copyWith(categoryId: c.parentId ?? '_uncategorized_', note: newNote);
       }
       return t;
@@ -3870,17 +4162,22 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
               if (hasChildren) Icon(isCollapsed ? Icons.chevron_left : Icons.expand_more, color: Colors.grey.shade500),
               IconButton(
                 icon: const Icon(Icons.add, size: 20),
-                tooltip: 'افزودن زیرمجموعه',
+                tooltip: 'Ø§ÙØ²ÙˆØ¯Ù† Ø²ÛŒØ±Ù…Ø¬Ù…ÙˆØ¹Ù‡',
                 onPressed: () => _addCategory(parentId: c.id),
               ),
               IconButton(
+                icon: const Icon(Icons.auto_awesome, size: 20),
+                tooltip: 'Ø§ÛŒØ¬Ø§Ø¯ ØªØµÙˆÛŒØ± Ø¨Ø§ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ',
+                onPressed: () => _regenerateIcon(c),
+              ),
+              IconButton(
                 icon: const Icon(Icons.edit_outlined, size: 20),
-                tooltip: 'تغییر نام',
+                tooltip: 'ØªØºÛŒÛŒØ± Ù†Ø§Ù…',
                 onPressed: () => _rename(c),
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline, size: 20),
-                tooltip: 'حذف',
+                tooltip: 'Ø­Ø°Ù',
                 onPressed: () => _delete(c),
               ),
             ],
@@ -3897,7 +4194,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final tree = _buildTree(null, 0);
     return Scaffold(
-      appBar: AppBar(title: const Text('مدیریت دسته‌بندی‌ها')),
+      appBar: AppBar(title: const Text('Ù…Ø¯ÛŒØ±ÛŒØª Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒâ€ŒÙ‡Ø§')),
       drawer: const AppDrawer(currentIndex: 1),
       body: Column(
         children: [
@@ -3905,8 +4202,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
             padding: const EdgeInsets.all(16),
             child: SegmentedButton<TxType>(
               segments: const [
-                ButtonSegment(value: TxType.expense, label: Text('هزینه')),
-                ButtonSegment(value: TxType.income, label: Text('درآمد')),
+                ButtonSegment(value: TxType.expense, label: Text('Ù‡Ø²ÛŒÙ†Ù‡')),
+                ButtonSegment(value: TxType.income, label: Text('Ø¯Ø±Ø¢Ù…Ø¯')),
               ],
               selected: {selectedType},
               onSelectionChanged: (s) => setState(() => selectedType = s.first),
@@ -3914,7 +4211,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
           ),
           Expanded(
             child: tree.isEmpty
-                ? const Center(child: Text('دسته‌بندی‌ای وجود ندارد.'))
+                ? const Center(child: Text('Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒâ€ŒØ§ÛŒ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯.'))
                 : ListView(padding: const EdgeInsets.only(bottom: 88), children: tree),
           ),
         ],
@@ -3922,7 +4219,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addCategory(),
         icon: const Icon(Icons.add),
-        label: const Text('دسته‌بندی جدید'),
+        label: const Text('Ø¯Ø³ØªÙ‡â€ŒØ¨Ù†Ø¯ÛŒ Ø¬Ø¯ÛŒØ¯'),
       ),
     );
   }
@@ -3959,29 +4256,29 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
         return AlertDialog(
-          title: Text(existing == null ? 'حساب جدید' : 'ویرایش حساب'),
+          title: Text(existing == null ? 'Ø­Ø³Ø§Ø¨ Ø¬Ø¯ÛŒØ¯' : 'ÙˆÛŒØ±Ø§ÛŒØ´ Ø­Ø³Ø§Ø¨'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام حساب'), autofocus: true),
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Ù†Ø§Ù… Ø­Ø³Ø§Ø¨'), autofocus: true),
               const SizedBox(height: 12),
               DropdownButtonFormField<AccountType>(
                 initialValue: type,
-                decoration: const InputDecoration(labelText: 'نوع حساب'),
+                decoration: const InputDecoration(labelText: 'Ù†ÙˆØ¹ Ø­Ø³Ø§Ø¨'),
                 items: AccountType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.label))).toList(),
                 onChanged: (v) => setLocal(() => type = v ?? type),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: currency,
-                decoration: const InputDecoration(labelText: 'واحد پول'),
+                decoration: const InputDecoration(labelText: 'ÙˆØ§Ø­Ø¯ Ù¾ÙˆÙ„'),
                 items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
                 onChanged: (v) => setLocal(() => currency = v ?? currency),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
             FilledButton(
               onPressed: () {
                 if (nameCtrl.text.trim().isEmpty) return;
@@ -3993,7 +4290,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                 );
                 Navigator.pop(ctx, acc);
               },
-              child: const Text('ذخیره'),
+              child: const Text('Ø°Ø®ÛŒØ±Ù‡'),
             ),
           ],
         );
@@ -4019,9 +4316,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('امکان حذف نیست'),
-          content: Text('حساب «${a.name}» در تراکنش‌های ثبت‌شده استفاده شده است. ابتدا تراکنش‌های آن را حذف یا به حساب دیگری منتقل کنید.'),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('باشه'))],
+          title: const Text('Ø§Ù…Ú©Ø§Ù† Ø­Ø°Ù Ù†ÛŒØ³Øª'),
+          content: Text('Ø­Ø³Ø§Ø¨ Â«${a.name}Â» Ø¯Ø± ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ Ø«Ø¨Øªâ€ŒØ´Ø¯Ù‡ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø´Ø¯Ù‡ Ø§Ø³Øª. Ø§Ø¨ØªØ¯Ø§ ØªØ±Ø§Ú©Ù†Ø´â€ŒÙ‡Ø§ÛŒ Ø¢Ù† Ø±Ø§ Ø­Ø°Ù ÛŒØ§ Ø¨Ù‡ Ø­Ø³Ø§Ø¨ Ø¯ÛŒÚ¯Ø±ÛŒ Ù…Ù†ØªÙ‚Ù„ Ú©Ù†ÛŒØ¯.'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ø¨Ø§Ø´Ù‡'))],
         ),
       );
       return;
@@ -4030,9 +4327,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('امکان حذف نیست'),
-          content: const Text('باید حداقل یک حساب در برنامه باقی بماند.'),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('باشه'))],
+          title: const Text('Ø§Ù…Ú©Ø§Ù† Ø­Ø°Ù Ù†ÛŒØ³Øª'),
+          content: const Text('Ø¨Ø§ÛŒØ¯ Ø­Ø¯Ø§Ù‚Ù„ ÛŒÚ© Ø­Ø³Ø§Ø¨ Ø¯Ø± Ø¨Ø±Ù†Ø§Ù…Ù‡ Ø¨Ø§Ù‚ÛŒ Ø¨Ù…Ø§Ù†Ø¯.'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Ø¨Ø§Ø´Ù‡'))],
         ),
       );
       return;
@@ -4040,11 +4337,11 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف حساب'),
-        content: Text('حساب «${a.name}» حذف شود؟'),
+        title: const Text('Ø­Ø°Ù Ø­Ø³Ø§Ø¨'),
+        content: Text('Ø­Ø³Ø§Ø¨ Â«${a.name}Â» Ø­Ø°Ù Ø´ÙˆØ¯ØŸ'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ø§Ù†ØµØ±Ø§Ù')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ø­Ø°Ù')),
         ],
       ),
     );
@@ -4057,7 +4354,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('حساب‌ها')),
+      appBar: AppBar(title: const Text('Ø­Ø³Ø§Ø¨â€ŒÙ‡Ø§')),
       drawer: const AppDrawer(currentIndex: 2),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -4066,7 +4363,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.account_balance_wallet_outlined),
                     title: Text(a.name),
-                    subtitle: Text('${a.type.label} • ${a.currency}'),
+                    subtitle: Text('${a.type.label} â€¢ ${a.currency}'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -4081,7 +4378,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _editAccount(),
         icon: const Icon(Icons.add),
-        label: const Text('حساب جدید'),
+        label: const Text('Ø­Ø³Ø§Ø¨ Ø¬Ø¯ÛŒØ¯'),
       ),
     );
   }
