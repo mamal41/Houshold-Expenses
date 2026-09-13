@@ -17,6 +17,8 @@ dependencies:
   pdfx: ^2.6.0
   http: ^1.2.2
   path_provider: ^2.1.4
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
 
 dev_dependencies:
   flutter_test:
