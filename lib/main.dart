@@ -1475,8 +1475,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     } catch (e) {
       geminiFailed = true;
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: const Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
           duration: const Duration(seconds: 6),
         ));
       }
@@ -1791,8 +1791,8 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     } catch (e) {
       geminiFailed = true;
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: const Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
           duration: const Duration(seconds: 6),
         ));
       }
