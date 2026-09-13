@@ -100,6 +100,36 @@ jobs:
           }
           GROOVY
           fi
+      - name: Enable core library desugaring (required by flutter_local_notifications)
+        run: |
+          if [ -f android/app/build.gradle.kts ]; then
+            cat >> android/app/build.gradle.kts <<'KTS'
+
+          android {
+              compileOptions {
+                  isCoreLibraryDesugaringEnabled = true
+              }
+          }
+
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+          }
+          KTS
+          fi
+          if [ -f android/app/build.gradle ]; then
+            cat >> android/app/build.gradle <<'GROOVY'
+
+          android {
+              compileOptions {
+                  coreLibraryDesugaringEnabled true
+              }
+          }
+
+          dependencies {
+              coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+          }
+          GROOVY
+          fi
       - name: Add ProGuard rules for ML Kit
         run: |
           mkdir -p android/app
