@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show SystemNavigator;
+import 'package:flutter/services.dart' show SystemNavigator, SystemChrome, SystemUiMode;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -12,7 +12,14 @@ import 'package:pdfx/pdfx.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-void main() => runApp(const MoneyApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Full-screen: hide the status bar and Android's gesture/nav bar; either
+  // can be revealed temporarily by swiping from that edge, then auto-hides
+  // again, so on-screen content never sits underneath the system bars.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  runApp(const MoneyApp());
+}
 
 // Isolates an LTR chunk (numbers, dates, currency) inside RTL Persian text
 // so it always renders left-to-right in the right place, instead of the
@@ -147,6 +154,20 @@ class Account {
       );
 }
 
+class ReceiptItemEntry {
+  final String name;
+  final double? quantity;
+  final double? price;
+  const ReceiptItemEntry({required this.name, this.quantity, this.price});
+
+  Map<String, dynamic> toJson() => {'name': name, 'quantity': quantity, 'price': price};
+  factory ReceiptItemEntry.fromJson(Map<String, dynamic> j) => ReceiptItemEntry(
+        name: j['name'] ?? '',
+        quantity: (j['quantity'] as num?)?.toDouble(),
+        price: (j['price'] as num?)?.toDouble(),
+      );
+}
+
 class Transaction {
   final String id;
   final TxType type;
@@ -162,6 +183,7 @@ class Transaction {
   final int? installments; // total number of occurrences (optional)
   final DateTime? recurrenceEndDate; // last payment date (optional, alternative to installments)
   final bool draft; // true = saved from a scan but not yet confirmed by the user
+  final List<ReceiptItemEntry> items; // structured line items from a scanned receipt (optional)
 
   const Transaction({
     required this.id,
@@ -178,6 +200,7 @@ class Transaction {
     this.installments,
     this.recurrenceEndDate,
     this.draft = false,
+    this.items = const [],
   });
 
   bool get isRecurring => recurrence != RecurrenceFrequency.none;
@@ -196,6 +219,7 @@ class Transaction {
     int? installments,
     DateTime? recurrenceEndDate,
     bool? draft,
+    List<ReceiptItemEntry>? items,
     bool clearRecurrenceDay = false,
     bool clearRecurrenceWeekday = false,
     bool clearRecurrenceIntervalDays = false,
@@ -217,6 +241,7 @@ class Transaction {
         installments: clearInstallments ? null : (installments ?? this.installments),
         recurrenceEndDate: clearRecurrenceEndDate ? null : (recurrenceEndDate ?? this.recurrenceEndDate),
         draft: draft ?? this.draft,
+        items: items ?? this.items,
       );
 
   Map<String, dynamic> toJson() => {
@@ -234,6 +259,7 @@ class Transaction {
         'installments': installments,
         'recurrenceEndDate': recurrenceEndDate?.toIso8601String(),
         'draft': draft,
+        'items': items.map((e) => e.toJson()).toList(),
       };
 
   factory Transaction.fromJson(Map<String, dynamic> j) {
@@ -261,6 +287,7 @@ class Transaction {
       installments: j['installments'],
       recurrenceEndDate: j['recurrenceEndDate'] != null ? DateTime.parse(j['recurrenceEndDate']) : null,
       draft: j['draft'] ?? false,
+      items: (j['items'] as List<dynamic>?)?.map((e) => ReceiptItemEntry.fromJson(e)).toList() ?? const [],
     );
   }
 }
@@ -637,15 +664,27 @@ class ReceiptDraft {
   String merchant;
   DateTime? date;
   double? total;
-  String itemsText;
-  ReceiptDraft({this.merchant = '', this.date, this.total, this.itemsText = ''});
+  List<ReceiptItemEntry> items;
+  String? categoryHint;
+  ReceiptDraft({this.merchant = '', this.date, this.total, this.items = const [], this.categoryHint});
 }
 
 const _totalKeywords = ['zu zahlen', 'endbetrag', 'gesamtbetrag', 'betrag', 'total', 'summe', 'gesamt', 'جمع', 'مبلغ کل'];
 
-const _knownMerchants = [
-  'Lidl', 'Aldi', 'Rewe', 'Edeka', 'Netto', 'Penny', 'Kaufland', 'dm', 'Rossmann', 'real', 'Norma', 'Globus'
-];
+const _knownMerchants = <String, String>{
+  'Lidl': 'e_food_market',
+  'Aldi': 'e_food_market',
+  'Rewe': 'e_food_market',
+  'Edeka': 'e_food_market',
+  'Netto': 'e_food_market',
+  'Penny': 'e_food_market',
+  'Kaufland': 'e_food_market',
+  'Real': 'e_food_market',
+  'Norma': 'e_food_market',
+  'Globus': 'e_food_market',
+  'dm': 'e_misc',
+  'Rossmann': 'e_misc',
+};
 
 /// Best-effort local (offline) parsing of raw OCR text from a receipt.
 /// This is a heuristic fallback; the Gemini step (when available) produces
@@ -655,9 +694,10 @@ ReceiptDraft parseReceiptText(String text) {
   final draft = ReceiptDraft();
 
   final lowerFull = text.toLowerCase();
-  for (final m in _knownMerchants) {
-    if (lowerFull.contains(m.toLowerCase())) {
-      draft.merchant = m;
+  for (final entry in _knownMerchants.entries) {
+    if (lowerFull.contains(entry.key.toLowerCase())) {
+      draft.merchant = entry.key;
+      draft.categoryHint = entry.value;
       break;
     }
   }
@@ -711,7 +751,22 @@ ReceiptDraft parseReceiptText(String text) {
     draft.total = largest;
   }
 
-  draft.itemsText = lines.skip(1).take(20).join('\n');
+  // Best-effort structured item extraction: a line that ends with a price
+  // is treated as a purchased item, with everything before the price used
+  // as the item name. Lines without a trailing price (headers, totals
+  // already consumed above, etc.) are skipped.
+  final items = <ReceiptItemEntry>[];
+  for (final line in lines.skip(1).take(25)) {
+    final matches = _amountRegex.allMatches(line).toList();
+    if (matches.isEmpty) continue;
+    final priceMatch = matches.last;
+    final price = _parseAmountToken(priceMatch.group(1)!);
+    var name = line.substring(0, priceMatch.start).trim();
+    name = name.replaceAll(RegExp(r'[\-:xX*]+$'), '').trim();
+    if (name.isEmpty || price == null) continue;
+    items.add(ReceiptItemEntry(name: name, price: price));
+  }
+  draft.items = items;
   return draft;
 }
 
@@ -753,6 +808,21 @@ Map<String, dynamic> parsePayslipText(String text) {
   if (steuerklasseMatch != null) result['steuerklasse'] = steuerklasseMatch.group(1);
 
   if (lines.isNotEmpty) result['arbeitgeber'] = lines.first;
+
+  for (final line in lines) {
+    final dm = _dateRegex.firstMatch(line);
+    if (dm == null) continue;
+    final d = int.tryParse(dm.group(1)!);
+    final m = int.tryParse(dm.group(2)!);
+    var y = int.tryParse(dm.group(3)!);
+    if (d == null || m == null || y == null) continue;
+    if (d < 1 || d > 31 || m < 1 || m > 12) continue;
+    if (y < 100) y += 2000;
+    final nowYear = DateTime.now().year;
+    if (y < nowYear - 5 || y > nowYear + 1) continue;
+    result['date'] = DateTime(y, m, d).toIso8601String();
+    break;
+  }
 
   return result;
 }
@@ -809,9 +879,15 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
 const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the attached receipt image '
     'and extract structured data. Respond ONLY with compact JSON, no markdown, no explanation, in '
     'exactly this shape: {"merchant": string or null, "date": "YYYY-MM-DD" or null, "total": number or '
-    'null, "items": [{"name": string, "price": number or null}]}. Keep merchant and item names in the '
-    "receipt's own language/script. Numbers must be plain (no currency symbols). If a field is "
-    'unreadable, use null.';
+    'null, "items": [{"name": string, "quantity": number or null, "price": number or null}], '
+    '"category": string or null}. For "items", expand any abbreviated, truncated, or SKU-coded product '
+    'names printed on the receipt into their full, clear, human-readable product name (in the same '
+    "language as the receipt) - never leave a short code or cut-off abbreviation as the name if you can "
+    'reasonably infer the full name from context and common branded products. "quantity" is the number '
+    'of units purchased (default 1 if not shown separately). For "category", give a short one- or '
+    "two-word general shopping category for this receipt (e.g. \"خوراک\", \"پوشاک\", \"دارو\") in the "
+    "receipt's language. Keep merchant name in the receipt's own language/script. Numbers must be plain "
+    '(no currency symbols). If a field is unreadable, use null.';
 
 const _payslipPrompt = 'You are an expert German payslip (Lohnabrechnung) reading assistant. Read the '
     'attached payslip image and extract structured data. Respond ONLY with compact JSON, no markdown, '
@@ -819,8 +895,10 @@ const _payslipPrompt = 'You are an expert German payslip (Lohnabrechnung) readin
     '"lohnsteuer": number or null, "solidaritaetszuschlag": number or null, "kirchensteuer": number or '
     'null, "krankenversicherung": number or null, "pflegeversicherung": number or null, '
     '"rentenversicherung": number or null, "arbeitslosenversicherung": number or null, "steuerklasse": '
-    'string or null, "arbeitgeber": string or null, "abrechnungsmonat": string or null}. Numbers must be '
-    'plain (no currency symbols). If a field is unreadable, use null.';
+    'string or null, "arbeitgeber": string or null, "abrechnungsmonat": string or null, "date": '
+    '"YYYY-MM-DD" or null}. "date" is the actual payment/value date (Auszahlungsdatum or Valuta date) '
+    'printed on the payslip - not just the month name. Numbers must be plain (no currency symbols). If '
+    'a field is unreadable, use null.';
 
 Future<Map<String, dynamic>?> geminiExtractReceipt(String apiKey, String imagePath) =>
     _geminiRequest(apiKey, imagePath, _receiptPrompt);
@@ -887,11 +965,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
     return c.isEmpty ? 'بدون‌دسته' : c.first.name;
-  }
-
-  String accountName(String id) {
-    final a = accounts.where((a) => a.id == id).toList();
-    return a.isEmpty ? 'حساب حذف‌شده' : a.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -1106,8 +1179,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       title: Text(categoryName(t.categoryId)),
                       subtitle: Text(
                         '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
-                        ' • ${accountName(t.accountId)}'
-                        '${t.note.isNotEmpty ? ' • ${t.note}' : ''}'
                         '${t.isRecurring ? ' • تکرارشونده' : ''}'
                         '${t.draft ? ' • پیش‌نویس' : ''}',
                       ),
@@ -1215,39 +1286,48 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       if (!context.mounted) return;
       if (result != null) Navigator.pop(context, result);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
     } finally {
       if (mounted) setState(() => busy = false);
     }
   }
 
-  Widget _sourceRow(bool isPayslip) => Row(
+  Widget _sourceRow(bool isPayslip) {
+    final style = OutlinedButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
+      textStyle: const TextStyle(fontSize: 13),
+    );
+    return Row(
         children: [
           Expanded(
             child: OutlinedButton.icon(
+              style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.camera),
-              icon: const Icon(Icons.camera_alt),
-              label: const Text('دوربین'),
+              icon: const Icon(Icons.camera_alt, size: 18),
+              label: const Text('دوربین', softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: OutlinedButton.icon(
+              style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.gallery),
-              icon: const Icon(Icons.photo_library),
-              label: const Text('گالری'),
+              icon: const Icon(Icons.photo_library, size: 18),
+              label: const Text('گالری', softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: OutlinedButton.icon(
+              style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.pdf),
-              icon: const Icon(Icons.picture_as_pdf),
-              label: const Text('PDF'),
+              icon: const Icon(Icons.picture_as_pdf, size: 18),
+              label: const Text('PDF', softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
         ],
       );
+  }
 
   Widget _section(String title, String subtitle, IconData icon, bool isPayslip) => Card(
         child: Padding(
@@ -1302,6 +1382,23 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
 
 // ============================== Receipt review ==============================
 
+/// Tries to find a category whose name relates to [hint] (a free-text
+/// category label, either a known category id from the offline heuristic,
+/// or a natural-language guess returned by Gemini). Falls back to null so
+/// the user is asked to pick one themselves rather than guessing wrong.
+Category? _matchCategoryHint(String? hint, List<Category> categories, TxType type) {
+  if (hint == null || hint.trim().isEmpty) return null;
+  final candidates = categories.where((c) => c.type == type).toList();
+  final byId = candidates.where((c) => c.id == hint).toList();
+  if (byId.isNotEmpty) return byId.first;
+  final h = hint.trim().toLowerCase();
+  for (final c in candidates) {
+    final n = c.name.toLowerCase();
+    if (n == h || n.contains(h) || h.contains(n)) return c;
+  }
+  return null;
+}
+
 class ReceiptReviewScreen extends StatefulWidget {
   final String imagePath;
   final ReceiptDraft initial;
@@ -1313,30 +1410,34 @@ class ReceiptReviewScreen extends StatefulWidget {
 class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   final merchantCtrl = TextEditingController();
   final totalCtrl = TextEditingController();
-  final itemsCtrl = TextEditingController();
   DateTime date = DateTime.now();
   List<Category> categories = [];
   List<Account> accounts = [];
+  List<Transaction> existingTx = [];
   Category? selectedCategory;
   Account? selectedAccount;
   bool loading = true;
   bool improving = false;
+  bool geminiFailed = false;
   bool hasGeminiKey = false;
+  late List<ReceiptItemEntry> items;
 
   @override
   void initState() {
     super.initState();
     merchantCtrl.text = widget.initial.merchant;
     totalCtrl.text = widget.initial.total?.toStringAsFixed(2) ?? '';
-    itemsCtrl.text = widget.initial.itemsText;
     date = widget.initial.date ?? DateTime.now();
+    items = List.of(widget.initial.items);
     _load();
   }
 
   Future<void> _load() async {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
+    existingTx = await Store.loadTransactions();
     selectedAccount = accounts.isEmpty ? null : accounts.first;
+    selectedCategory = _matchCategoryHint(widget.initial.categoryHint, categories, TxType.expense);
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
@@ -1346,7 +1447,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   Future<void> _improveWithGemini() async {
     final key = await Store.loadGeminiKey();
     if (key == null || key.trim().isEmpty) return;
-    setState(() => improving = true);
+    setState(() {
+      improving = true;
+      geminiFailed = false;
+    });
     try {
       final result = await geminiExtractReceipt(key.trim(), widget.imagePath);
       if (result != null) {
@@ -1357,14 +1461,25 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           if (parsed != null) date = parsed;
         }
         if (result['items'] is List) {
-          final items = (result['items'] as List)
-              .map((e) => '${e['name'] ?? ''}${e['price'] != null ? ': ${e['price']}' : ''}')
-              .join('\n');
-          itemsCtrl.text = items;
+          items = (result['items'] as List).whereType<Map>().map((e) {
+            return ReceiptItemEntry(
+              name: (e['name'] ?? '').toString(),
+              quantity: (e['quantity'] as num?)?.toDouble(),
+              price: (e['price'] as num?)?.toDouble(),
+            );
+          }).where((e) => e.name.trim().isNotEmpty).toList();
         }
+        final matched = _matchCategoryHint(result['category']?.toString(), categories, TxType.expense);
+        if (matched != null) selectedCategory = matched;
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطای بهبود با Gemini: $e')));
+      geminiFailed = true;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+          duration: const Duration(seconds: 6),
+        ));
+      }
     } finally {
       if (mounted) setState(() => improving = false);
     }
@@ -1384,6 +1499,40 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     });
   }
 
+  Future<void> _addItemRow() async {
+    final nameCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    final priceCtrl = TextEditingController();
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('افزودن کالا'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+            const SizedBox(height: 8),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+            const SizedBox(height: 8),
+            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('افزودن')),
+        ],
+      ),
+    );
+    if (added != true || nameCtrl.text.trim().isEmpty) return;
+    setState(() {
+      items.add(ReceiptItemEntry(
+        name: nameCtrl.text.trim(),
+        quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+        price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      ));
+    });
+  }
+
   Future<void> _save({required bool draft}) async {
     final total = double.tryParse(totalCtrl.text.replaceAll(',', '.'));
     if (total == null || total <= 0) {
@@ -1398,7 +1547,27 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
       return;
     }
-    final note = '${merchantCtrl.text.trim()}${itemsCtrl.text.trim().isNotEmpty ? '\n${itemsCtrl.text.trim()}' : ''}';
+    final duplicate = existingTx.any((t) =>
+        t.type == TxType.expense &&
+        (t.amount - total).abs() < 0.01 &&
+        t.date.year == date.year &&
+        t.date.month == date.month &&
+        t.date.day == date.day);
+    if (duplicate) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تراکنش مشابه'),
+          content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین رسید باشد. باز هم ثبت شود؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
+    if (!context.mounted) return;
     final result = Transaction(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       type: TxType.expense,
@@ -1406,10 +1575,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       categoryId: selectedCategory?.id ?? '_uncategorized_',
       accountId: selectedAccount?.id ?? 'default',
       date: date,
-      note: note,
+      note: merchantCtrl.text.trim(),
       draft: draft,
+      items: items,
     );
-    if (!context.mounted) return;
     Navigator.pop(context, result);
   }
 
@@ -1439,13 +1608,21 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               onPressed: improving ? null : _improveWithGemini,
               icon: improving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.auto_awesome),
-              label: Text(improving ? 'در حال بهبود...' : 'بهبود با هوش مصنوعی'),
+                  : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
+              label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
             )
           else
             const Text(
               'برای بهبود دقت با هوش مصنوعی، کلید Gemini را از منوی «تنظیمات» وارد کنید.',
               style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          if (geminiFailed)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'خواندن هوشمند ممکن نشد. فیلدهای زیر را بررسی و در صورت نیاز دستی اصلاح کنید.',
+                style: TextStyle(color: Colors.orange, fontSize: 12),
+              ),
             ),
           const SizedBox(height: 16),
           TextField(controller: merchantCtrl, decoration: const InputDecoration(labelText: 'فروشگاه', border: OutlineInputBorder())),
@@ -1479,12 +1656,35 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: itemsCtrl,
-            maxLines: 6,
-            decoration: const InputDecoration(labelText: 'اقلام خرید (هر کالا در یک خط)', border: OutlineInputBorder(), alignLabelWithHint: true),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('اقلام خرید', style: Theme.of(context).textTheme.titleMedium),
+              TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
+            ],
           ),
+          if (items.isEmpty)
+            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('کالایی ثبت نشده.', style: TextStyle(color: Colors.grey))),
+          ...items.asMap().entries.map((e) {
+            final i = e.key;
+            final it = e.value;
+            return Card(
+              child: ListTile(
+                dense: true,
+                title: Text(it.name),
+                subtitle: Text(
+                  '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                  '${it.quantity != null && it.price != null ? ' • ' : ''}'
+                  '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: () => setState(() => items.removeAt(i)),
+                ),
+              ),
+            );
+          }),
           const SizedBox(height: 24),
           Row(
             children: [
@@ -1534,7 +1734,9 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   Account? selectedAccount;
   bool loading = true;
   bool improving = false;
+  bool geminiFailed = false;
   bool hasGeminiKey = false;
+  List<Transaction> existingTx = [];
 
   @override
   void initState() {
@@ -1545,12 +1747,17 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     steuerklasseCtrl.text = widget.initial['steuerklasse']?.toString() ?? '';
     arbeitgeberCtrl.text = widget.initial['arbeitgeber']?.toString() ?? '';
     monatCtrl.text = widget.initial['abrechnungsmonat']?.toString() ?? '';
+    if (widget.initial['date'] != null) {
+      final parsed = DateTime.tryParse(widget.initial['date'].toString());
+      if (parsed != null) date = parsed;
+    }
     _load();
   }
 
   Future<void> _load() async {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
+    existingTx = await Store.loadTransactions();
     selectedAccount = accounts.isEmpty ? null : accounts.first;
     final match = categories.where((c) => c.id == 'i_salary').toList();
     selectedCategory = match.isEmpty ? null : match.first;
@@ -1563,7 +1770,10 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   Future<void> _improveWithGemini() async {
     final key = await Store.loadGeminiKey();
     if (key == null || key.trim().isEmpty) return;
-    setState(() => improving = true);
+    setState(() {
+      improving = true;
+      geminiFailed = false;
+    });
     try {
       final result = await geminiExtractPayslip(key.trim(), widget.imagePath);
       if (result != null) {
@@ -1573,9 +1783,19 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         if (result['steuerklasse'] != null) steuerklasseCtrl.text = result['steuerklasse'].toString();
         if (result['arbeitgeber'] != null) arbeitgeberCtrl.text = result['arbeitgeber'].toString();
         if (result['abrechnungsmonat'] != null) monatCtrl.text = result['abrechnungsmonat'].toString();
+        if (result['date'] != null) {
+          final parsed = DateTime.tryParse(result['date'].toString());
+          if (parsed != null) setState(() => date = parsed);
+        }
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطای بهبود با Gemini: $e')));
+      geminiFailed = true;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+          duration: const Duration(seconds: 6),
+        ));
+      }
     } finally {
       if (mounted) setState(() => improving = false);
     }
@@ -1617,6 +1837,27 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       final v = numCtrls[k]!.text.trim();
       if (v.isNotEmpty) lines.add('${_payslipLabels[k]}: $v');
     }
+    final duplicate = existingTx.any((t) =>
+        t.type == TxType.income &&
+        (t.amount - netto).abs() < 0.01 &&
+        t.date.year == date.year &&
+        t.date.month == date.month &&
+        t.date.day == date.day);
+    if (duplicate) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تراکنش مشابه'),
+          content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین فیش باشد. باز هم ثبت شود؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
+    if (!context.mounted) return;
     final result = Transaction(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       type: TxType.income,
@@ -1657,13 +1898,21 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               onPressed: improving ? null : _improveWithGemini,
               icon: improving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.auto_awesome),
-              label: Text(improving ? 'در حال بهبود...' : 'بهبود با هوش مصنوعی'),
+                  : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
+              label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
             )
           else
             const Text(
               'برای بهبود دقت با هوش مصنوعی، کلید Gemini را از منوی «تنظیمات» وارد کنید.',
               style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          if (geminiFailed)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'خواندن هوشمند ممکن نشد. فیلدهای زیر را بررسی و در صورت نیاز دستی اصلاح کنید.',
+                style: TextStyle(color: Colors.orange, fontSize: 12),
+              ),
             ),
           const SizedBox(height: 16),
           TextField(controller: arbeitgeberCtrl, decoration: const InputDecoration(labelText: 'کارفرما (Arbeitgeber)', border: OutlineInputBorder())),
