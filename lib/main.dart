@@ -11,13 +11,17 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:pdfx/pdfx.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz_data;
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Full-screen: hide the status bar and Android's gesture/nav bar; either
   // can be revealed temporarily by swiping from that edge, then auto-hides
   // again, so on-screen content never sits underneath the system bars.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  await NotificationService.instance.init();
   runApp(const MoneyApp());
 }
 
@@ -184,6 +188,8 @@ class Transaction {
   final DateTime? recurrenceEndDate; // last payment date (optional, alternative to installments)
   final bool draft; // true = saved from a scan but not yet confirmed by the user
   final List<ReceiptItemEntry> items; // structured line items from a scanned receipt (optional)
+  final bool notifyEnabled; // remind before the last 2 occurrences of a recurring transaction
+  final String notifyMessage; // custom reminder text (e.g. "cancel this subscription")
 
   const Transaction({
     required this.id,
@@ -201,6 +207,8 @@ class Transaction {
     this.recurrenceEndDate,
     this.draft = false,
     this.items = const [],
+    this.notifyEnabled = false,
+    this.notifyMessage = '',
   });
 
   bool get isRecurring => recurrence != RecurrenceFrequency.none;
@@ -220,6 +228,8 @@ class Transaction {
     DateTime? recurrenceEndDate,
     bool? draft,
     List<ReceiptItemEntry>? items,
+    bool? notifyEnabled,
+    String? notifyMessage,
     bool clearRecurrenceDay = false,
     bool clearRecurrenceWeekday = false,
     bool clearRecurrenceIntervalDays = false,
@@ -242,6 +252,8 @@ class Transaction {
         recurrenceEndDate: clearRecurrenceEndDate ? null : (recurrenceEndDate ?? this.recurrenceEndDate),
         draft: draft ?? this.draft,
         items: items ?? this.items,
+        notifyEnabled: notifyEnabled ?? this.notifyEnabled,
+        notifyMessage: notifyMessage ?? this.notifyMessage,
       );
 
   Map<String, dynamic> toJson() => {
@@ -260,6 +272,8 @@ class Transaction {
         'recurrenceEndDate': recurrenceEndDate?.toIso8601String(),
         'draft': draft,
         'items': items.map((e) => e.toJson()).toList(),
+        'notifyEnabled': notifyEnabled,
+        'notifyMessage': notifyMessage,
       };
 
   factory Transaction.fromJson(Map<String, dynamic> j) {
@@ -288,6 +302,8 @@ class Transaction {
       recurrenceEndDate: j['recurrenceEndDate'] != null ? DateTime.parse(j['recurrenceEndDate']) : null,
       draft: j['draft'] ?? false,
       items: (j['items'] as List<dynamic>?)?.map((e) => ReceiptItemEntry.fromJson(e)).toList() ?? const [],
+      notifyEnabled: j['notifyEnabled'] ?? false,
+      notifyMessage: j['notifyMessage'] ?? '',
     );
   }
 }
@@ -319,6 +335,126 @@ DateTime? nextOccurrencePreview(Transaction t) {
       return next;
     case RecurrenceFrequency.none:
       return null;
+  }
+}
+
+/// Generates the full sequence of occurrence dates for a recurring
+/// transaction, starting from its own date, following its recurrence
+/// pattern, until either the configured installment count or end date is
+/// reached. Returns an empty list for non-recurring or truly unlimited
+/// (no installments and no end date) transactions, since "last occurrence"
+/// has no meaning for those.
+List<DateTime> computeRecurrenceOccurrences(Transaction t) {
+  if (!t.isRecurring) return [];
+  if (t.installments == null && t.recurrenceEndDate == null) return [];
+  final result = <DateTime>[];
+  var current = t.date;
+  var count = 0;
+  const hardCap = 1000; // safety guard against runaway loops
+  while (count < hardCap) {
+    if (t.recurrenceEndDate != null && current.isAfter(t.recurrenceEndDate!)) break;
+    result.add(current);
+    count++;
+    if (t.installments != null && count >= t.installments!) break;
+    DateTime next;
+    switch (t.recurrence) {
+      case RecurrenceFrequency.monthly:
+        final day = t.recurrenceDay ?? current.day;
+        var y = current.year;
+        var m = current.month + 1;
+        if (m > 12) {
+          m = 1;
+          y++;
+        }
+        next = clampedMonthDate(y, m, day);
+        break;
+      case RecurrenceFrequency.weekly:
+        next = current.add(const Duration(days: 7));
+        break;
+      case RecurrenceFrequency.custom:
+        next = current.add(Duration(days: t.recurrenceIntervalDays ?? 30));
+        break;
+      case RecurrenceFrequency.none:
+        return result;
+    }
+    current = next;
+  }
+  return result;
+}
+
+// ============================== Notifications ==============================
+
+/// Reminds the user shortly before the last two occurrences of a recurring
+/// transaction (useful e.g. to remember to cancel a subscription in time).
+class NotificationService {
+  NotificationService._();
+  static final NotificationService instance = NotificationService._();
+
+  final _plugin = FlutterLocalNotificationsPlugin();
+  bool _initialized = false;
+
+  Future<void> init() async {
+    if (_initialized) return;
+    tz_data.initializeTimeZones();
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    await _plugin.initialize(const InitializationSettings(android: androidInit));
+    _initialized = true;
+  }
+
+  Future<void> requestPermission() async {
+    await _plugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+  }
+
+  int _idFor(String txId, int slot) => (txId.hashCode & 0x3fffffff) * 2 + slot;
+
+  Future<void> cancelForTransaction(String txId) async {
+    await _plugin.cancel(_idFor(txId, 0));
+    await _plugin.cancel(_idFor(txId, 1));
+  }
+
+  /// Computes an absolute schedule instant for a given local wall-clock
+  /// [target] time without needing the device's IANA timezone name: the
+  /// remaining real-world duration until that local moment is computed via
+  /// plain [DateTime] (which is always local), then applied on top of the
+  /// current UTC instant.
+  tz.TZDateTime _asTZDateTime(DateTime target) {
+    final delay = target.difference(DateTime.now());
+    return tz.TZDateTime.now(tz.UTC).add(delay);
+  }
+
+  Future<void> scheduleForTransaction(Transaction t, String categoryName) async {
+    await cancelForTransaction(t.id);
+    if (!t.notifyEnabled) return;
+    final occurrences = computeRecurrenceOccurrences(t);
+    if (occurrences.isEmpty) return;
+    final now = DateTime.now();
+    final body = t.notifyMessage.trim().isNotEmpty ? t.notifyMessage.trim() : 'سررسید این تراکنش تکرارشونده نزدیک است.';
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'recurring_due',
+        'یادآوری تراکنش‌های تکرارشونده',
+        channelDescription: 'یادآوری قبل از آخرین سررسیدهای یک تراکنش تکرارشونده',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+    );
+    final targets = <int, DateTime>{};
+    if (occurrences.length >= 2) targets[0] = occurrences[occurrences.length - 2];
+    targets[1] = occurrences.last;
+    for (final entry in targets.entries) {
+      final when = DateTime(entry.value.year, entry.value.month, entry.value.day, 9);
+      if (!when.isAfter(now)) continue;
+      await _plugin.zonedSchedule(
+        _idFor(t.id, entry.key),
+        categoryName,
+        body,
+        _asTZDateTime(when),
+        details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      );
+    }
   }
 }
 
@@ -1069,6 +1205,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _delete(Transaction t) async {
+    await NotificationService.instance.cancelForTransaction(t.id);
     setState(() => tx.removeWhere((x) => x.id == t.id));
     await _save();
   }
@@ -1321,6 +1458,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
   }
 
   Future<void> _delete(Transaction t) async {
+    await NotificationService.instance.cancelForTransaction(t.id);
     final all = await Store.loadTransactions();
     all.removeWhere((x) => x.id == t.id);
     await Store.saveTransactions(all);
@@ -1465,6 +1603,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
   }
 
   Future<void> _delete(Transaction t) async {
+    await NotificationService.instance.cancelForTransaction(t.id);
     final all = await Store.loadTransactions();
     all.removeWhere((x) => x.id == t.id);
     await Store.saveTransactions(all);
@@ -2322,6 +2461,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
   int weekday = DateTime.now().weekday;
   DateTime? endDate;
   String endMode = 'unlimited'; // 'unlimited' | 'count' | 'date'
+  bool notifyEnabled = false;
+  final notifyMessageCtrl = TextEditingController();
   bool draft = false;
   bool _dirty = false;
   List<Category> categories = [];
@@ -2347,6 +2488,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
       installmentsCtrl.text = e.installments?.toString() ?? '';
       endDate = e.recurrenceEndDate;
       endMode = e.recurrenceEndDate != null ? 'date' : (e.installments != null ? 'count' : 'unlimited');
+      notifyEnabled = e.notifyEnabled;
+      notifyMessageCtrl.text = e.notifyMessage;
       draft = e.draft;
       items = List.of(e.items);
       final match = categories.where((c) => c.id == e.categoryId).toList();
@@ -2359,6 +2502,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     dayCtrl.addListener(() => _dirty = true);
     intervalCtrl.addListener(() => _dirty = true);
     installmentsCtrl.addListener(() => _dirty = true);
+    notifyMessageCtrl.addListener(() => _dirty = true);
   }
 
   Future<void> _pickCategory() async {
@@ -2380,7 +2524,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     });
   }
 
-  bool _save() {
+  Future<bool> _save() async {
     final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
@@ -2437,7 +2581,15 @@ class _TransactionEditorState extends State<TransactionEditor> {
       recurrenceEndDate: recEndDate,
       draft: draft,
       items: items,
+      notifyEnabled: notifyEnabled,
+      notifyMessage: notifyMessageCtrl.text.trim(),
     );
+    if (notifyEnabled) {
+      await NotificationService.instance.scheduleForTransaction(result, selectedCategory!.name);
+    } else {
+      await NotificationService.instance.cancelForTransaction(result.id);
+    }
+    if (!context.mounted) return true;
     Navigator.pop(context, result);
     return true;
   }
@@ -2598,6 +2750,31 @@ class _TransactionEditorState extends State<TransactionEditor> {
               style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.w600),
             ),
           ],
+          if (endMode != 'unlimited') ...[
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('یادآوری قبل از پایان اقساط'),
+              subtitle: const Text('یک نوتیفیکیشن پیش از آخرین قسط و یکی مانده به آخر ارسال می‌شود.'),
+              value: notifyEnabled,
+              onChanged: (v) async {
+                if (v) await NotificationService.instance.requestPermission();
+                setState(() {
+                  notifyEnabled = v;
+                  _dirty = true;
+                });
+              },
+            ),
+            if (notifyEnabled)
+              TextField(
+                controller: notifyMessageCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'پیام یادآوری (اختیاری)',
+                  hintText: 'مثلاً: یادت نره اشتراک رو کنسل کنی',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+          ],
         ],
       ],
     );
@@ -2709,7 +2886,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 16),
           TextField(
             controller: noteCtrl,
-            decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder()),
+            maxLines: null,
+            minLines: 1,
+            decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder(), alignLabelWithHint: true),
           ),
           if (type == TxType.expense) ...[
             const SizedBox(height: 16),
