@@ -124,6 +124,15 @@ jobs:
           -keep interface com.google.mlkit.** { *; }
           -dontwarn com.google.mlkit.**
           -dontwarn com.google.android.gms.**
+
+          # flutter_local_notifications uses Gson (reflection-based JSON) to
+          # (de)serialize scheduled-notification data; keep it and its model
+          # classes so R8 doesn't break that at runtime in release builds.
+          -keep class com.dexterous.** { *; }
+          -keep class com.google.gson.** { *; }
+          -keepattributes Signature
+          -keepattributes *Annotation*
+          -dontwarn com.google.gson.**
           PROGUARD
       - name: Remove default test (uses old template)
         run: rm -f test/widget_test.dart
