@@ -1355,12 +1355,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _promptSetPin({required bool enableLockAfter}) async {
     final ctrl1 = TextEditingController();
     final ctrl2 = TextEditingController();
+    String? err;
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) {
-          String? err;
           return AlertDialog(
             title: const Text('تنظیم رمز عبور'),
             content: Column(
