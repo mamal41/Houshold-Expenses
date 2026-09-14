@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter/services.dart' show SystemNavigator, SystemChrome, SystemUiMode;
+import 'package:flutter/services.dart' show SystemNavigator, SystemChrome, SystemUiMode, Clipboard, ClipboardData;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,6 +19,8 @@ import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:crypto/crypto.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:excel/excel.dart' as xls;
+import 'package:share_plus/share_plus.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -905,6 +907,37 @@ class Store {
     await sp.remove(_pinSaltKey);
   }
 
+  /// Full-data backup as a JSON-encodable map (transactions, categories,
+  /// accounts). Deliberately excludes the Gemini key and lock PIN/hash -
+  /// those are per-device secrets, not app data.
+  static Future<Map<String, dynamic>> exportBackupData() async {
+    final tx = await loadTransactions();
+    final categories = await loadCategories();
+    final accounts = await loadAccounts();
+    return {
+      'backupVersion': 1,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'transactions': tx.map((t) => t.toJson()).toList(),
+      'categories': categories.map((c) => c.toJson()).toList(),
+      'accounts': accounts.map((a) => a.toJson()).toList(),
+    };
+  }
+
+  /// Replaces ALL current transactions/categories/accounts with the
+  /// contents of a previously exported backup map. Throws a descriptive
+  /// [FormatException] if the data doesn't look like a valid backup.
+  static Future<void> restoreBackupData(Map<String, dynamic> data) async {
+    if (data['transactions'] is! List || data['categories'] is! List || data['accounts'] is! List) {
+      throw const FormatException('این فایل یک نسخه‌ی پشتیبان معتبر برنامه نیست.');
+    }
+    final tx = (data['transactions'] as List).map((j) => Transaction.fromJson(j)).toList();
+    final categories = (data['categories'] as List).map((j) => Category.fromJson(j)).toList();
+    final accounts = (data['accounts'] as List).map((j) => Account.fromJson(j)).toList();
+    await saveTransactions(tx);
+    await saveCategories(categories);
+    await saveAccounts(accounts);
+  }
+
   static Future<AppLanguage> loadLanguage() async {
     final sp = await SharedPreferences.getInstance();
     final code = sp.getString(_langKey);
@@ -1315,6 +1348,7 @@ class AppDrawer extends StatelessWidget {
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
+            item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
           ],
         ),
       ),
@@ -1741,6 +1775,17 @@ Map<String, dynamic> parsePayslipText(String text) {
 
 // ============================== Gemini vision service ==============================
 
+/// Carries both a short Persian message for the UI and the full raw
+/// technical detail (HTTP status, response body, or network error) so the
+/// user can view/copy the real underlying error when troubleshooting.
+class GeminiException implements Exception {
+  final String friendlyMessage;
+  final String rawDetail;
+  GeminiException(this.friendlyMessage, this.rawDetail);
+  @override
+  String toString() => friendlyMessage;
+}
+
 // Gemini model names/aliases change fairly often as Google retires older
 // models; try the primary one first and fall back to an alternative if it
 // 404s (model retired/renamed) rather than failing outright.
@@ -1764,7 +1809,10 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   });
 
   http.Response? resp;
+  Object? lastNetworkError;
+  final attemptedModels = <String>[];
   for (final model in _geminiModels) {
+    attemptedModels.add(model);
     final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
     // Gemini occasionally returns a transient 503 "model overloaded" error;
     // retry a couple of times with a short backoff before giving up on this
@@ -1774,7 +1822,10 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
         resp = await http
             .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
             .timeout(const Duration(seconds: 45));
-      } on Exception {
+        lastNetworkError = null;
+      } catch (e) {
+        lastNetworkError = e;
+        resp = null;
         if (attempt == 2) break;
         await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
         continue;
@@ -1792,24 +1843,28 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   }
   if (resp == null || resp.statusCode != 200) {
     final code = resp?.statusCode;
+    final raw = resp != null
+        ? 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nHTTP ${resp.statusCode}\n${resp.body}'
+        : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
     if (code == 503) {
-      throw Exception('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.');
+      throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.', raw);
     }
-    throw Exception('خطای Gemini API (${code ?? '—'}): ${resp?.body ?? ''}');
+    throw GeminiException('خطای Gemini API (${code ?? '—'})', raw);
   }
-  final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
+  final rawBody = utf8.decode(resp.bodyBytes);
+  final decoded = jsonDecode(rawBody);
   final candidates = decoded['candidates'];
   if (candidates == null || candidates is! List || candidates.isEmpty) {
     final blockReason = decoded['promptFeedback']?['blockReason'];
     if (blockReason != null) {
-      throw Exception('Gemini این تصویر را پردازش نکرد (دلیل: $blockReason).');
+      throw GeminiException('Gemini این تصویر را پردازش نکرد (دلیل: $blockReason).', rawBody);
     }
-    throw Exception('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).');
+    throw GeminiException('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).', rawBody);
   }
   final finishReason = candidates[0]?['finishReason'];
   var text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
   if (text == null) {
-    throw Exception('پاسخ Gemini قابل خواندن نبود${finishReason != null ? ' (finishReason: $finishReason)' : ''}.');
+    throw GeminiException('پاسخ Gemini قابل خواندن نبود${finishReason != null ? ' (finishReason: $finishReason)' : ''}.', rawBody);
   }
   // The API is asked for pure JSON, but occasionally still wraps it in a
   // ```json ... ``` markdown fence - strip that defensively before parsing.
@@ -1820,7 +1875,7 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   try {
     return jsonDecode(text) as Map<String, dynamic>;
   } on FormatException {
-    throw Exception('پاسخ Gemini به‌صورت JSON معتبر نبود.');
+    throw GeminiException('پاسخ Gemini به‌صورت JSON معتبر نبود.', text);
   }
 }
 
@@ -2931,6 +2986,180 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
   }
 }
 
+// ============================== Backup, restore & Excel export ==============================
+
+Future<String> _buildBackupFile() async {
+  final data = await Store.exportBackupData();
+  final json = const JsonEncoder.withIndent('  ').convert(data);
+  final dir = await getTemporaryDirectory();
+  final path = '${dir.path}/money_management_backup_${DateTime.now().millisecondsSinceEpoch}.json';
+  await File(path).writeAsString(json);
+  return path;
+}
+
+Future<String> _buildExcelFile() async {
+  final tx = await Store.loadTransactions();
+  final categories = await Store.loadCategories();
+  final accounts = await Store.loadAccounts();
+  final wb = xls.Excel.createExcel();
+  final sheet = wb['تراکنش‌ها'];
+  if (wb.tables.containsKey('Sheet1')) wb.delete('Sheet1');
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  }
+
+  String accountName(String id) {
+    final m = accounts.where((a) => a.id == id).toList();
+    return m.isEmpty ? id : m.first.name;
+  }
+
+  String currencyOf(String id) {
+    final m = accounts.where((a) => a.id == id).toList();
+    return m.isEmpty ? '' : m.first.currency;
+  }
+
+  sheet.appendRow([
+    xls.TextCellValue('تاریخ'),
+    xls.TextCellValue('نوع'),
+    xls.TextCellValue('دسته‌بندی'),
+    xls.TextCellValue('حساب'),
+    xls.TextCellValue('ارز'),
+    xls.TextCellValue('مبلغ'),
+    xls.TextCellValue('توضیحات'),
+    xls.TextCellValue('تکرارشونده'),
+    xls.TextCellValue('پیش‌نویس'),
+  ]);
+  for (final t in tx) {
+    sheet.appendRow([
+      xls.TextCellValue(ltr(DateFormat('yyyy-MM-dd').format(t.date))),
+      xls.TextCellValue(t.type == TxType.income ? 'درآمد' : 'هزینه'),
+      xls.TextCellValue(categoryName(t.categoryId)),
+      xls.TextCellValue(accountName(t.accountId)),
+      xls.TextCellValue(currencyOf(t.accountId)),
+      xls.DoubleCellValue(t.amount),
+      xls.TextCellValue(t.note),
+      xls.TextCellValue(t.isRecurring ? 'بله' : 'خیر'),
+      xls.TextCellValue(t.draft ? 'بله' : 'خیر'),
+    ]);
+  }
+  final bytes = wb.encode();
+  if (bytes == null) throw Exception('ساخت فایل اکسل ممکن نشد.');
+  final dir = await getTemporaryDirectory();
+  final path = '${dir.path}/money_management_export_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+  await File(path).writeAsBytes(bytes);
+  return path;
+}
+
+class BackupRestoreScreen extends StatefulWidget {
+  const BackupRestoreScreen({super.key});
+  @override
+  State<BackupRestoreScreen> createState() => _BackupRestoreScreenState();
+}
+
+class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
+  bool busy = false;
+
+  Future<void> _backup() async {
+    setState(() => busy = true);
+    try {
+      final path = await _buildBackupFile();
+      await Share.shareXFiles([XFile(path)], text: 'نسخه‌ی پشتیبان مدیریت مالی شخصی');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _exportExcel() async {
+    setState(() => busy = true);
+    try {
+      final path = await _buildExcelFile();
+      await Share.shareXFiles([XFile(path)], text: 'خروجی اکسل تراکنش‌ها');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _restore() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json']);
+    if (result == null || result.files.single.path == null) return;
+    if (!context.mounted) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('بازیابی نسخه‌ی پشتیبان'),
+        content: const Text(
+          'همه‌ی اطلاعات فعلی برنامه (تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها) با محتوای این فایل جایگزین می‌شود. این کار قابل بازگشت نیست. ادامه می‌دهید؟',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بازیابی')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => busy = true);
+    try {
+      final content = await File(result.files.single.path!).readAsString();
+      final data = jsonDecode(content) as Map<String, dynamic>;
+      await Store.restoreBackupData(data);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('بازیابی با موفقیت انجام شد.')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا در بازیابی: $e')));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('پشتیبان‌گیری و بازیابی')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.cloud_upload_outlined),
+              title: const Text('تهیه‌ی نسخه‌ی پشتیبان'),
+              subtitle: const Text('خروجی کامل تراکنش‌ها، دسته‌بندی‌ها و حساب‌ها'),
+              trailing: busy
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.chevron_left),
+              onTap: busy ? null : _backup,
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.cloud_download_outlined),
+              title: const Text('بازیابی از نسخه‌ی پشتیبان'),
+              subtitle: const Text('جایگزینی اطلاعات فعلی با یک فایل پشتیبان'),
+              trailing: busy ? null : const Icon(Icons.chevron_left),
+              onTap: busy ? null : _restore,
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.table_chart_outlined),
+              title: const Text('خروجی اکسل'),
+              subtitle: const Text('خروجی تراکنش‌ها به فایل اکسل'),
+              trailing: busy ? null : const Icon(Icons.chevron_left),
+              onTap: busy ? null : _exportExcel,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ============================== Transaction editor ==============================
 
 const _weekdayNames = ['دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه', 'یکشنبه'];
@@ -3124,6 +3353,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   bool loading = true;
   bool improving = false;
   bool geminiFailed = false;
+  String? lastGeminiErrorDetail;
   bool hasGeminiKey = false;
   late List<ReceiptItemEntry> items;
 
@@ -3179,15 +3409,39 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       }
     } catch (e) {
       geminiFailed = true;
+      lastGeminiErrorDetail = e is GeminiException ? e.rawDetail : e.toString();
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
-          duration: Duration(seconds: 6),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
         ));
       }
     } finally {
       if (mounted) setState(() => improving = false);
     }
+  }
+
+  void _showGeminiErrorDetail(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('جزئیات خطای هوش مصنوعی'),
+        content: SingleChildScrollView(
+          child: SelectableText(lastGeminiErrorDetail ?? 'جزئیاتی موجود نیست.'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: lastGeminiErrorDetail ?? ''));
+              ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('کپی شد.')));
+            },
+            child: const Text('کپی'),
+          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickCategory() async {
@@ -3331,11 +3585,21 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           if (geminiFailed)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text(
-                'خواندن هوشمند ممکن نشد.',
-                style: TextStyle(color: Colors.orange, fontSize: 12),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'خواندن هوشمند ممکن نشد.',
+                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _showGeminiErrorDetail(context),
+                    child: const Text('جزئیات خطا', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
               ),
             ),
           const SizedBox(height: 16),
@@ -3456,6 +3720,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   bool loading = true;
   bool improving = false;
   bool geminiFailed = false;
+  String? lastGeminiErrorDetail;
   bool hasGeminiKey = false;
   List<Transaction> existingTx = [];
 
@@ -3511,15 +3776,39 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       }
     } catch (e) {
       geminiFailed = true;
+      lastGeminiErrorDetail = e is GeminiException ? e.rawDetail : e.toString();
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
-          duration: Duration(seconds: 6),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
         ));
       }
     } finally {
       if (mounted) setState(() => improving = false);
     }
+  }
+
+  void _showGeminiErrorDetail(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('جزئیات خطای هوش مصنوعی'),
+        content: SingleChildScrollView(
+          child: SelectableText(lastGeminiErrorDetail ?? 'جزئیاتی موجود نیست.'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: lastGeminiErrorDetail ?? ''));
+              ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('کپی شد.')));
+            },
+            child: const Text('کپی'),
+          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickCategory() async {
@@ -3639,11 +3928,21 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           if (geminiFailed)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text(
-                'خواندن هوشمند ممکن نشد.',
-                style: TextStyle(color: Colors.orange, fontSize: 12),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'خواندن هوشمند ممکن نشد.',
+                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _showGeminiErrorDetail(context),
+                    child: const Text('جزئیات خطا', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
               ),
             ),
           const SizedBox(height: 16),
