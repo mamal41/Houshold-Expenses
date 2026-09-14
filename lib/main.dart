@@ -4513,6 +4513,21 @@ class _TransactionEditorState extends State<TransactionEditor> {
       appBar: AppBar(
         title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
         actions: [
+          if (widget.existing == null)
+            IconButton(
+              icon: const Icon(Icons.document_scanner_outlined),
+              tooltip: 'خواندن از عکس یا فایل رسید/فیش حقوقی',
+              onPressed: () async {
+                final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
+                if (result == null) return;
+                if (!context.mounted) return;
+                // A scanned transaction supersedes anything typed manually
+                // so far in this form; bypass the "unsaved changes" guard
+                // instead of letting it swallow the scan result.
+                _dirty = false;
+                Navigator.pop(context, result);
+              },
+            ),
           if (widget.existing != null)
             IconButton(
               icon: const Icon(Icons.delete_outline),
