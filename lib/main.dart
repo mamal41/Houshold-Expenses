@@ -121,23 +121,34 @@ class Category {
   final String? parentId;
   final TxType type;
   final int? iconCodePoint; // custom icon for user-created categories (Material icon codePoint)
-  const Category({required this.id, required this.name, this.parentId, required this.type, this.iconCodePoint});
+  final bool iconNeedsRetry; // true if only a generic fallback icon was assigned so far
+  const Category({
+    required this.id,
+    required this.name,
+    this.parentId,
+    required this.type,
+    this.iconCodePoint,
+    this.iconNeedsRetry = false,
+  });
 
-  Category copyWith({String? name, String? parentId, int? iconCodePoint}) => Category(
+  Category copyWith({String? name, String? parentId, int? iconCodePoint, bool? iconNeedsRetry}) => Category(
         id: id,
         name: name ?? this.name,
         parentId: parentId ?? this.parentId,
         type: type,
         iconCodePoint: iconCodePoint ?? this.iconCodePoint,
+        iconNeedsRetry: iconNeedsRetry ?? this.iconNeedsRetry,
       );
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'parentId': parentId, 'type': type.name, 'iconCodePoint': iconCodePoint};
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'name': name, 'parentId': parentId, 'type': type.name, 'iconCodePoint': iconCodePoint, 'iconNeedsRetry': iconNeedsRetry};
   factory Category.fromJson(Map<String, dynamic> j) => Category(
         id: j['id'],
         name: j['name'],
         parentId: j['parentId'],
         type: TxType.values.byName(j['type']),
         iconCodePoint: j['iconCodePoint'],
+        iconNeedsRetry: j['iconNeedsRetry'] ?? false,
       );
 }
 
@@ -761,7 +772,7 @@ Future<IconData?> _suggestIconViaGemini(String categoryName) async {
   if (key == null || key.trim().isEmpty) return null;
   try {
     final options = _iconKeywordHints.keys.join('، ');
-    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$key');
+    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/${_geminiModels.first}:generateContent?key=$key');
     final body = jsonEncode({
       'contents': [
         {
@@ -788,13 +799,36 @@ Future<IconData?> _suggestIconViaGemini(String categoryName) async {
   return null;
 }
 
-Future<IconData> suggestIconForCategory(String name, TxType type) async {
+/// Returns the chosen icon plus whether it's just the generic fallback
+/// (neither a keyword match nor Gemini succeeded) - callers use this to
+/// mark the category for a background retry on a later app launch.
+Future<({IconData icon, bool isFallback})> suggestIconForCategory(String name, TxType type) async {
   for (final entry in _iconKeywordHints.entries) {
-    if (name.contains(entry.key)) return entry.value;
+    if (name.contains(entry.key)) return (icon: entry.value, isFallback: false);
   }
   final aiIcon = await _suggestIconViaGemini(name);
-  if (aiIcon != null) return aiIcon;
-  return type == TxType.expense ? Icons.category_outlined : Icons.attach_money_outlined;
+  if (aiIcon != null) return (icon: aiIcon, isFallback: false);
+  final fallback = type == TxType.expense ? Icons.category_outlined : Icons.attach_money_outlined;
+  return (icon: fallback, isFallback: true);
+}
+
+/// Retries choosing a real icon (via Gemini) for any category still stuck
+/// with the generic fallback icon. Meant to be called once per app launch;
+/// stops retrying a category as soon as a real icon is found for it.
+Future<void> retryPendingCategoryIcons() async {
+  final categories = await Store.loadCategories();
+  final pending = categories.where((c) => c.iconNeedsRetry).toList();
+  if (pending.isEmpty) return;
+  var changed = false;
+  var updated = categories;
+  for (final c in pending) {
+    final result = await suggestIconForCategory(c.name, c.type);
+    if (!result.isFallback) {
+      updated = updated.map((x) => x.id == c.id ? x.copyWith(iconCodePoint: result.icon.codePoint, iconNeedsRetry: false) : x).toList();
+      changed = true;
+    }
+  }
+  if (changed) await Store.saveCategories(updated);
 }
 
 // ============================== Storage ==============================
@@ -957,6 +991,32 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'save': {AppLanguage.fa: 'ذخیره', AppLanguage.en: 'Save', AppLanguage.de: 'Speichern'},
   'cancel': {AppLanguage.fa: 'انصراف', AppLanguage.en: 'Cancel', AppLanguage.de: 'Abbrechen'},
   'delete': {AppLanguage.fa: 'حذف', AppLanguage.en: 'Delete', AppLanguage.de: 'Löschen'},
+  'amount': {AppLanguage.fa: 'مبلغ', AppLanguage.en: 'Amount', AppLanguage.de: 'Betrag'},
+  'category': {AppLanguage.fa: 'دسته‌بندی', AppLanguage.en: 'Category', AppLanguage.de: 'Kategorie'},
+  'select_category': {AppLanguage.fa: 'انتخاب دسته‌بندی', AppLanguage.en: 'Select category', AppLanguage.de: 'Kategorie wählen'},
+  'account': {AppLanguage.fa: 'حساب', AppLanguage.en: 'Account', AppLanguage.de: 'Konto'},
+  'date': {AppLanguage.fa: 'تاریخ', AppLanguage.en: 'Date', AppLanguage.de: 'Datum'},
+  'note': {AppLanguage.fa: 'توضیحات (اختیاری)', AppLanguage.en: 'Notes (optional)', AppLanguage.de: 'Notizen (optional)'},
+  'new_category': {AppLanguage.fa: 'دسته‌بندی جدید', AppLanguage.en: 'New category', AppLanguage.de: 'Neue Kategorie'},
+  'add': {AppLanguage.fa: 'افزودن', AppLanguage.en: 'Add', AppLanguage.de: 'Hinzufügen'},
+  'rename': {AppLanguage.fa: 'تغییر نام', AppLanguage.en: 'Rename', AppLanguage.de: 'Umbenennen'},
+  'scan_receipt_or_payslip': {AppLanguage.fa: 'اسکن رسید یا فیش حقوقی', AppLanguage.en: 'Scan receipt or payslip', AppLanguage.de: 'Beleg oder Lohnabrechnung scannen'},
+  'camera': {AppLanguage.fa: 'دوربین', AppLanguage.en: 'Camera', AppLanguage.de: 'Kamera'},
+  'gallery': {AppLanguage.fa: 'گالری', AppLanguage.en: 'Gallery', AppLanguage.de: 'Galerie'},
+  'new_receipt': {AppLanguage.fa: 'رسید جدید', AppLanguage.en: 'New receipt', AppLanguage.de: 'Neuer Beleg'},
+  'new_payslip': {AppLanguage.fa: 'فیش حقوقی جدید', AppLanguage.en: 'New payslip', AppLanguage.de: 'Neue Lohnabrechnung'},
+  'drafts': {AppLanguage.fa: 'پیش‌نویس‌ها', AppLanguage.en: 'Drafts', AppLanguage.de: 'Entwürfe'},
+  'total_balance': {AppLanguage.fa: 'موجودی کل', AppLanguage.en: 'Total balance', AppLanguage.de: 'Gesamtsaldo'},
+  'recurring': {AppLanguage.fa: 'تکرارشونده', AppLanguage.en: 'Recurring', AppLanguage.de: 'Wiederkehrend'},
+  'draft': {AppLanguage.fa: 'پیش‌نویس', AppLanguage.en: 'Draft', AppLanguage.de: 'Entwurf'},
+  'confirm_delete_transaction': {
+    AppLanguage.fa: 'این تراکنش حذف شود؟',
+    AppLanguage.en: 'Delete this transaction?',
+    AppLanguage.de: 'Diese Buchung löschen?',
+  },
+  'expense_by_category': {AppLanguage.fa: 'هزینه‌ها بر اساس دسته‌بندی', AppLanguage.en: 'Expenses by category', AppLanguage.de: 'Ausgaben nach Kategorie'},
+  'last_6_months': {AppLanguage.fa: 'روند ۶ ماه اخیر', AppLanguage.en: 'Last 6 months trend', AppLanguage.de: 'Trend der letzten 6 Monate'},
+  'gemini_key': {AppLanguage.fa: 'کلید Gemini API', AppLanguage.en: 'Gemini API key', AppLanguage.de: 'Gemini-API-Schlüssel'},
 };
 
 /// Looks up [key] in the current UI language; falls back to the Persian
@@ -1372,14 +1432,14 @@ Map<String, dynamic> parsePayslipText(String text) {
 
 // ============================== Gemini vision service ==============================
 
-const _geminiModel = 'gemini-flash-latest';
+// Gemini model names/aliases change fairly often as Google retires older
+// models; try the primary one first and fall back to an alternative if it
+// 404s (model retired/renamed) rather than failing outright.
+const _geminiModels = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
 
 Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, String prompt) async {
   final bytes = await File(imagePath).readAsBytes();
   final b64 = base64Encode(bytes);
-  final uri = Uri.parse(
-    'https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$apiKey',
-  );
   final body = jsonEncode({
     'contents': [
       {
@@ -1393,25 +1453,33 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
     ],
     'generationConfig': {'response_mime_type': 'application/json'},
   });
-  // Gemini occasionally returns a transient 503 "model overloaded" error;
-  // retry a couple of times with a short backoff before giving up.
+
   http.Response? resp;
-  for (var attempt = 0; attempt < 3; attempt++) {
-    try {
-      resp = await http
-          .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
-          .timeout(const Duration(seconds: 45));
-    } on Exception {
-      if (attempt == 2) rethrow;
-      await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
-      continue;
+  for (final model in _geminiModels) {
+    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
+    // Gemini occasionally returns a transient 503 "model overloaded" error;
+    // retry a couple of times with a short backoff before giving up on this
+    // model and moving to the next one in the fallback list.
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        resp = await http
+            .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+            .timeout(const Duration(seconds: 45));
+      } on Exception {
+        if (attempt == 2) break;
+        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+        continue;
+      }
+      if (resp.statusCode == 200) break;
+      if (resp.statusCode == 503 && attempt < 2) {
+        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+        continue;
+      }
+      break;
     }
-    if (resp.statusCode == 200) break;
-    if (resp.statusCode == 503 && attempt < 2) {
-      await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
-      continue;
-    }
-    break;
+    if (resp != null && resp.statusCode == 200) break;
+    // 404 means this model name is no longer valid - try the next fallback.
+    if (resp != null && resp.statusCode != 404) break;
   }
   if (resp == null || resp.statusCode != 200) {
     final code = resp?.statusCode;
@@ -1527,6 +1595,10 @@ class _HomeScreenState extends State<HomeScreen> {
     accounts = await Store.loadAccounts();
     tx.sort((a, b) => b.date.compareTo(a.date));
     setState(() => loading = false);
+    // Best-effort background retry for categories that only got a generic
+    // icon last time (e.g. Gemini was unavailable); does nothing if none
+    // are pending.
+    unawaited(retryPendingCategoryIcons());
   }
 
   Future<void> _save() async {
@@ -2628,7 +2700,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
               style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.camera),
               icon: const Icon(Icons.camera_alt, size: 18),
-              label: const Text('دوربین', softWrap: false, overflow: TextOverflow.visible),
+              label: Text(tr('camera'), softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
           const SizedBox(width: 6),
@@ -2637,7 +2709,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
               style: style,
               onPressed: busy ? null : () => _process(isPayslip, ScanSource.gallery),
               icon: const Icon(Icons.photo_library, size: 18),
-              label: const Text('گالری', softWrap: false, overflow: TextOverflow.visible),
+              label: Text(tr('gallery'), softWrap: false, overflow: TextOverflow.visible),
             ),
           ),
           const SizedBox(width: 6),
@@ -2800,7 +2872,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       geminiFailed = true;
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+          content: Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
           duration: Duration(seconds: 6),
         ));
       }
@@ -2953,7 +3025,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             const Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
-                'خواندن هوشمند ممکن نشد. فیلدهای زیر را بررسی و در صورت نیاز دستی اصلاح کنید.',
+                'خواندن هوشمند ممکن نشد.',
                 style: TextStyle(color: Colors.orange, fontSize: 12),
               ),
             ),
@@ -2984,14 +3056,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? 'انتخاب دسته‌بندی'),
+            title: Text(selectedCategory?.name ?? tr('select_category')),
             trailing: const Icon(Icons.chevron_left),
             onTap: _pickCategory,
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
-            decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
@@ -3132,7 +3204,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       geminiFailed = true;
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('خواندن هوشمند این‌بار ممکن نشد (سرور شلوغ است یا خطای موقتی رخ داد). می‌توانید دوباره امتحان کنید یا فیلدها را دستی تکمیل و ثبت کنید.'),
+          content: Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
           duration: Duration(seconds: 6),
         ));
       }
@@ -3261,7 +3333,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             const Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
-                'خواندن هوشمند ممکن نشد. فیلدهای زیر را بررسی و در صورت نیاز دستی اصلاح کنید.',
+                'خواندن هوشمند ممکن نشد.',
                 style: TextStyle(color: Colors.orange, fontSize: 12),
               ),
             ),
@@ -3298,14 +3370,14 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? 'انتخاب دسته‌بندی'),
+            title: Text(selectedCategory?.name ?? tr('select_category')),
             trailing: const Icon(Icons.chevron_left),
             onTap: _pickCategory,
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
-            decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
@@ -3849,12 +3921,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'مبلغ', hintText: 'مثلاً 12.50 یا 12,50', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 12.50 یا 12,50', border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
-            decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
             items: widget.accounts
                 .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})')))
                 .toList(),
@@ -3866,7 +3938,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 16),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? 'انتخاب دسته‌بندی'),
+            title: Text(selectedCategory?.name ?? tr('select_category')),
             trailing: const Icon(Icons.chevron_left),
             onTap: _pickCategory,
           ),
@@ -3896,7 +3968,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             controller: noteCtrl,
             maxLines: null,
             minLines: 1,
-            decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder(), alignLabelWithHint: true),
+            decoration: InputDecoration(labelText: tr('note'), border: const OutlineInputBorder(), alignLabelWithHint: true),
           ),
           if (type == TxType.expense) ...[
             const SizedBox(height: 16),
@@ -4027,13 +4099,14 @@ class _CategoryPickerState extends State<CategoryPicker> {
       }
       return;
     }
-    final icon = await suggestIconForCategory(name, widget.type);
+    final iconResult = await suggestIconForCategory(name, widget.type);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
       parentId: parentId,
       type: widget.type,
-      iconCodePoint: icon.codePoint,
+      iconCodePoint: iconResult.icon.codePoint,
+      iconNeedsRetry: iconResult.isFallback,
     );
     setState(() => categories = [...categories, newCat]);
     await Store.saveCategories(categories);
@@ -4166,13 +4239,14 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       }
       return;
     }
-    final icon = await suggestIconForCategory(name, selectedType);
+    final iconResult = await suggestIconForCategory(name, selectedType);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
       parentId: parentId,
       type: selectedType,
-      iconCodePoint: icon.codePoint,
+      iconCodePoint: iconResult.icon.codePoint,
+      iconNeedsRetry: iconResult.isFallback,
     );
     setState(() => categories = [...categories, newCat]);
     await Store.saveCategories(categories);
@@ -4202,14 +4276,6 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     }
     setState(() {
       categories = categories.map((x) => x.id == c.id ? x.copyWith(name: name) : x).toList();
-    });
-    await Store.saveCategories(categories);
-  }
-
-  Future<void> _regenerateIcon(Category c) async {
-    final icon = await suggestIconForCategory(c.name, c.type);
-    setState(() {
-      categories = categories.map((x) => x.id == c.id ? x.copyWith(iconCodePoint: icon.codePoint) : x).toList();
     });
     await Store.saveCategories(categories);
   }
@@ -4282,11 +4348,6 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
                 icon: const Icon(Icons.add, size: 20),
                 tooltip: 'افزودن زیرمجموعه',
                 onPressed: () => _addCategory(parentId: c.id),
-              ),
-              IconButton(
-                icon: const Icon(Icons.auto_awesome, size: 20),
-                tooltip: 'ایجاد تصویر با هوش مصنوعی',
-                onPressed: () => _regenerateIcon(c),
               ),
               IconButton(
                 icon: const Icon(Icons.edit_outlined, size: 20),
