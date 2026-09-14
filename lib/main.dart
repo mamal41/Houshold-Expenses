@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart' show SystemNavigator, SystemChrome, SystemUiMode;
@@ -16,6 +17,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:fl_chart/fl_chart.dart';
+import 'package:crypto/crypto.dart';
+import 'package:local_auth/local_auth.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -839,15 +842,67 @@ class Store {
   static const _accKey = 'accounts_v2';
   static const _geminiKey = 'gemini_api_key';
   static const _langKey = 'app_language';
+  static const _lockEnabledKey = 'app_lock_enabled';
+  static const _pinHashKey = 'app_lock_pin_hash';
+  static const _pinSaltKey = 'app_lock_pin_salt';
+  static const _biometricKey = 'app_lock_use_biometric';
+
+  static Future<void> saveGeminiKey(String key) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_geminiKey, key);
+  }
 
   static Future<String?> loadGeminiKey() async {
     final sp = await SharedPreferences.getInstance();
     return sp.getString(_geminiKey);
   }
 
-  static Future<void> saveGeminiKey(String key) async {
+  static Future<bool> loadAppLockEnabled() async {
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_geminiKey, key);
+    return sp.getBool(_lockEnabledKey) ?? false;
+  }
+
+  static Future<void> saveAppLockEnabled(bool enabled) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_lockEnabledKey, enabled);
+  }
+
+  static Future<bool> loadUseBiometric() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getBool(_biometricKey) ?? false;
+  }
+
+  static Future<void> saveUseBiometric(bool enabled) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_biometricKey, enabled);
+  }
+
+  static Future<bool> hasPinSet() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_pinHashKey) != null;
+  }
+
+  static Future<void> savePin(String pin) async {
+    final sp = await SharedPreferences.getInstance();
+    final salt = List.generate(16, (_) => Random.secure().nextInt(256)).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final hash = sha256.convert(utf8.encode(salt + pin)).toString();
+    await sp.setString(_pinSaltKey, salt);
+    await sp.setString(_pinHashKey, hash);
+  }
+
+  static Future<bool> verifyPin(String pin) async {
+    final sp = await SharedPreferences.getInstance();
+    final salt = sp.getString(_pinSaltKey);
+    final storedHash = sp.getString(_pinHashKey);
+    if (salt == null || storedHash == null) return false;
+    final hash = sha256.convert(utf8.encode(salt + pin)).toString();
+    return hash == storedHash;
+  }
+
+  static Future<void> clearPin() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.remove(_pinHashKey);
+    await sp.remove(_pinSaltKey);
   }
 
   static Future<AppLanguage> loadLanguage() async {
@@ -1062,7 +1117,161 @@ class _MoneyAppState extends State<MoneyApp> {
         GlobalCupertinoLocalizations.delegate,
       ],
       builder: (context, child) => Directionality(textDirection: currentLanguage.value.direction, child: child!),
-      home: const HomeScreen(),
+      home: const AppLockGate(child: HomeScreen()),
+    );
+  }
+}
+
+// ============================== App lock ==============================
+
+class AppLockGate extends StatefulWidget {
+  final Widget child;
+  const AppLockGate({required this.child, super.key});
+  @override
+  State<AppLockGate> createState() => _AppLockGateState();
+}
+
+class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
+  bool _loading = true;
+  bool _lockEnabled = false;
+  bool _unlocked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _init();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    final enabled = await Store.loadAppLockEnabled();
+    if (!mounted) return;
+    setState(() {
+      _lockEnabled = enabled;
+      _unlocked = !enabled;
+      _loading = false;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused && _lockEnabled) {
+      setState(() => _unlocked = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (!_unlocked) {
+      return PinLockScreen(onUnlocked: () => setState(() => _unlocked = true));
+    }
+    return widget.child;
+  }
+}
+
+class PinLockScreen extends StatefulWidget {
+  final VoidCallback onUnlocked;
+  const PinLockScreen({required this.onUnlocked, super.key});
+  @override
+  State<PinLockScreen> createState() => _PinLockScreenState();
+}
+
+class _PinLockScreenState extends State<PinLockScreen> {
+  final pinCtrl = TextEditingController();
+  String? error;
+  bool checking = false;
+  bool biometricAvailable = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometric();
+  }
+
+  Future<void> _checkBiometric() async {
+    final useBio = await Store.loadUseBiometric();
+    if (!useBio) return;
+    final auth = LocalAuthentication();
+    try {
+      final canCheck = await auth.canCheckBiometrics;
+      final isSupported = await auth.isDeviceSupported();
+      if (!mounted) return;
+      if (canCheck && isSupported) {
+        setState(() => biometricAvailable = true);
+        _tryBiometric();
+      }
+    } catch (_) {
+      // biometric hardware unavailable/unqueryable - fall back to PIN only
+    }
+  }
+
+  Future<void> _tryBiometric() async {
+    final auth = LocalAuthentication();
+    try {
+      final ok = await auth.authenticate(
+        localizedReason: 'برای باز کردن برنامه هویت خود را تأیید کنید',
+        options: const AuthenticationOptions(biometricOnly: false, stickyAuth: true),
+      );
+      if (ok) widget.onUnlocked();
+    } catch (_) {
+      // user cancelled or biometric failed - they can still use the PIN field
+    }
+  }
+
+  Future<void> _submitPin() async {
+    setState(() => checking = true);
+    final ok = await Store.verifyPin(pinCtrl.text);
+    if (!mounted) return;
+    setState(() => checking = false);
+    if (ok) {
+      widget.onUnlocked();
+    } else {
+      setState(() => error = 'رمز اشتباه است');
+      pinCtrl.clear();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.lock_outline, size: 64),
+                const SizedBox(height: 16),
+                Text('برنامه قفل است', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: pinCtrl,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  textAlign: TextAlign.center,
+                  decoration: InputDecoration(labelText: 'رمز عبور', errorText: error, border: const OutlineInputBorder()),
+                  onSubmitted: (_) => _submitPin(),
+                ),
+                const SizedBox(height: 12),
+                FilledButton(onPressed: checking ? null : _submitPin, child: const Text('باز کردن')),
+                if (biometricAvailable) ...[
+                  const SizedBox(height: 12),
+                  TextButton.icon(onPressed: _tryBiometric, icon: const Icon(Icons.fingerprint), label: const Text('استفاده از اثرانگشت')),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1125,6 +1334,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final ctrl = TextEditingController();
   bool loading = true;
   bool obscure = true;
+  bool lockEnabled = false;
+  bool useBiometric = false;
+  bool hasPin = false;
 
   @override
   void initState() {
@@ -1134,7 +1346,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     ctrl.text = await Store.loadGeminiKey() ?? '';
+    lockEnabled = await Store.loadAppLockEnabled();
+    useBiometric = await Store.loadUseBiometric();
+    hasPin = await Store.hasPinSet();
     setState(() => loading = false);
+  }
+
+  Future<void> _promptSetPin({required bool enableLockAfter}) async {
+    final ctrl1 = TextEditingController();
+    final ctrl2 = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          String? err;
+          return AlertDialog(
+            title: const Text('تنظیم رمز عبور'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: ctrl1,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  decoration: const InputDecoration(labelText: 'رمز جدید (۴ تا ۸ رقم)'),
+                ),
+                TextField(
+                  controller: ctrl2,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  decoration: const InputDecoration(labelText: 'تکرار رمز'),
+                ),
+                if (err != null) Text(err, style: const TextStyle(color: Colors.red)),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+              FilledButton(
+                onPressed: () {
+                  if (ctrl1.text.length < 4) {
+                    setDialogState(() => err = 'رمز باید حداقل ۴ رقم باشد.');
+                    return;
+                  }
+                  if (ctrl1.text != ctrl2.text) {
+                    setDialogState(() => err = 'دو رمز یکسان نیستند.');
+                    return;
+                  }
+                  Navigator.pop(ctx, true);
+                },
+                child: Text(tr('save')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (result != true) return;
+    await Store.savePin(ctrl1.text);
+    hasPin = true;
+    if (enableLockAfter) {
+      await Store.saveAppLockEnabled(true);
+      lockEnabled = true;
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _save() async {
@@ -1196,6 +1473,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ),
+          const Divider(height: 40),
+          Text('قفل برنامه', style: Theme.of(context).textTheme.titleMedium),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('فعال بودن قفل'),
+            subtitle: const Text('هنگام باز کردن برنامه رمز یا اثرانگشت بپرسد'),
+            value: lockEnabled,
+            onChanged: (v) async {
+              if (v && !hasPin) {
+                await _promptSetPin(enableLockAfter: true);
+                return;
+              }
+              await Store.saveAppLockEnabled(v);
+              setState(() => lockEnabled = v);
+            },
+          ),
+          if (lockEnabled) ...[
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('استفاده از اثرانگشت/چهره'),
+              subtitle: const Text('در صورت پشتیبانی گوشی، به‌جای رمز از بیومتریک استفاده شود'),
+              value: useBiometric,
+              onChanged: (v) async {
+                await Store.saveUseBiometric(v);
+                setState(() => useBiometric = v);
+              },
+            ),
+            TextButton(
+              onPressed: () => _promptSetPin(enableLockAfter: false),
+              child: const Text('تغییر رمز عبور'),
+            ),
+          ],
         ],
       ),
     );
