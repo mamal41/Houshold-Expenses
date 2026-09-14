@@ -1380,7 +1380,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   maxLength: 8,
                   decoration: const InputDecoration(labelText: 'تکرار رمز'),
                 ),
-                if (err != null) Text(err, style: const TextStyle(color: Colors.red)),
+                if (err != null) Text(err!, style: const TextStyle(color: Colors.red)),
               ],
             ),
             actions: [
