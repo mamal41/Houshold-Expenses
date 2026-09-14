@@ -818,12 +818,20 @@ Future<({IconData icon, bool isFallback})> suggestIconForCategory(String name, T
 }
 
 /// Retries choosing a real icon (via Gemini) for any category still stuck
-/// with the generic fallback icon. Meant to be called once per app launch;
-/// stops retrying a category as soon as a real icon is found for it.
+/// with the generic fallback icon. Meant to be called once per app launch,
+/// but throttled to at most once per calendar day - this shares the same
+/// small daily Gemini quota as receipt/payslip scanning, which matters
+/// much more, so it shouldn't compete for it on every single launch.
 Future<void> retryPendingCategoryIcons() async {
   final categories = await Store.loadCategories();
   final pending = categories.where((c) => c.iconNeedsRetry).toList();
   if (pending.isEmpty) return;
+  final lastTry = await Store.loadLastIconRetryDate();
+  final today = DateTime.now();
+  if (lastTry != null && lastTry.year == today.year && lastTry.month == today.month && lastTry.day == today.day) {
+    return;
+  }
+  await Store.saveLastIconRetryDate(today);
   var changed = false;
   var updated = categories;
   for (final c in pending) {
@@ -844,6 +852,18 @@ class Store {
   static const _accKey = 'accounts_v2';
   static const _geminiKey = 'gemini_api_key';
   static const _langKey = 'app_language';
+  static const _iconRetryDateKey = 'last_icon_retry_date';
+
+  static Future<DateTime?> loadLastIconRetryDate() async {
+    final sp = await SharedPreferences.getInstance();
+    final s = sp.getString(_iconRetryDateKey);
+    return s == null ? null : DateTime.tryParse(s);
+  }
+
+  static Future<void> saveLastIconRetryDate(DateTime date) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_iconRetryDateKey, date.toIso8601String());
+  }
   static const _lockEnabledKey = 'app_lock_enabled';
   static const _pinHashKey = 'app_lock_pin_hash';
   static const _pinSaltKey = 'app_lock_pin_salt';
@@ -1789,7 +1809,10 @@ class GeminiException implements Exception {
 // Gemini model names/aliases change fairly often as Google retires older
 // models; try the primary one first and fall back to an alternative if it
 // 404s (model retired/renamed) rather than failing outright.
-const _geminiModels = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+// Lite variants have a much more generous free-tier daily quota (roughly
+// 1000+ requests/day) than the full Flash models (as low as ~20/day for
+// some newer ones), so try those first to avoid hitting quota limits.
+const _geminiModels = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash'];
 
 Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, String prompt) async {
   final bytes = await File(imagePath).readAsBytes();
@@ -1831,15 +1854,16 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
         continue;
       }
       if (resp.statusCode == 200) break;
-      if (resp.statusCode == 503 && attempt < 2) {
+      if ((resp.statusCode == 503 || resp.statusCode == 429) && attempt < 2) {
         await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
         continue;
       }
       break;
     }
     if (resp != null && resp.statusCode == 200) break;
-    // 404 means this model name is no longer valid - try the next fallback.
-    if (resp != null && resp.statusCode != 404) break;
+    // 404 (model retired/renamed) or 429 (this model's own quota exhausted,
+    // a different model may still have quota) - try the next fallback.
+    if (resp != null && resp.statusCode != 404 && resp.statusCode != 429) break;
   }
   if (resp == null || resp.statusCode != 200) {
     final code = resp?.statusCode;
@@ -1848,6 +1872,9 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
         : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
     if (code == 503) {
       throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.', raw);
+    }
+    if (code == 429) {
+      throw GeminiException('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.', raw);
     }
     throw GeminiException('خطای Gemini API (${code ?? '—'})', raw);
   }
