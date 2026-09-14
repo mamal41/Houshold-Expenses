@@ -168,6 +168,8 @@ jobs:
         run: rm -f test/widget_test.dart
       - name: Get dependencies
         run: flutter pub get
+      - name: Generate custom launcher icon
+        run: dart run flutter_launcher_icons
       - name: Patch file_picker compileSdk to 36 (AGP 9 requires >=36)
         run: |
           shopt -s nullglob
