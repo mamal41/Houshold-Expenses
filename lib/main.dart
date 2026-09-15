@@ -1351,6 +1351,10 @@ class AppDrawer extends StatelessWidget {
             }
           },
         );
+    Widget sectionLabel(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(text, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+        );
     return Drawer(
       child: SafeArea(
         child: ListView(
@@ -1363,12 +1367,19 @@ class AppDrawer extends StatelessWidget {
               ),
             ),
             item(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
+            const Divider(height: 1),
+            sectionLabel('دسته‌بندی‌ها و حساب‌ها'),
             item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
             item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
-            item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
+            const Divider(height: 1),
+            sectionLabel('تراکنش‌ها'),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
+            const Divider(height: 1),
+            sectionLabel('داده'),
             item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
+            const Divider(height: 1),
+            item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
         ),
       ),
@@ -1385,9 +1396,149 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('settings'))),
+      drawer: const AppDrawer(currentIndex: 3),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.language_outlined),
+            title: Text(tr('app_language')),
+            subtitle: ValueListenableBuilder<AppLanguage>(
+              valueListenable: currentLanguage,
+              builder: (context, lang, _) => Text(lang.label),
+            ),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LanguageSettingsScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.auto_awesome_outlined),
+            title: const Text('هوش مصنوعی (Gemini)'),
+            subtitle: const Text('کلید API برای بهبود خواندن رسید و فیش حقوقی'),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.lock_outline),
+            title: const Text('قفل برنامه'),
+            subtitle: const Text('رمز عبور و اثرانگشت/چهره'),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppLockSettingsScreen())),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LanguageSettingsScreen extends StatelessWidget {
+  const LanguageSettingsScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('app_language'))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          ValueListenableBuilder<AppLanguage>(
+            valueListenable: currentLanguage,
+            builder: (context, lang, _) => DropdownButtonFormField<AppLanguage>(
+              initialValue: lang,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              items: AppLanguage.values.map((l) => DropdownMenuItem(value: l, child: Text(l.label))).toList(),
+              onChanged: (v) async {
+                if (v == null) return;
+                currentLanguage.value = v;
+                await Store.saveLanguage(v);
+              },
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text(
+              'ترجمه در حال تکمیل است؛ فعلاً بخش‌های اصلی برنامه ترجمه شده‌اند.',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class GeminiSettingsScreen extends StatefulWidget {
+  const GeminiSettingsScreen({super.key});
+  @override
+  State<GeminiSettingsScreen> createState() => _GeminiSettingsScreenState();
+}
+
+class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
   final ctrl = TextEditingController();
   bool loading = true;
   bool obscure = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    ctrl.text = await Store.loadGeminiKey() ?? '';
+    setState(() => loading = false);
+  }
+
+  Future<void> _save() async {
+    await Store.saveGeminiKey(ctrl.text.trim());
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('هوش مصنوعی (Gemini)')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('کلید Gemini API', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          const Text(
+            'برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.',
+            style: TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            obscureText: obscure,
+            decoration: InputDecoration(
+              labelText: 'Gemini API Key',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => obscure = !obscure),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(onPressed: _save, child: Text(tr('save'))),
+        ],
+      ),
+    );
+  }
+}
+
+class AppLockSettingsScreen extends StatefulWidget {
+  const AppLockSettingsScreen({super.key});
+  @override
+  State<AppLockSettingsScreen> createState() => _AppLockSettingsScreenState();
+}
+
+class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
+  bool loading = true;
   bool lockEnabled = false;
   bool useBiometric = false;
   bool hasPin = false;
@@ -1399,7 +1550,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    ctrl.text = await Store.loadGeminiKey() ?? '';
     lockEnabled = await Store.loadAppLockEnabled();
     useBiometric = await Store.loadUseBiometric();
     hasPin = await Store.hasPinSet();
@@ -1468,67 +1618,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _save() async {
-    await Store.saveGeminiKey(ctrl.text.trim());
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
-  }
-
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: Text(tr('settings'))),
-      drawer: const AppDrawer(currentIndex: 3),
+      appBar: AppBar(title: const Text('قفل برنامه')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('کلید Gemini API', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            'برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.',
-            style: TextStyle(color: Colors.grey),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            obscureText: obscure,
-            decoration: InputDecoration(
-              labelText: 'Gemini API Key',
-              border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
-                onPressed: () => setState(() => obscure = !obscure),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          FilledButton(onPressed: _save, child: const Text('ذخیره')),
-          const Divider(height: 40),
-          Text(tr('app_language'), style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          ValueListenableBuilder<AppLanguage>(
-            valueListenable: currentLanguage,
-            builder: (context, lang, _) => DropdownButtonFormField<AppLanguage>(
-              initialValue: lang,
-              decoration: const InputDecoration(border: OutlineInputBorder()),
-              items: AppLanguage.values.map((l) => DropdownMenuItem(value: l, child: Text(l.label))).toList(),
-              onChanged: (v) async {
-                if (v == null) return;
-                currentLanguage.value = v;
-                await Store.saveLanguage(v);
-              },
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: Text(
-              'ترجمه در حال تکمیل است؛ فعلاً بخش‌های اصلی برنامه ترجمه شده‌اند.',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-          ),
-          const Divider(height: 40),
-          Text('قفل برنامه', style: Theme.of(context).textTheme.titleMedium),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('فعال بودن قفل'),
@@ -2127,18 +2224,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _save();
   }
 
-  Future<void> _openScan() async {
-    final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
-    if (result == null) return;
-    categories = await Store.loadCategories();
-    accounts = await Store.loadAccounts();
-    setState(() {
-      tx.add(result);
-      tx.sort((a, b) => b.date.compareTo(a.date));
-    });
-    await _save();
-  }
-
   Future<void> _openDrafts() async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen()));
     await _load();
@@ -2175,7 +2260,6 @@ class _HomeScreenState extends State<HomeScreen> {
             isLabelVisible: draftCount > 0,
             child: IconButton(icon: const Icon(Icons.drafts_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
           ),
-          IconButton(icon: const Icon(Icons.document_scanner_outlined), tooltip: 'اسکن رسید/فیش حقوقی', onPressed: _openScan),
         ],
       ),
       drawer: const AppDrawer(currentIndex: 0),
