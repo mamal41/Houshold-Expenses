@@ -197,6 +197,7 @@ class ReceiptItemEntry {
 class PayslipDetails {
   final double? brutto;
   final double? netto;
+  final double? depositedAmount; // مبلغ واریز شده به حساب - can differ from netto (advances, deductions via payroll, etc.)
   final double? lohnsteuer;
   final double? solidaritaetszuschlag;
   final double? kirchensteuer;
@@ -204,6 +205,10 @@ class PayslipDetails {
   final double? pflegeversicherung;
   final double? rentenversicherung;
   final double? arbeitslosenversicherung;
+  final double? vermoegenswirksameLeistungen;
+  final double? betrieblicheAltersvorsorge;
+  final double? vorschuss;
+  final double? sonstigeAbzuege;
   final String? steuerklasse;
   final String? arbeitgeber;
   final String? abrechnungsmonat;
@@ -211,6 +216,7 @@ class PayslipDetails {
   const PayslipDetails({
     this.brutto,
     this.netto,
+    this.depositedAmount,
     this.lohnsteuer,
     this.solidaritaetszuschlag,
     this.kirchensteuer,
@@ -218,6 +224,10 @@ class PayslipDetails {
     this.pflegeversicherung,
     this.rentenversicherung,
     this.arbeitslosenversicherung,
+    this.vermoegenswirksameLeistungen,
+    this.betrieblicheAltersvorsorge,
+    this.vorschuss,
+    this.sonstigeAbzuege,
     this.steuerklasse,
     this.arbeitgeber,
     this.abrechnungsmonat,
@@ -226,6 +236,7 @@ class PayslipDetails {
   Map<String, dynamic> toJson() => {
         'brutto': brutto,
         'netto': netto,
+        'depositedAmount': depositedAmount,
         'lohnsteuer': lohnsteuer,
         'solidaritaetszuschlag': solidaritaetszuschlag,
         'kirchensteuer': kirchensteuer,
@@ -233,6 +244,10 @@ class PayslipDetails {
         'pflegeversicherung': pflegeversicherung,
         'rentenversicherung': rentenversicherung,
         'arbeitslosenversicherung': arbeitslosenversicherung,
+        'vermoegenswirksameLeistungen': vermoegenswirksameLeistungen,
+        'betrieblicheAltersvorsorge': betrieblicheAltersvorsorge,
+        'vorschuss': vorschuss,
+        'sonstigeAbzuege': sonstigeAbzuege,
         'steuerklasse': steuerklasse,
         'arbeitgeber': arbeitgeber,
         'abrechnungsmonat': abrechnungsmonat,
@@ -241,6 +256,7 @@ class PayslipDetails {
   factory PayslipDetails.fromJson(Map<String, dynamic> j) => PayslipDetails(
         brutto: (j['brutto'] as num?)?.toDouble(),
         netto: (j['netto'] as num?)?.toDouble(),
+        depositedAmount: (j['depositedAmount'] as num?)?.toDouble(),
         lohnsteuer: (j['lohnsteuer'] as num?)?.toDouble(),
         solidaritaetszuschlag: (j['solidaritaetszuschlag'] as num?)?.toDouble(),
         kirchensteuer: (j['kirchensteuer'] as num?)?.toDouble(),
@@ -248,6 +264,10 @@ class PayslipDetails {
         pflegeversicherung: (j['pflegeversicherung'] as num?)?.toDouble(),
         rentenversicherung: (j['rentenversicherung'] as num?)?.toDouble(),
         arbeitslosenversicherung: (j['arbeitslosenversicherung'] as num?)?.toDouble(),
+        vermoegenswirksameLeistungen: (j['vermoegenswirksameLeistungen'] as num?)?.toDouble(),
+        betrieblicheAltersvorsorge: (j['betrieblicheAltersvorsorge'] as num?)?.toDouble(),
+        vorschuss: (j['vorschuss'] as num?)?.toDouble(),
+        sonstigeAbzuege: (j['sonstigeAbzuege'] as num?)?.toDouble(),
         steuerklasse: j['steuerklasse'],
         arbeitgeber: j['arbeitgeber'],
         abrechnungsmonat: j['abrechnungsmonat'],
@@ -1397,6 +1417,7 @@ class AppDrawer extends StatelessWidget {
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
+            item(8, Icons.upcoming_outlined, 'پرداخت‌های پیش‌رو', () => const UpcomingPaymentsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
             const Divider(height: 1),
             sectionLabel('داده'),
@@ -2043,11 +2064,18 @@ const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the at
 const _payslipPrompt = 'You are an expert German payslip (Lohnabrechnung) reading assistant. Read the '
     'attached payslip image and extract structured data. Respond ONLY with compact JSON, no markdown, '
     'no explanation, in exactly this shape: {"brutto": number or null, "netto": number or null, '
-    '"lohnsteuer": number or null, "solidaritaetszuschlag": number or null, "kirchensteuer": number or '
-    'null, "krankenversicherung": number or null, "pflegeversicherung": number or null, '
-    '"rentenversicherung": number or null, "arbeitslosenversicherung": number or null, "steuerklasse": '
+    '"depositedAmount": number or null, "lohnsteuer": number or null, "solidaritaetszuschlag": number or null, '
+    '"kirchensteuer": number or null, "krankenversicherung": number or null, "pflegeversicherung": number or '
+    'null, "rentenversicherung": number or null, "arbeitslosenversicherung": number or null, '
+    '"vermoegenswirksameLeistungen": number or null, "betrieblicheAltersvorsorge": number or null, '
+    '"vorschuss": number or null, "sonstigeAbzuege": number or null, "steuerklasse": '
     'string or null, "arbeitgeber": string or null, "abrechnungsmonat": string or null, "date": '
-    '"YYYY-MM-DD" or null}. "date" is the actual payment/value date (Auszahlungsdatum or Valuta date) '
+    '"YYYY-MM-DD" or null}. "depositedAmount" is the actual amount transferred/paid out to the bank '
+    'account (Auszahlungsbetrag) if shown separately from "netto" (they can differ due to advances or '
+    'other payroll deductions). "vermoegenswirksameLeistungen" is VL/capital-formation benefits, '
+    '"betrieblicheAltersvorsorge" is employer-sponsored supplementary pension deductions, "vorschuss" is '
+    'any advance payment deducted, "sonstigeAbzuege" is any other deduction not covered by the other '
+    'fields. "date" is the actual payment/value date (Auszahlungsdatum or Valuta date) '
     'printed on the payslip - not just the month name. Numbers must be plain (no currency symbols). If '
     'a field is unreadable, use null.';
 
@@ -3014,6 +3042,142 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                 );
               }).toList(),
             ),
+    );
+  }
+}
+
+// ============================== Upcoming payments ==============================
+
+class UpcomingPaymentsScreen extends StatefulWidget {
+  const UpcomingPaymentsScreen({super.key});
+  @override
+  State<UpcomingPaymentsScreen> createState() => _UpcomingPaymentsScreenState();
+}
+
+class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
+  bool loading = true;
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  int windowDays = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final horizon = today.add(Duration(days: windowDays));
+    final entries = <({DateTime date, Transaction t})>[];
+    for (final t in tx) {
+      if (!t.isRecurring) continue;
+      for (final d in computeRecurrenceOccurrences(t)) {
+        final dd = DateTime(d.year, d.month, d.day);
+        if (dd.isBefore(today) || dd.isAfter(horizon)) continue;
+        entries.add((date: dd, t: t));
+      }
+    }
+    entries.sort((a, b) => a.date.compareTo(b.date));
+
+    final totalsByCurrency = <String, double>{};
+    for (final e in entries) {
+      if (e.t.type != TxType.expense) continue;
+      final cur = currencyOf(e.t.accountId);
+      totalsByCurrency[cur] = (totalsByCurrency[cur] ?? 0) + e.t.amount;
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('پرداخت‌های پیش‌رو')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(label: const Text('۳۰ روز آینده'), selected: windowDays == 30, onSelected: (_) => setState(() => windowDays = 30)),
+                ChoiceChip(label: const Text('۶۰ روز آینده'), selected: windowDays == 60, onSelected: (_) => setState(() => windowDays = 60)),
+                ChoiceChip(label: const Text('۹۰ روز آینده'), selected: windowDays == 90, onSelected: (_) => setState(() => windowDays = 90)),
+              ],
+            ),
+          ),
+          if (totalsByCurrency.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('جمع هزینه‌های پیش‌رو', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      ...totalsByCurrency.entries.map((e) => Text(ltr(formatMoney(e.value, e.key)))),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: entries.isEmpty
+                ? const Center(child: Text('در این بازه پرداخت پیش‌رویی وجود ندارد.'))
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: entries.length,
+                    itemBuilder: (context, i) {
+                      final e = entries[i];
+                      final daysLeft = e.date.difference(today).inDays;
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                            child: Icon(
+                              e.t.type == TxType.income ? Icons.add : Icons.remove,
+                              color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                            ),
+                          ),
+                          title: Text(categoryName(e.t.categoryId)),
+                          subtitle: Text(
+                            daysLeft == 0
+                                ? 'امروز'
+                                : '${ltr(DateFormat('dd.MM.yyyy').format(e.date))} • ${ltr('$daysLeft')} روز دیگر',
+                          ),
+                          trailing: Text(
+                            ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -4156,6 +4320,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 const _payslipLabels = <String, String>{
   'brutto': 'حقوق ناخالص',
   'netto': 'حقوق خالص',
+  'depositedAmount': 'مبلغ واریز شده به حساب',
   'lohnsteuer': 'مالیات بر درآمد',
   'solidaritaetszuschlag': 'مالیات همبستگی',
   'kirchensteuer': 'مالیات کلیسا',
@@ -4163,6 +4328,10 @@ const _payslipLabels = <String, String>{
   'pflegeversicherung': 'بیمه مراقبت',
   'rentenversicherung': 'بیمه بازنشستگی',
   'arbeitslosenversicherung': 'بیمه بیکاری',
+  'vermoegenswirksameLeistungen': 'مزایای پس‌انداز (VL)',
+  'betrieblicheAltersvorsorge': 'بازنشستگی تکمیلی کارفرما',
+  'vorschuss': 'پیش‌پرداخت کسرشده',
+  'sonstigeAbzuege': 'سایر کسورات',
 };
 
 class PayslipReviewScreen extends StatefulWidget {
@@ -4309,6 +4478,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     final details = PayslipDetails(
       brutto: num_('brutto'),
       netto: num_('netto'),
+      depositedAmount: num_('depositedAmount'),
       lohnsteuer: num_('lohnsteuer'),
       solidaritaetszuschlag: num_('solidaritaetszuschlag'),
       kirchensteuer: num_('kirchensteuer'),
@@ -4316,6 +4486,10 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       pflegeversicherung: num_('pflegeversicherung'),
       rentenversicherung: num_('rentenversicherung'),
       arbeitslosenversicherung: num_('arbeitslosenversicherung'),
+      vermoegenswirksameLeistungen: num_('vermoegenswirksameLeistungen'),
+      betrieblicheAltersvorsorge: num_('betrieblicheAltersvorsorge'),
+      vorschuss: num_('vorschuss'),
+      sonstigeAbzuege: num_('sonstigeAbzuege'),
       steuerklasse: steuerklasseCtrl.text.trim().isEmpty ? null : steuerklasseCtrl.text.trim(),
       arbeitgeber: arbeitgeberCtrl.text.trim().isEmpty ? null : arbeitgeberCtrl.text.trim(),
       abrechnungsmonat: monatCtrl.text.trim().isEmpty ? null : monatCtrl.text.trim(),
@@ -4548,6 +4722,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
         final map = {
           'brutto': pd.brutto,
           'netto': pd.netto,
+          'depositedAmount': pd.depositedAmount,
           'lohnsteuer': pd.lohnsteuer,
           'solidaritaetszuschlag': pd.solidaritaetszuschlag,
           'kirchensteuer': pd.kirchensteuer,
@@ -4555,6 +4730,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
           'pflegeversicherung': pd.pflegeversicherung,
           'rentenversicherung': pd.rentenversicherung,
           'arbeitslosenversicherung': pd.arbeitslosenversicherung,
+          'vermoegenswirksameLeistungen': pd.vermoegenswirksameLeistungen,
+          'betrieblicheAltersvorsorge': pd.betrieblicheAltersvorsorge,
+          'vorschuss': pd.vorschuss,
+          'sonstigeAbzuege': pd.sonstigeAbzuege,
         };
         for (final k in _payslipLabels.keys) {
           payslipNumCtrls[k]!.text = map[k] != null ? map[k]!.toStringAsFixed(2) : '';
@@ -4660,6 +4839,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
         payslipDetails = PayslipDetails(
           brutto: num_('brutto'),
           netto: num_('netto'),
+          depositedAmount: num_('depositedAmount'),
           lohnsteuer: num_('lohnsteuer'),
           solidaritaetszuschlag: num_('solidaritaetszuschlag'),
           kirchensteuer: num_('kirchensteuer'),
@@ -4667,6 +4847,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
           pflegeversicherung: num_('pflegeversicherung'),
           rentenversicherung: num_('rentenversicherung'),
           arbeitslosenversicherung: num_('arbeitslosenversicherung'),
+          vermoegenswirksameLeistungen: num_('vermoegenswirksameLeistungen'),
+          betrieblicheAltersvorsorge: num_('betrieblicheAltersvorsorge'),
+          vorschuss: num_('vorschuss'),
+          sonstigeAbzuege: num_('sonstigeAbzuege'),
           steuerklasse: payslipSteuerklasseCtrl.text.trim().isEmpty ? null : payslipSteuerklasseCtrl.text.trim(),
           arbeitgeber: payslipArbeitgeberCtrl.text.trim().isEmpty ? null : payslipArbeitgeberCtrl.text.trim(),
           abrechnungsmonat: payslipMonatCtrl.text.trim().isEmpty ? null : payslipMonatCtrl.text.trim(),
