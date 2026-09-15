@@ -1125,6 +1125,17 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'expense_by_category': {AppLanguage.fa: 'هزینه‌ها بر اساس دسته‌بندی', AppLanguage.en: 'Expenses by category', AppLanguage.de: 'Ausgaben nach Kategorie'},
   'last_6_months': {AppLanguage.fa: 'روند ۶ ماه اخیر', AppLanguage.en: 'Last 6 months trend', AppLanguage.de: 'Trend der letzten 6 Monate'},
   'gemini_key': {AppLanguage.fa: 'کلید Gemini API', AppLanguage.en: 'Gemini API key', AppLanguage.de: 'Gemini-API-Schlüssel'},
+  'app_lock_title': {AppLanguage.fa: 'قفل برنامه', AppLanguage.en: 'App lock', AppLanguage.de: 'App-Sperre'},
+  'backup_restore_title': {AppLanguage.fa: 'پشتیبان‌گیری و بازیابی', AppLanguage.en: 'Backup & restore', AppLanguage.de: 'Sicherung & Wiederherstellung'},
+  'scan_title': {AppLanguage.fa: 'اسکن رسید یا فیش حقوقی', AppLanguage.en: 'Scan receipt or payslip', AppLanguage.de: 'Beleg oder Lohnabrechnung scannen'},
+  'review_receipt': {AppLanguage.fa: 'بررسی رسید', AppLanguage.en: 'Review receipt', AppLanguage.de: 'Beleg prüfen'},
+  'review_payslip': {AppLanguage.fa: 'بررسی فیش حقوقی', AppLanguage.en: 'Review payslip', AppLanguage.de: 'Lohnabrechnung prüfen'},
+  'items': {AppLanguage.fa: 'اقلام خرید', AppLanguage.en: 'Purchase items', AppLanguage.de: 'Kaufartikel'},
+  'total': {AppLanguage.fa: 'جمع کل', AppLanguage.en: 'Total', AppLanguage.de: 'Gesamt'},
+  'edit': {AppLanguage.fa: 'ویرایش', AppLanguage.en: 'Edit', AppLanguage.de: 'Bearbeiten'},
+  'confirm': {AppLanguage.fa: 'تأیید', AppLanguage.en: 'Confirm', AppLanguage.de: 'Bestätigen'},
+  'retry': {AppLanguage.fa: 'تلاش دوباره', AppLanguage.en: 'Retry', AppLanguage.de: 'Erneut versuchen'},
+  'no_items_yet': {AppLanguage.fa: 'کالایی ثبت نشده.', AppLanguage.en: 'No items yet.', AppLanguage.de: 'Noch keine Artikel.'},
 };
 
 /// Looks up [key] in the current UI language; falls back to the Persian
@@ -1188,6 +1199,8 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   bool _loading = true;
   bool _lockEnabled = false;
   bool _unlocked = false;
+  DateTime? _pausedAt;
+  static const _graceDuration = Duration(minutes: 2);
 
   @override
   void initState() {
@@ -1214,8 +1227,18 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused && _lockEnabled) {
-      setState(() => _unlocked = false);
+    if (!_lockEnabled) return;
+    // The app also goes to "paused" for brief in-app interruptions (camera,
+    // gallery/file picker, share sheet, permission dialogs) - only actually
+    // re-lock if it's been away long enough to look like a real backgrounding.
+    if (state == AppLifecycleState.paused) {
+      _pausedAt = DateTime.now();
+    } else if (state == AppLifecycleState.resumed) {
+      final pausedAt = _pausedAt;
+      _pausedAt = null;
+      if (pausedAt != null && DateTime.now().difference(pausedAt) >= _graceDuration) {
+        setState(() => _unlocked = false);
+      }
     }
   }
 
@@ -1622,7 +1645,7 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('قفل برنامه')),
+      appBar: AppBar(title: Text(tr('app_lock_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -2781,7 +2804,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('پیش‌نویس‌ها')),
+      appBar: AppBar(title: Text(tr('drafts'))),
       body: tx.isEmpty
           ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
           : ListView(
@@ -2930,7 +2953,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('تراکنش‌های تکرارشونده')),
+      appBar: AppBar(title: Text(tr('recurring_transactions'))),
       body: tx.isEmpty
           ? const Center(child: Text('تراکنش تکرارشونده‌ای وجود ندارد.'))
           : ListView(
@@ -3059,7 +3082,7 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('تراکنش‌های تحت‌تأثیر حذف دسته‌بندی')),
+      appBar: AppBar(title: Text(tr('affected_by_category_delete'))),
       body: tx.isEmpty
           ? const Center(child: Text('تراکنشی که تحت‌تأثیر حذف دسته‌بندی قرار گرفته باشد وجود ندارد.'))
           : ListView(
@@ -3232,7 +3255,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('پشتیبان‌گیری و بازیابی')),
+      appBar: AppBar(title: Text(tr('backup_restore_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -3393,7 +3416,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('اسکن رسید یا فیش حقوقی')),
+      appBar: AppBar(title: Text(tr('scan_title'))),
       body: Stack(
         children: [
           ListView(
@@ -3670,7 +3693,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
-      appBar: AppBar(title: const Text('بررسی رسید')),
+      appBar: AppBar(title: Text(tr('review_receipt'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -3755,12 +3778,12 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('اقلام خرید', style: Theme.of(context).textTheme.titleMedium),
+              Text(tr('items'), style: Theme.of(context).textTheme.titleMedium),
               TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
             ],
           ),
           if (items.isEmpty)
-            const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('کالایی ثبت نشده.', style: TextStyle(color: Colors.grey))),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(tr('no_items_yet'), style: const TextStyle(color: Colors.grey))),
           ...items.asMap().entries.map((e) {
             final i = e.key;
             final it = e.value;
@@ -4013,7 +4036,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
-      appBar: AppBar(title: const Text('بررسی فیش حقوقی')),
+      appBar: AppBar(title: Text(tr('review_payslip'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -4709,12 +4732,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('اقلام خرید', style: Theme.of(context).textTheme.titleMedium),
+                Text(tr('items'), style: Theme.of(context).textTheme.titleMedium),
                 TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
               ],
             ),
             if (items.isEmpty)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('کالایی ثبت نشده.', style: TextStyle(color: Colors.grey))),
+              Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(tr('no_items_yet'), style: const TextStyle(color: Colors.grey))),
             ...items.asMap().entries.map((e) {
               final i = e.key;
               final it = e.value;
@@ -4842,7 +4865,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
       iconCodePoint: iconResult.icon.codePoint,
       iconNeedsRetry: iconResult.isFallback,
     );
-    setState(() => categories = [...categories, newCat]);
+    setState(() => categories = [...categories, newCat]..sort((a, b) => a.name.compareTo(b.name)));
     await Store.saveCategories(categories);
   }
 
@@ -4982,7 +5005,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       iconCodePoint: iconResult.icon.codePoint,
       iconNeedsRetry: iconResult.isFallback,
     );
-    setState(() => categories = [...categories, newCat]);
+    setState(() => categories = [...categories, newCat]..sort((a, b) => a.name.compareTo(b.name)));
     await Store.saveCategories(categories);
   }
 
@@ -5009,7 +5032,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       return;
     }
     setState(() {
-      categories = categories.map((x) => x.id == c.id ? x.copyWith(name: name) : x).toList();
+      categories = categories.map((x) => x.id == c.id ? x.copyWith(name: name) : x).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
     });
     await Store.saveCategories(categories);
   }
@@ -5107,7 +5131,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final tree = _buildTree(null, 0);
     return Scaffold(
-      appBar: AppBar(title: const Text('مدیریت دسته‌بندی‌ها')),
+      appBar: AppBar(title: Text(tr('category_management'))),
       drawer: const AppDrawer(currentIndex: 1),
       body: Column(
         children: [
@@ -5267,7 +5291,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('حساب‌ها')),
+      appBar: AppBar(title: Text(tr('accounts'))),
       drawer: const AppDrawer(currentIndex: 2),
       body: ListView(
         padding: const EdgeInsets.all(16),
