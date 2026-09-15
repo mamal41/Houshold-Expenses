@@ -1417,12 +1417,13 @@ class AppDrawer extends StatelessWidget {
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
-            item(8, Icons.upcoming_outlined, 'پرداخت‌های پیش‌رو', () => const UpcomingPaymentsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
             const Divider(height: 1),
             sectionLabel('داده'),
+            item(8, Icons.upcoming_outlined, 'پرداخت‌های پیش‌رو', () => const UpcomingPaymentsScreen()),
             item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
             item(7, Icons.bar_chart_outlined, 'گزارش‌گیری کامل', () => const ReportsScreen()),
+            item(9, Icons.trending_up, 'پیش‌بینی هزینه', () => const ForecastScreen()),
             const Divider(height: 1),
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
@@ -3675,6 +3676,220 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ],
                   ),
                 )),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ============================== Expense forecast ==============================
+
+const _gregorianMonthNames = [
+  'ژانویه',
+  'فوریه',
+  'مارس',
+  'آوریل',
+  'مه',
+  'ژوئن',
+  'ژوئیه',
+  'اوت',
+  'سپتامبر',
+  'اکتبر',
+  'نوامبر',
+  'دسامبر',
+];
+
+class ForecastScreen extends StatefulWidget {
+  const ForecastScreen({super.key});
+  @override
+  State<ForecastScreen> createState() => _ForecastScreenState();
+}
+
+class _ForecastScreenState extends State<ForecastScreen> {
+  bool loading = true;
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  late int targetMonth;
+
+  @override
+  void initState() {
+    super.initState();
+    targetMonth = DateTime.now().month;
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  String get primaryCurrency {
+    if (accounts.isEmpty) return 'EUR';
+    final counts = <String, int>{};
+    for (final a in accounts) {
+      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+    }
+    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final currency = primaryCurrency;
+    final now = DateTime.now();
+
+    // Only count a past occurrence of the target month if that whole month
+    // has already elapsed - an in-progress month would unfairly drag the
+    // average down.
+    final years = <int>{};
+    for (final t in tx) {
+      if (t.type != TxType.expense) continue;
+      if (t.date.month != targetMonth) continue;
+      final monthEnd = DateTime(t.date.year, t.date.month + 1, 0);
+      if (monthEnd.isAfter(now)) continue;
+      years.add(t.date.year);
+    }
+
+    final yearTotal = <int, double>{};
+    final categoryYearTotal = <String, Map<int, double>>{};
+    for (final t in tx) {
+      if (t.type != TxType.expense) continue;
+      if (t.date.month != targetMonth) continue;
+      if (!years.contains(t.date.year)) continue;
+      if (currencyOf(t.accountId) != currency) continue;
+      yearTotal[t.date.year] = (yearTotal[t.date.year] ?? 0) + t.amount;
+      final match = categories.where((c) => c.id == t.categoryId).toList();
+      var cat = match.isEmpty ? null : match.first;
+      while (cat?.parentId != null) {
+        final pm = categories.where((c) => c.id == cat!.parentId).toList();
+        if (pm.isEmpty) break;
+        cat = pm.first;
+      }
+      final key = cat?.id ?? '_uncategorized_';
+      categoryYearTotal.putIfAbsent(key, () => {});
+      categoryYearTotal[key]![t.date.year] = (categoryYearTotal[key]![t.date.year] ?? 0) + t.amount;
+    }
+
+    final avgTotal = years.isEmpty ? 0.0 : yearTotal.values.fold(0.0, (a, b) => a + b) / years.length;
+    final categoryAverages = <Category, double>{};
+    categoryYearTotal.forEach((id, yearMap) {
+      final avg = yearMap.values.fold(0.0, (a, b) => a + b) / years.length;
+      final match = categories.where((c) => c.id == id).toList();
+      categoryAverages[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = avg;
+    });
+    final sortedCategories = categoryAverages.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final maxCategoryAvg = sortedCategories.isEmpty ? 0.0 : sortedCategories.first.value;
+
+    // What's actually spent so far, if the target month is the current
+    // (in-progress) month - useful as a live comparison point.
+    double? spentSoFar;
+    if (targetMonth == now.month) {
+      spentSoFar = tx
+          .where((t) =>
+              t.type == TxType.expense && t.date.year == now.year && t.date.month == now.month && currencyOf(t.accountId) == currency)
+          .fold(0.0, (s, t) => s + t.amount);
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('پیش‌بینی هزینه')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text('ماه مورد نظر برای پیش‌بینی:', style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (var m = 1; m <= 12; m++)
+                ChoiceChip(
+                  label: Text(_gregorianMonthNames[m - 1]),
+                  selected: targetMonth == m,
+                  onSelected: (_) => setState(() => targetMonth = m),
+                ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          if (years.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                'برای این ماه، داده‌ی کافی از سال‌های قبل ثبت نشده تا بشه پیش‌بینی کرد.',
+                style: TextStyle(color: Colors.grey),
+              ),
+            )
+          else ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'میانگین هزینه‌ی ${_gregorianMonthNames[targetMonth - 1]} بر اساس ${years.length} سال گذشته',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(ltr(formatMoney(avgTotal, currency)), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                    if (spentSoFar != null) ...[
+                      const Divider(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('هزینه‌ی این ماه تا الان'),
+                          Text(ltr(formatMoney(spentSoFar, currency)), style: const TextStyle(fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        spentSoFar > avgTotal
+                            ? 'تا الان بیشتر از میانگین سال‌های قبل خرج شده.'
+                            : 'تا الان کمتر از میانگین سال‌های قبل خرج شده.',
+                        style: TextStyle(fontSize: 12, color: spentSoFar > avgTotal ? Colors.red.shade700 : Colors.green.shade700),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            if (sortedCategories.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              Text('میانگین بر اساس دسته‌بندی', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              ...sortedCategories.map((e) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(e.key.name),
+                            Text(ltr(formatMoney(e.value, currency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: maxCategoryAvg > 0 ? e.value / maxCategoryAvg : 0,
+                            minHeight: 6,
+                            backgroundColor: Colors.grey.shade200,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )),
+            ],
           ],
         ],
       ),
