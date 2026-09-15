@@ -3796,7 +3796,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
       spentSoFar = tx
           .where((t) =>
               t.type == TxType.expense && t.date.year == now.year && t.date.month == now.month && currencyOf(t.accountId) == currency)
-          .fold(0.0, (s, t) => s + t.amount);
+          .fold<double>(0.0, (s, t) => s + t.amount);
     }
 
     return Scaffold(
