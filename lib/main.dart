@@ -1401,6 +1401,7 @@ class AppDrawer extends StatelessWidget {
             const Divider(height: 1),
             sectionLabel('داده'),
             item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
+            item(7, Icons.bar_chart_outlined, 'گزارش‌گیری کامل', () => const ReportsScreen()),
             const Divider(height: 1),
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
@@ -3184,6 +3185,337 @@ Future<String> _buildExcelFile() async {
   final path = '${dir.path}/money_management_export_${DateTime.now().millisecondsSinceEpoch}.xlsx';
   await File(path).writeAsBytes(bytes);
   return path;
+}
+
+// ============================== Reports ==============================
+
+enum _ReportPreset { thisMonth, lastMonth, thisQuarter, lastQuarter, thisYear, lastYear, custom }
+
+class ReportsScreen extends StatefulWidget {
+  const ReportsScreen({super.key});
+  @override
+  State<ReportsScreen> createState() => _ReportsScreenState();
+}
+
+class _ReportsScreenState extends State<ReportsScreen> {
+  bool loading = true;
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+
+  _ReportPreset preset = _ReportPreset.thisMonth;
+  DateTime rangeStart = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime rangeEnd = DateTime.now();
+  String? categoryFilter; // category id, null = all
+  String? accountFilter; // account id, null = all
+  TxType? typeFilter; // null = both
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  void _applyPreset(_ReportPreset p) {
+    final now = DateTime.now();
+    setState(() {
+      preset = p;
+      switch (p) {
+        case _ReportPreset.thisMonth:
+          rangeStart = DateTime(now.year, now.month, 1);
+          rangeEnd = now;
+          break;
+        case _ReportPreset.lastMonth:
+          final lastMonthEnd = DateTime(now.year, now.month, 1).subtract(const Duration(days: 1));
+          rangeStart = DateTime(lastMonthEnd.year, lastMonthEnd.month, 1);
+          rangeEnd = lastMonthEnd;
+          break;
+        case _ReportPreset.thisQuarter:
+          final qStartMonth = ((now.month - 1) ~/ 3) * 3 + 1;
+          rangeStart = DateTime(now.year, qStartMonth, 1);
+          rangeEnd = now;
+          break;
+        case _ReportPreset.lastQuarter:
+          final qStartMonth = ((now.month - 1) ~/ 3) * 3 + 1;
+          final thisQStart = DateTime(now.year, qStartMonth, 1);
+          final lastQEnd = thisQStart.subtract(const Duration(days: 1));
+          final lastQStartMonth = ((lastQEnd.month - 1) ~/ 3) * 3 + 1;
+          rangeStart = DateTime(lastQEnd.year, lastQStartMonth, 1);
+          rangeEnd = lastQEnd;
+          break;
+        case _ReportPreset.thisYear:
+          rangeStart = DateTime(now.year, 1, 1);
+          rangeEnd = now;
+          break;
+        case _ReportPreset.lastYear:
+          rangeStart = DateTime(now.year - 1, 1, 1);
+          rangeEnd = DateTime(now.year - 1, 12, 31);
+          break;
+        case _ReportPreset.custom:
+          break;
+      }
+    });
+  }
+
+  Future<void> _pickCustomRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2015),
+      lastDate: DateTime.now(),
+      initialDateRange: DateTimeRange(start: rangeStart, end: rangeEnd),
+    );
+    if (picked == null) return;
+    setState(() {
+      preset = _ReportPreset.custom;
+      rangeStart = picked.start;
+      rangeEnd = picked.end;
+    });
+  }
+
+  /// The equivalent-length period immediately before [rangeStart].
+  DateTimeRange get _previousRange {
+    final days = rangeEnd.difference(rangeStart).inDays + 1;
+    final prevEnd = rangeStart.subtract(const Duration(days: 1));
+    final prevStart = prevEnd.subtract(Duration(days: days - 1));
+    return DateTimeRange(start: prevStart, end: prevEnd);
+  }
+
+  bool _matchesFilters(Transaction t) {
+    if (categoryFilter != null && t.categoryId != categoryFilter) return false;
+    if (accountFilter != null && t.accountId != accountFilter) return false;
+    if (typeFilter != null && t.type != typeFilter) return false;
+    return true;
+  }
+
+  List<Transaction> _inRange(DateTimeRange range) {
+    return tx.where((t) {
+      if (!_matchesFilters(t)) return false;
+      final d = DateTime(t.date.year, t.date.month, t.date.day);
+      return !d.isBefore(range.start) && !d.isAfter(range.end);
+    }).toList();
+  }
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  Map<Category, double> _expenseByTopCategory(List<Transaction> list, String currency) {
+    final map = <String, double>{};
+    for (final t in list) {
+      if (t.type != TxType.expense) continue;
+      if (currencyOf(t.accountId) != currency) continue;
+      final match = categories.where((c) => c.id == t.categoryId).toList();
+      var cat = match.isEmpty ? null : match.first;
+      while (cat?.parentId != null) {
+        final pm = categories.where((c) => c.id == cat!.parentId).toList();
+        if (pm.isEmpty) break;
+        cat = pm.first;
+      }
+      final key = cat?.id ?? '_uncategorized_';
+      map[key] = (map[key] ?? 0) + t.amount;
+    }
+    final result = <Category, double>{};
+    map.forEach((id, amount) {
+      final match = categories.where((c) => c.id == id).toList();
+      result[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = amount;
+    });
+    return result;
+  }
+
+  String _presetLabel(_ReportPreset p) => switch (p) {
+        _ReportPreset.thisMonth => 'این ماه',
+        _ReportPreset.lastMonth => 'ماه قبل',
+        _ReportPreset.thisQuarter => 'این فصل',
+        _ReportPreset.lastQuarter => 'فصل قبل',
+        _ReportPreset.thisYear => 'امسال',
+        _ReportPreset.lastYear => 'پارسال',
+        _ReportPreset.custom => 'بازه‌ی دلخواه',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final currentTx = _inRange(DateTimeRange(start: rangeStart, end: rangeEnd));
+    final prevRange = _previousRange;
+    final prevTx = _inRange(prevRange);
+
+    // Primary currency for this report = most common currency among the
+    // filtered accounts (or the filtered account itself, if one is chosen).
+    String primaryCurrency;
+    if (accountFilter != null) {
+      primaryCurrency = currencyOf(accountFilter!);
+    } else {
+      final counts = <String, int>{};
+      for (final a in accounts) {
+        counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+      }
+      primaryCurrency = counts.isEmpty ? 'EUR' : (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+    }
+
+    double sumFor(List<Transaction> list, TxType type) => list
+        .where((t) => t.type == type && currencyOf(t.accountId) == primaryCurrency)
+        .fold(0.0, (s, t) => s + t.amount);
+
+    final curIncome = sumFor(currentTx, TxType.income);
+    final curExpense = sumFor(currentTx, TxType.expense);
+    final prevIncome = sumFor(prevTx, TxType.income);
+    final prevExpense = sumFor(prevTx, TxType.expense);
+
+    final byCategory = _expenseByTopCategory(currentTx, primaryCurrency).entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final maxCategoryAmount = byCategory.isEmpty ? 0.0 : byCategory.first.value;
+
+    Widget comparisonRow(String label, double cur, double prev, {required bool higherIsBad}) {
+      String changeText = '';
+      Color changeColor = Colors.grey;
+      if (prev > 0) {
+        final change = (cur - prev) / prev * 100;
+        final up = change >= 0;
+        final bad = higherIsBad ? up : !up;
+        changeColor = bad ? Colors.red.shade700 : Colors.green.shade700;
+        changeText = '${ltr('${up ? '+' : ''}${change.round()}%')} نسبت به دوره‌ی قبل';
+      }
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(ltr(formatMoney(cur, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.bold)),
+                if (changeText.isNotEmpty) Text(changeText, style: TextStyle(fontSize: 11, color: changeColor)),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('گزارش‌گیری کامل')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final p in _ReportPreset.values.where((p) => p != _ReportPreset.custom))
+                ChoiceChip(label: Text(_presetLabel(p)), selected: preset == p, onSelected: (_) => _applyPreset(p)),
+              ActionChip(
+                label: Text(preset == _ReportPreset.custom
+                    ? '${ltr(DateFormat('dd.MM.yy').format(rangeStart))} - ${ltr(DateFormat('dd.MM.yy').format(rangeEnd))}'
+                    : 'بازه‌ی دلخواه'),
+                avatar: const Icon(Icons.date_range, size: 18),
+                onPressed: _pickCustomRange,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String?>(
+                  initialValue: categoryFilter,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'دسته‌بندی', border: OutlineInputBorder(), isDense: true),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('همه')),
+                    ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name, overflow: TextOverflow.ellipsis))),
+                  ],
+                  onChanged: (v) => setState(() => categoryFilter = v),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonFormField<String?>(
+                  initialValue: accountFilter,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('همه')),
+                    ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis))),
+                  ],
+                  onChanged: (v) => setState(() => accountFilter = v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<TxType?>(
+            segments: const [
+              ButtonSegment(value: null, label: Text('همه')),
+              ButtonSegment(value: TxType.income, label: Text('درآمد')),
+              ButtonSegment(value: TxType.expense, label: Text('هزینه')),
+            ],
+            selected: {typeFilter},
+            onSelectionChanged: (s) => setState(() => typeFilter = s.first),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('خلاصه (${currentTx.length} تراکنش)', style: Theme.of(context).textTheme.titleMedium),
+                  const Divider(),
+                  if (typeFilter != TxType.expense) comparisonRow('درآمد', curIncome, prevIncome, higherIsBad: false),
+                  if (typeFilter != TxType.income) comparisonRow('هزینه', curExpense, prevExpense, higherIsBad: true),
+                  if (typeFilter == null)
+                    comparisonRow('خالص', curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
+                ],
+              ),
+            ),
+          ),
+          if (byCategory.isNotEmpty && typeFilter != TxType.income) ...[
+            const SizedBox(height: 16),
+            Text('هزینه بر اساس دسته‌بندی', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            ...byCategory.map((e) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(e.key.name),
+                          Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: maxCategoryAmount > 0 ? e.value / maxCategoryAmount : 0,
+                          minHeight: 6,
+                          backgroundColor: Colors.grey.shade200,
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class BackupRestoreScreen extends StatefulWidget {
