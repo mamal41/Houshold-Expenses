@@ -506,9 +506,8 @@ DateTime? nextOccurrencePreview(Transaction t) {
 /// Generates the full sequence of occurrence dates for a recurring
 /// transaction, starting from its own date, following its recurrence
 /// pattern, until either the configured installment count or end date is
-/// reached. Returns an empty list for non-recurring or truly unlimited
-/// (no installments and no end date) transactions, since "last occurrence"
-/// has no meaning for those.
+/// reached. For a truly unlimited transaction (no installments and no end
+/// date), generation is capped at 200 occurrences as a safety bound.
 List<DateTime> computeRecurrenceOccurrences(Transaction t) {
   if (!t.isRecurring) return [];
   final unlimited = t.installments == null && t.recurrenceEndDate == null;
@@ -559,6 +558,40 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
         return result;
     }
     current = next;
+  }
+  return result;
+}
+
+/// Represents one occurrence of a transaction on a specific date, for
+/// building future-looking views (upcoming payments, calendar, month tabs)
+/// that need to show recurring transactions' not-yet-due occurrences
+/// alongside real stored transactions. [isReal] is true when this
+/// occurrence IS the transaction's own stored record (safe to edit/delete
+/// directly); false for a virtual projected future occurrence of a
+/// recurring transaction (view-only - edit the recurring template itself).
+/// Whether an occurrence is "not yet due" is a separate question decided by
+/// comparing [date] to today, regardless of [isReal].
+typedef TxOccurrence = ({DateTime date, Transaction t, bool isReal});
+
+/// Every real stored transaction, plus a virtual entry for each future
+/// occurrence of every recurring transaction, up to [horizonDays] ahead.
+/// Virtual entries are never persisted - they exist only to power
+/// forward-looking displays.
+List<TxOccurrence> occurrencesWithRecurringProjections(List<Transaction> tx, {int horizonDays = 400}) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final horizon = today.add(Duration(days: horizonDays));
+  final result = <TxOccurrence>[];
+  for (final t in tx) {
+    result.add((date: t.date, t: t, isReal: true));
+    if (!t.isRecurring) continue;
+    final anchor = DateTime(t.date.year, t.date.month, t.date.day);
+    for (final d in computeRecurrenceOccurrences(t)) {
+      final dd = DateTime(d.year, d.month, d.day);
+      if (dd == anchor) continue; // already represented by the real stored transaction above
+      if (!dd.isAfter(today) || dd.isAfter(horizon)) continue;
+      result.add((date: dd, t: t, isReal: false));
+    }
   }
   return result;
 }
@@ -2472,7 +2505,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 final today = DateTime.now();
                 final todayMidnight = DateTime(today.year, today.month, today.day);
                 final pastOrDue = tx.where((t) => !t.date.isAfter(todayMidnight)).toList();
-                final future = tx.where((t) => t.date.isAfter(todayMidnight)).toList();
+                // Not-yet-due entries: real future-dated transactions, plus
+                // projected occurrences of recurring transactions.
+                final future = occurrencesWithRecurringProjections(tx, horizonDays: 400)
+                    .where((e) => e.date.isAfter(todayMidnight))
+                    .toList()
+                  ..sort((a, b) => a.date.compareTo(b.date));
+                var nextMonthNum = today.month + 1;
+                var nextMonthYear = today.year;
+                if (nextMonthNum > 12) {
+                  nextMonthNum = 1;
+                  nextMonthYear++;
+                }
 
                 // Group already-due transactions by month, most recent first
                 // (tx is already sorted by date descending), keeping only
@@ -2491,6 +2535,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 return Column(
                   children: [
+                    if (future.isNotEmpty)
+                      Theme(
+                        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          initiallyExpanded: false,
+                          tilePadding: EdgeInsets.zero,
+                          title: Text(
+                            '${_gregorianMonthNames[nextMonthNum - 1]} $nextMonthYear (${future.length})',
+                            style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                          ),
+                          children: future
+                              .map((e) => _buildTxTile(e.t, dimmed: true, projected: !e.isReal, displayDate: e.date))
+                              .toList(),
+                        ),
+                      ),
                     ...limitedKeys.map((key) {
                       final parts = key.split('-');
                       final y = int.parse(parts[0]);
@@ -2506,19 +2565,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       );
                     }),
-                    if (future.isNotEmpty)
-                      Theme(
-                        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                        child: ExpansionTile(
-                          initiallyExpanded: false,
-                          tilePadding: EdgeInsets.zero,
-                          title: Text(
-                            'ماه بعد (${future.length})',
-                            style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.w500),
-                          ),
-                          children: future.map((t) => _buildTxTile(t, dimmed: true)).toList(),
-                        ),
-                      ),
                   ],
                 );
               }(),
@@ -2536,8 +2582,44 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildTxTile(Transaction t, {bool dimmed = false}) {
+  Widget _buildTxTile(Transaction t, {bool dimmed = false, bool projected = false, DateTime? displayDate}) {
     final opacity = dimmed ? 0.55 : 1.0;
+    final tile = Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+          child: Icon(
+            iconForCategory(
+              categories.where((c) => c.id == t.categoryId).isEmpty
+                  ? Category(id: t.categoryId, name: '', type: t.type)
+                  : categories.firstWhere((c) => c.id == t.categoryId),
+              categories,
+            ),
+            color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+          ),
+        ),
+        title: Text(categoryName(t.categoryId)),
+        subtitle: Text(
+          '${ltr(DateFormat('dd.MM.yyyy').format(displayDate ?? t.date))}'
+          '${projected ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
+          '${t.draft ? ' • پیش‌نویس' : ''}',
+        ),
+        trailing: Text(
+          ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+          ),
+        ),
+        onTap: () => _openEditor(existing: t),
+      ),
+    );
+    if (projected) {
+      // A projected occurrence isn't its own stored transaction, so it
+      // can't be edited/deleted directly - tapping opens the underlying
+      // recurring transaction instead, and swipe actions are disabled.
+      return Opacity(opacity: opacity, child: tile);
+    }
     return Opacity(
       opacity: opacity,
       child: Dismissible(
@@ -2574,39 +2656,11 @@ class _HomeScreenState extends State<HomeScreen> {
               false;
         },
         onDismissed: (_) => _delete(t),
-        child: Card(
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
-              child: Icon(
-                iconForCategory(
-                  categories.where((c) => c.id == t.categoryId).isEmpty
-                      ? Category(id: t.categoryId, name: '', type: t.type)
-                      : categories.firstWhere((c) => c.id == t.categoryId),
-                  categories,
-                ),
-                color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
-              ),
-            ),
-            title: Text(categoryName(t.categoryId)),
-            subtitle: Text(
-              '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
-              '${t.isRecurring ? ' • تکرارشونده' : ''}'
-              '${t.draft ? ' • پیش‌نویس' : ''}',
-            ),
-            trailing: Text(
-              ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
-              ),
-            ),
-            onTap: () => _openEditor(existing: t),
-          ),
-        ),
+        child: tile,
       ),
     );
   }
+
 }
 
 class _MonthStat extends StatelessWidget {
@@ -3195,12 +3249,16 @@ class UpcomingPaymentsScreen extends StatefulWidget {
   State<UpcomingPaymentsScreen> createState() => _UpcomingPaymentsScreenState();
 }
 
+enum _UpcomingRange { endOfThisMonth, nextMonth, custom }
+
 class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   bool loading = true;
   List<Transaction> tx = [];
   List<Category> categories = [];
   List<Account> accounts = [];
-  int windowDays = 30;
+  _UpcomingRange range = _UpcomingRange.endOfThisMonth;
+  DateTime customMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  bool showChart = false;
 
   @override
   void initState() {
@@ -3225,21 +3283,86 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     return m.isEmpty ? 'EUR' : m.first.currency;
   }
 
+  String get primaryCurrency {
+    if (accounts.isEmpty) return 'EUR';
+    final counts = <String, int>{};
+    for (final a in accounts) {
+      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+    }
+    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+  }
+
+  Future<void> _pickCustomMonth() async {
+    var y = customMonth.year;
+    var m = customMonth.month;
+    final picked = await showDialog<DateTime>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('انتخاب ماه'),
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<int>(
+                  initialValue: m,
+                  decoration: const InputDecoration(labelText: 'ماه'),
+                  items: List.generate(12, (i) => i + 1).map((mo) => DropdownMenuItem(value: mo, child: Text(_gregorianMonthNames[mo - 1]))).toList(),
+                  onChanged: (v) => setLocal(() => m = v ?? m),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: DropdownButtonFormField<int>(
+                  initialValue: y,
+                  decoration: const InputDecoration(labelText: 'سال'),
+                  items: List.generate(4, (i) => DateTime.now().year + i)
+                      .map((yr) => DropdownMenuItem(value: yr, child: Text(ltr('$yr'))))
+                      .toList(),
+                  onChanged: (v) => setLocal(() => y = v ?? y),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, DateTime(y, m, 1)), child: Text(tr('confirm'))),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    setState(() {
+      customMonth = picked;
+      range = _UpcomingRange.custom;
+    });
+  }
+
+  DateTimeRange _rangeFor(_UpcomingRange r, DateTime today) {
+    switch (r) {
+      case _UpcomingRange.endOfThisMonth:
+        return DateTimeRange(start: today, end: DateTime(today.year, today.month + 1, 0));
+      case _UpcomingRange.nextMonth:
+        final start = DateTime(today.year, today.month + 1, 1);
+        return DateTimeRange(start: start, end: DateTime(start.year, start.month + 1, 0));
+      case _UpcomingRange.custom:
+        return DateTimeRange(start: customMonth, end: DateTime(customMonth.year, customMonth.month + 1, 0));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    final horizon = today.add(Duration(days: windowDays));
-    final entries = <({DateTime date, Transaction t})>[];
-    for (final t in tx) {
-      if (!t.isRecurring) continue;
-      for (final d in computeRecurrenceOccurrences(t)) {
-        final dd = DateTime(d.year, d.month, d.day);
-        if (dd.isBefore(today) || dd.isAfter(horizon)) continue;
-        entries.add((date: dd, t: t));
-      }
-    }
-    entries.sort((a, b) => a.date.compareTo(b.date));
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final selectedRange = _rangeFor(range, today);
+    final currency = primaryCurrency;
+
+    final allOccurrences = occurrencesWithRecurringProjections(tx, horizonDays: 220);
+    final entries = allOccurrences
+        .where((e) => !e.date.isBefore(selectedRange.start) && !e.date.isAfter(selectedRange.end) && !e.date.isBefore(today))
+        .toList()
+      ..sort((a, b) => a.date.compareTo(b.date));
 
     final totalsByCurrency = <String, double>{};
     for (final e in entries) {
@@ -3247,6 +3370,30 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       final cur = currencyOf(e.t.accountId);
       totalsByCurrency[cur] = (totalsByCurrency[cur] ?? 0) + e.t.amount;
     }
+
+    // 6-month lookahead chart data (projected expense per month, including
+    // recurring occurrences).
+    final chartMonths = <({DateTime month, double expense})>[];
+    for (var i = 0; i < 6; i++) {
+      var y = today.year;
+      var m = today.month + i;
+      while (m > 12) {
+        m -= 12;
+        y++;
+      }
+      final mStart = DateTime(y, m, 1);
+      final mEnd = DateTime(y, m + 1, 0);
+      final total = allOccurrences
+          .where((e) =>
+              e.t.type == TxType.expense &&
+              currencyOf(e.t.accountId) == currency &&
+              !e.date.isBefore(mStart) &&
+              !e.date.isAfter(mEnd) &&
+              !e.date.isBefore(today))
+          .fold(0.0, (s, e) => s + e.t.amount);
+      chartMonths.add((month: mStart, expense: total));
+    }
+    final maxChart = chartMonths.fold(0.0, (m, c) => c.expense > m ? c.expense : m);
 
     return Scaffold(
       appBar: AppBar(title: const Text('پرداخت‌های پیش‌رو')),
@@ -3256,13 +3403,86 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
             padding: const EdgeInsets.all(16),
             child: Wrap(
               spacing: 8,
+              runSpacing: 8,
               children: [
-                ChoiceChip(label: const Text('۳۰ روز آینده'), selected: windowDays == 30, onSelected: (_) => setState(() => windowDays = 30)),
-                ChoiceChip(label: const Text('۶۰ روز آینده'), selected: windowDays == 60, onSelected: (_) => setState(() => windowDays = 60)),
-                ChoiceChip(label: const Text('۹۰ روز آینده'), selected: windowDays == 90, onSelected: (_) => setState(() => windowDays = 90)),
+                ChoiceChip(
+                  label: const Text('تا آخر این ماه'),
+                  selected: range == _UpcomingRange.endOfThisMonth,
+                  onSelected: (_) => setState(() => range = _UpcomingRange.endOfThisMonth),
+                ),
+                ChoiceChip(
+                  label: const Text('ماه بعد'),
+                  selected: range == _UpcomingRange.nextMonth,
+                  onSelected: (_) => setState(() => range = _UpcomingRange.nextMonth),
+                ),
+                ActionChip(
+                  label: Text(range == _UpcomingRange.custom
+                      ? '${_gregorianMonthNames[customMonth.month - 1]} ${customMonth.year}'
+                      : 'ماه دلخواه'),
+                  avatar: const Icon(Icons.calendar_month_outlined, size: 18),
+                  onPressed: _pickCustomMonth,
+                ),
+                FilterChip(
+                  label: const Text('نمودار ۶ ماه آینده'),
+                  selected: showChart,
+                  onSelected: (v) => setState(() => showChart = v),
+                ),
               ],
             ),
           ),
+          if (showChart)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text('هزینه‌ی پیش‌بینی‌شده (شامل تراکنش‌های تکرارشونده)', style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 160,
+                        child: maxChart <= 0
+                            ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
+                            : BarChart(
+                                BarChartData(
+                                  maxY: maxChart * 1.15,
+                                  barGroups: [
+                                    for (var i = 0; i < chartMonths.length; i++)
+                                      BarChartGroupData(x: i, barRods: [
+                                        BarChartRodData(toY: chartMonths[i].expense, color: Colors.red.shade400, width: 16),
+                                      ]),
+                                  ],
+                                  titlesData: FlTitlesData(
+                                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                    bottomTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: true,
+                                        getTitlesWidget: (value, meta) {
+                                          final i = value.toInt();
+                                          if (i < 0 || i >= chartMonths.length) return const SizedBox.shrink();
+                                          return Padding(
+                                            padding: const EdgeInsets.only(top: 4),
+                                            child: Text(_gregorianMonthNames[chartMonths[i].month.month - 1].substring(0, 3),
+                                                style: const TextStyle(fontSize: 10)),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  gridData: const FlGridData(show: false),
+                                  borderData: FlBorderData(show: false),
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (totalsByCurrency.isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -3274,7 +3494,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                     children: [
                       const Text('جمع هزینه‌های پیش‌رو', style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 4),
-                      ...totalsByCurrency.entries.map((e) => Text(ltr(formatMoney(e.value, e.key)))),
+                      ...totalsByCurrency.entries.map((e) => Text(ltr(formatMoney(e.value, e.key)), style: const TextStyle(color: Colors.red))),
                     ],
                   ),
                 ),
@@ -3290,26 +3510,29 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                     itemBuilder: (context, i) {
                       final e = entries[i];
                       final daysLeft = e.date.difference(today).inDays;
-                      return Card(
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
-                            child: Icon(
-                              e.t.type == TxType.income ? Icons.add : Icons.remove,
-                              color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                      return Opacity(
+                        opacity: e.isReal ? 1.0 : 0.6,
+                        child: Card(
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                              child: Icon(
+                                e.t.type == TxType.income ? Icons.add : Icons.remove,
+                                color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                              ),
                             ),
-                          ),
-                          title: Text(categoryName(e.t.categoryId)),
-                          subtitle: Text(
-                            daysLeft == 0
-                                ? 'امروز'
-                                : '${ltr(DateFormat('dd.MM.yyyy').format(e.date))} • ${ltr('$daysLeft')} روز دیگر',
-                          ),
-                          trailing: Text(
-                            ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                            title: Text(categoryName(e.t.categoryId)),
+                            subtitle: Text(
+                              daysLeft == 0
+                                  ? 'امروز'
+                                  : '${ltr(DateFormat('dd.MM.yyyy').format(e.date))} • ${ltr('$daysLeft')} روز دیگر',
+                            ),
+                            trailing: Text(
+                              ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                              ),
                             ),
                           ),
                         ),
@@ -4231,27 +4454,33 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
     final dayIncome = <int, double>{};
     final dayExpense = <int, double>{};
-    for (final t in tx) {
-      if (currencyOf(t.accountId) != currency) continue;
-      if (t.date.year != month.year || t.date.month != month.month) continue;
-      if (t.type == TxType.income) {
-        dayIncome[t.date.day] = (dayIncome[t.date.day] ?? 0) + t.amount;
+    final dayIncomeProjected = <int, double>{};
+    final dayExpenseProjected = <int, double>{};
+    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 400)) {
+      if (currencyOf(e.t.accountId) != currency) continue;
+      if (e.date.year != month.year || e.date.month != month.month) continue;
+      final notYetDue = e.date.isAfter(today);
+      if (e.t.type == TxType.income) {
+        if (notYetDue) {
+          dayIncomeProjected[e.date.day] = (dayIncomeProjected[e.date.day] ?? 0) + e.t.amount;
+        } else {
+          dayIncome[e.date.day] = (dayIncome[e.date.day] ?? 0) + e.t.amount;
+        }
       } else {
-        dayExpense[t.date.day] = (dayExpense[t.date.day] ?? 0) + t.amount;
+        if (notYetDue) {
+          dayExpenseProjected[e.date.day] = (dayExpenseProjected[e.date.day] ?? 0) + e.t.amount;
+        } else {
+          dayExpense[e.date.day] = (dayExpense[e.date.day] ?? 0) + e.t.amount;
+        }
       }
     }
 
     double dueIncome = 0, dueExpense = 0, plannedIncome = 0, plannedExpense = 0;
     for (var d = 1; d <= daysInMonth; d++) {
-      final date = DateTime(month.year, month.month, d);
-      final future = date.isAfter(today);
-      if (future) {
-        plannedIncome += dayIncome[d] ?? 0;
-        plannedExpense += dayExpense[d] ?? 0;
-      } else {
-        dueIncome += dayIncome[d] ?? 0;
-        dueExpense += dayExpense[d] ?? 0;
-      }
+      dueIncome += dayIncome[d] ?? 0;
+      dueExpense += dayExpense[d] ?? 0;
+      plannedIncome += dayIncomeProjected[d] ?? 0;
+      plannedExpense += dayExpenseProjected[d] ?? 0;
     }
 
     // DateTime.weekday: Monday=1 .. Sunday=7. Grid starts on Saturday
@@ -4295,9 +4524,14 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text('جمع تا امروز', style: TextStyle(fontWeight: FontWeight.bold)),
-                        Text(
-                          '${ltr('+${formatMoney(dueIncome, currency)}')}   ${ltr('-${formatMoney(dueExpense, currency)}')}',
-                          style: const TextStyle(fontSize: 12),
+                        Row(
+                          children: [
+                            Text(ltr('+${formatMoney(dueIncome, currency)}'),
+                                style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w600)),
+                            const SizedBox(width: 8),
+                            Text(ltr('-${formatMoney(dueExpense, currency)}'),
+                                style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600)),
+                          ],
                         ),
                       ],
                     ),
@@ -4307,9 +4541,14 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('جمع سررسیدنشده', style: TextStyle(color: Colors.grey.shade600)),
-                          Text(
-                            '${ltr('+${formatMoney(plannedIncome, currency)}')}   ${ltr('-${formatMoney(plannedExpense, currency)}')}',
-                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          Row(
+                            children: [
+                              Text(ltr('+${formatMoney(plannedIncome, currency)}'),
+                                  style: TextStyle(fontSize: 12, color: Colors.green.shade200, fontWeight: FontWeight.w600)),
+                              const SizedBox(width: 8),
+                              Text(ltr('-${formatMoney(plannedExpense, currency)}'),
+                                  style: TextStyle(fontSize: 12, color: Colors.red.shade200, fontWeight: FontWeight.w600)),
+                            ],
                           ),
                         ],
                       ),
@@ -4340,8 +4579,8 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                   final date = DateTime(month.year, month.month, day);
                   final future = date.isAfter(today);
                   final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
-                  final inc = dayIncome[day] ?? 0;
-                  final exp = dayExpense[day] ?? 0;
+                  final inc = (dayIncome[day] ?? 0) + (dayIncomeProjected[day] ?? 0);
+                  final exp = (dayExpense[day] ?? 0) + (dayExpenseProjected[day] ?? 0);
                   return Container(
                     margin: const EdgeInsets.all(2),
                     padding: const EdgeInsets.symmetric(vertical: 4),
