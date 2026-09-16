@@ -162,21 +162,25 @@ class Account {
   final String name;
   final AccountType type;
   final String currency;
-  const Account({required this.id, required this.name, required this.type, required this.currency});
+  final double initialBalance;
+  const Account({required this.id, required this.name, required this.type, required this.currency, this.initialBalance = 0});
 
-  Account copyWith({String? name, AccountType? type, String? currency}) => Account(
+  Account copyWith({String? name, AccountType? type, String? currency, double? initialBalance}) => Account(
         id: id,
         name: name ?? this.name,
         type: type ?? this.type,
         currency: currency ?? this.currency,
+        initialBalance: initialBalance ?? this.initialBalance,
       );
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'type': type.name, 'currency': currency};
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'name': name, 'type': type.name, 'currency': currency, 'initialBalance': initialBalance};
   factory Account.fromJson(Map<String, dynamic> j) => Account(
         id: j['id'],
         name: j['name'],
         type: AccountType.values.byName(j['type'] ?? 'bank'),
         currency: j['currency'] ?? 'EUR',
+        initialBalance: (j['initialBalance'] as num?)?.toDouble() ?? 0,
       );
 }
 
@@ -184,13 +188,35 @@ class ReceiptItemEntry {
   final String name;
   final double? quantity;
   final double? price;
-  const ReceiptItemEntry({required this.name, this.quantity, this.price});
+  final DateTime? warrantyUntil; // for physical/durable goods, if inferable from the receipt
+  final DateTime? returnUntil; // last day the item can be returned/exchanged
+  final String? warrantyNote; // free-text terms, e.g. "۲ سال گارانتی شرکتی"
+  const ReceiptItemEntry({
+    required this.name,
+    this.quantity,
+    this.price,
+    this.warrantyUntil,
+    this.returnUntil,
+    this.warrantyNote,
+  });
 
-  Map<String, dynamic> toJson() => {'name': name, 'quantity': quantity, 'price': price};
+  bool get hasWarrantyInfo => warrantyUntil != null || returnUntil != null || (warrantyNote?.isNotEmpty ?? false);
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'quantity': quantity,
+        'price': price,
+        'warrantyUntil': warrantyUntil?.toIso8601String(),
+        'returnUntil': returnUntil?.toIso8601String(),
+        'warrantyNote': warrantyNote,
+      };
   factory ReceiptItemEntry.fromJson(Map<String, dynamic> j) => ReceiptItemEntry(
         name: j['name'] ?? '',
         quantity: (j['quantity'] as num?)?.toDouble(),
         price: (j['price'] as num?)?.toDouble(),
+        warrantyUntil: j['warrantyUntil'] != null ? DateTime.tryParse(j['warrantyUntil']) : null,
+        returnUntil: j['returnUntil'] != null ? DateTime.tryParse(j['returnUntil']) : null,
+        warrantyNote: j['warrantyNote'],
       );
 }
 
@@ -992,7 +1018,21 @@ class Store {
   static Future<List<Transaction>> loadTransactions() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_txKey) ?? [];
-    return raw.map((s) => Transaction.fromJson(jsonDecode(s))).toList();
+    var list = raw.map((s) => Transaction.fromJson(jsonDecode(s))).toList();
+    // One-time fix: payslip transactions used to be recorded at the netto
+    // amount; the amount credited to the account (depositedAmount) can
+    // differ, so realign the transaction's amount to it where available.
+    var changed = false;
+    list = list.map((t) {
+      final deposited = t.payslipDetails?.depositedAmount;
+      if (deposited != null && deposited > 0 && (t.amount - deposited).abs() >= 0.01) {
+        changed = true;
+        return t.copyWith(amount: deposited);
+      }
+      return t;
+    }).toList();
+    if (changed) await saveTransactions(list);
+    return list;
   }
 
   static Future<void> saveTransactions(List<Transaction> list) async {
@@ -1424,6 +1464,8 @@ class AppDrawer extends StatelessWidget {
             item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
             item(7, Icons.bar_chart_outlined, 'گزارش‌گیری کامل', () => const ReportsScreen()),
             item(9, Icons.trending_up, 'پیش‌بینی هزینه', () => const ForecastScreen()),
+            item(10, Icons.calendar_month_outlined, 'خلاصه ماه در یک نگاه', () => const MonthCalendarScreen()),
+            item(11, Icons.search, 'جستجوی کالا', () => const ItemSearchScreen()),
             const Divider(height: 1),
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
@@ -2052,15 +2094,31 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
 const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the attached receipt image '
     'and extract structured data. Respond ONLY with compact JSON, no markdown, no explanation, in '
     'exactly this shape: {"merchant": string or null, "date": "YYYY-MM-DD" or null, "total": number or '
-    'null, "items": [{"name": string, "quantity": number or null, "price": number or null}], '
-    '"category": string or null}. For "items", expand any abbreviated, truncated, or SKU-coded product '
-    'names printed on the receipt into their full, clear, human-readable product name (in the same '
-    "language as the receipt) - never leave a short code or cut-off abbreviation as the name if you can "
-    'reasonably infer the full name from context and common branded products. "quantity" is the number '
-    'of units purchased (default 1 if not shown separately). For "category", give a short one- or '
-    "two-word general shopping category for this receipt (e.g. \"خوراک\", \"پوشاک\", \"دارو\") in the "
-    "receipt's language. Keep merchant name in the receipt's own language/script. Numbers must be plain "
-    '(no currency symbols). If a field is unreadable, use null.';
+    'null, "items": [{"name": string, "quantity": number or null, "price": number or null, "isPhysicalGood": '
+    'boolean, "warrantyUntil": "YYYY-MM-DD" or null, "returnUntil": "YYYY-MM-DD" or null, "warrantyNote": '
+    'string or null}], "category": string or null, "keepReceipt": boolean, "keepReceiptReason": string}. '
+    'For "items", expand any abbreviated, truncated, or SKU-coded product names printed on the receipt '
+    'into their full, clear, human-readable product name (in the same language as the receipt) - never '
+    'leave a short code or cut-off abbreviation as the name if you can reasonably infer the full name '
+    'from context and common branded products. "quantity" is the number of units purchased (default 1 '
+    'if not shown separately). "isPhysicalGood" is true for a durable physical item that could plausibly '
+    'have a warranty or be returned/exchanged later (appliances, electronics, tools, furniture, '
+    'cookware/dishware, clothing, shoes, toys, etc.) and false for consumables (food, drinks, groceries, '
+    'toiletries, and similar). For an item where "isPhysicalGood" is true, if the receipt itself prints '
+    'a warranty period or a return/exchange window (e.g. "14 Tage Rückgaberecht", "2 Jahre Garantie", '
+    '"return within 30 days"), compute "warrantyUntil" and/or "returnUntil" as absolute dates (receipt '
+    "date plus that period) and put the printed terms verbatim (in the receipt's language) into "
+    '"warrantyNote". If the receipt states a general store-wide policy that applies to all physical '
+    'items, apply it to each qualifying item. If nothing about warranty/returns is printed anywhere on '
+    'the receipt, leave "warrantyUntil", "returnUntil" and "warrantyNote" all null - do not guess a '
+    'period that is not actually printed on the receipt. "category" is a short one- or two-word general '
+    'shopping category for this receipt (e.g. "خوراک", "پوشاک", "دارو") in the receipt\'s language. '
+    '"keepReceipt" is true if any item has warranty/return relevance (isPhysicalGood true, or actual '
+    'warranty/return terms found) - in that case physical receipts often matter as proof of purchase - '
+    'and false if every item is a consumable with no such relevance. "keepReceiptReason" is one short '
+    "sentence in the receipt's language explaining why (or why not) to keep the physical receipt. Keep "
+    'merchant name in the receipt\'s own language/script. Numbers must be plain (no currency symbols). '
+    'If a field is unreadable, use null.';
 
 const _payslipPrompt = 'You are an expert German payslip (Lohnabrechnung) reading assistant. Read the '
     'attached payslip image and extract structured data. Respond ONLY with compact JSON, no markdown, '
@@ -2160,6 +2218,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Map<String, double> get totalBalanceByCurrency {
     final map = <String, double>{};
+    for (final a in accounts) {
+      if (a.initialBalance != 0) {
+        map[a.currency] = (map[a.currency] ?? 0) + a.initialBalance;
+      }
+    }
     for (final t in tx) {
       final cur = currencyOf(t.accountId);
       map[cur] = (map[cur] ?? 0) + (t.type == TxType.income ? t.amount : -t.amount);
@@ -2180,8 +2243,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, Map<String, double>> get periodStatsByCurrency {
     final start = lastIncomeDate;
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final map = <String, Map<String, double>>{};
     for (final t in tx) {
+      // Not-yet-due (future-dated) transactions shouldn't count toward the
+      // period's totals until their own date actually arrives.
+      if (t.date.isAfter(today)) continue;
       if (start != null) {
         if (t.date.isBefore(DateTime(start.year, start.month, start.day))) continue;
       } else {
@@ -2208,9 +2275,11 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Transaction> get expenseTransactionsForPeriod {
     final start = lastIncomeDate;
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     return tx.where((t) {
       if (t.type != TxType.expense) return false;
       if (currencyOf(t.accountId) != primaryCurrency) return false;
+      if (t.date.isAfter(today)) return false;
       if (start != null) {
         return !t.date.isBefore(DateTime(start.year, start.month, start.day));
       }
@@ -2222,6 +2291,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// [months] calendar months, oldest first.
   List<({DateTime month, double income, double expense})> monthlyTotals(int months) {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final result = <({DateTime month, double income, double expense})>[];
     for (var i = months - 1; i >= 0; i--) {
       var y = now.year;
@@ -2233,6 +2303,7 @@ class _HomeScreenState extends State<HomeScreen> {
       var income = 0.0, expense = 0.0;
       for (final t in tx) {
         if (currencyOf(t.accountId) != primaryCurrency) continue;
+        if (t.date.isAfter(today)) continue;
         if (t.date.year == y && t.date.month == m) {
           if (t.type == TxType.income) {
             income += t.amount;
@@ -2308,6 +2379,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text(tr('app_title')),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'جستجوی کالا (گارانتی/مرجوعی)',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ItemSearchScreen())),
+          ),
           Badge(
             label: Text('$draftCount'),
             isLabelVisible: draftCount > 0,
@@ -2390,71 +2466,63 @@ class _HomeScreenState extends State<HomeScreen> {
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 32),
                 child: Center(child: Text('هنوز تراکنشی ثبت نشده. با دکمه + شروع کنید.')),
-              ),
-            ...tx.map((t) => Dismissible(
-                  key: ValueKey(t.id),
-                  direction: DismissDirection.horizontal,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    color: Colors.blue.shade400,
-                    child: const Icon(Icons.edit, color: Colors.white),
-                  ),
-                  secondaryBackground: Container(
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    color: Colors.red.shade400,
-                    child: const Icon(Icons.delete, color: Colors.white),
-                  ),
-                  confirmDismiss: (direction) async {
-                    if (direction == DismissDirection.startToEnd) {
-                      await _openEditor(existing: t);
-                      return false;
-                    }
-                    return await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('حذف تراکنش'),
-                        content: const Text('این تراکنش حذف شود؟'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
-                        ],
-                      ),
-                    ) ?? false;
-                  },
-                  onDismissed: (_) => _delete(t),
-                  child: Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
-                        child: Icon(
-                          iconForCategory(
-                            categories.where((c) => c.id == t.categoryId).isEmpty
-                                ? Category(id: t.categoryId, name: '', type: t.type)
-                                : categories.firstWhere((c) => c.id == t.categoryId),
-                            categories,
+              )
+            else ...[
+              () {
+                final today = DateTime.now();
+                final todayMidnight = DateTime(today.year, today.month, today.day);
+                final pastOrDue = tx.where((t) => !t.date.isAfter(todayMidnight)).toList();
+                final future = tx.where((t) => t.date.isAfter(todayMidnight)).toList();
+
+                // Group already-due transactions by month, most recent first
+                // (tx is already sorted by date descending), keeping only
+                // the last 2 months that actually have transactions.
+                final monthKeys = <String>[];
+                final grouped = <String, List<Transaction>>{};
+                for (final t in pastOrDue) {
+                  final key = '${t.date.year}-${t.date.month}';
+                  if (!grouped.containsKey(key)) {
+                    monthKeys.add(key);
+                    grouped[key] = [];
+                  }
+                  grouped[key]!.add(t);
+                }
+                final limitedKeys = monthKeys.take(2).toList();
+
+                return Column(
+                  children: [
+                    ...limitedKeys.map((key) {
+                      final parts = key.split('-');
+                      final y = int.parse(parts[0]);
+                      final m = int.parse(parts[1]);
+                      final monthTx = grouped[key]!;
+                      return Theme(
+                        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          initiallyExpanded: true,
+                          tilePadding: EdgeInsets.zero,
+                          title: Text('${_gregorianMonthNames[m - 1]} $y', style: Theme.of(context).textTheme.titleMedium),
+                          children: monthTx.map((t) => _buildTxTile(t)).toList(),
+                        ),
+                      );
+                    }),
+                    if (future.isNotEmpty)
+                      Theme(
+                        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          initiallyExpanded: false,
+                          tilePadding: EdgeInsets.zero,
+                          title: Text(
+                            'ماه بعد (${future.length})',
+                            style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.w500),
                           ),
-                          color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                          children: future.map((t) => _buildTxTile(t, dimmed: true)).toList(),
                         ),
                       ),
-                      title: Text(categoryName(t.categoryId)),
-                      subtitle: Text(
-                        '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
-                        '${t.isRecurring ? ' • تکرارشونده' : ''}'
-                        '${t.draft ? ' • پیش‌نویس' : ''}',
-                      ),
-                      trailing: Text(
-                        ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
-                        ),
-                      ),
-                      onTap: () => _openEditor(existing: t),
-                    ),
-                  ),
-                )),
+                  ],
+                );
+              }(),
+            ],
             const SizedBox(height: 80),
           ],
         ),
@@ -2465,6 +2533,78 @@ class _HomeScreenState extends State<HomeScreen> {
         label: Text(tr('new_transaction')),
       ),
     ),
+    );
+  }
+
+  Widget _buildTxTile(Transaction t, {bool dimmed = false}) {
+    final opacity = dimmed ? 0.55 : 1.0;
+    return Opacity(
+      opacity: opacity,
+      child: Dismissible(
+        key: ValueKey(t.id),
+        direction: DismissDirection.horizontal,
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          color: Colors.blue.shade400,
+          child: const Icon(Icons.edit, color: Colors.white),
+        ),
+        secondaryBackground: Container(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          color: Colors.red.shade400,
+          child: const Icon(Icons.delete, color: Colors.white),
+        ),
+        confirmDismiss: (direction) async {
+          if (direction == DismissDirection.startToEnd) {
+            await _openEditor(existing: t);
+            return false;
+          }
+          return await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('حذف تراکنش'),
+                  content: const Text('این تراکنش حذف شود؟'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                  ],
+                ),
+              ) ??
+              false;
+        },
+        onDismissed: (_) => _delete(t),
+        child: Card(
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+              child: Icon(
+                iconForCategory(
+                  categories.where((c) => c.id == t.categoryId).isEmpty
+                      ? Category(id: t.categoryId, name: '', type: t.type)
+                      : categories.firstWhere((c) => c.id == t.categoryId),
+                  categories,
+                ),
+                color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+              ),
+            ),
+            title: Text(categoryName(t.categoryId)),
+            subtitle: Text(
+              '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
+              '${t.isRecurring ? ' • تکرارشونده' : ''}'
+              '${t.draft ? ' • پیش‌نویس' : ''}',
+            ),
+            trailing: Text(
+              ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+              ),
+            ),
+            onTap: () => _openEditor(existing: t),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -3356,6 +3496,148 @@ Future<String> _buildExcelFile() async {
 
 enum _ReportPreset { thisMonth, lastMonth, thisQuarter, lastQuarter, thisYear, lastYear, custom }
 
+// ============================== Item search (warranty/returns lookup) ==============================
+
+class ItemSearchScreen extends StatefulWidget {
+  const ItemSearchScreen({super.key});
+  @override
+  State<ItemSearchScreen> createState() => _ItemSearchScreenState();
+}
+
+class _ItemSearchScreenState extends State<ItemSearchScreen> {
+  bool loading = true;
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  final queryCtrl = TextEditingController();
+  String query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  Future<void> _openEditor(Transaction t) async {
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+    );
+    if (result == null) return;
+    final all = await Store.loadTransactions();
+    if (result is DeleteTransactionSignal) {
+      all.removeWhere((x) => x.id == result.id);
+    } else if (result is Transaction) {
+      final idx = all.indexWhere((x) => x.id == result.id);
+      if (idx >= 0) {
+        all[idx] = result;
+      } else {
+        all.add(result);
+      }
+    }
+    await Store.saveTransactions(all);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final q = query.trim();
+    final matches = <({Transaction t, ReceiptItemEntry item})>[];
+    if (q.isNotEmpty) {
+      for (final t in tx) {
+        for (final it in t.items) {
+          if (it.name.toLowerCase().contains(q.toLowerCase())) {
+            matches.add((t: t, item: it));
+          }
+        }
+      }
+      matches.sort((a, b) => b.t.date.compareTo(a.t.date));
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: TextField(
+          controller: queryCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'جستجوی کالا (مثلاً یخچال، کفش...)', border: InputBorder.none),
+          onChanged: (v) => setState(() => query = v),
+        ),
+      ),
+      body: q.isEmpty
+          ? const Center(child: Text('نام کالایی را که دنبالشی تایپ کن.', style: TextStyle(color: Colors.grey)))
+          : matches.isEmpty
+              ? const Center(child: Text('کالایی با این نام پیدا نشد.'))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: matches.length,
+                  itemBuilder: (context, i) {
+                    final m = matches[i];
+                    return Card(
+                      child: ListTile(
+                        title: Text(m.item.name),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${categoryName(m.t.categoryId)} • ${ltr(DateFormat('dd.MM.yyyy').format(m.t.date))}'),
+                            if (m.item.warrantyNote != null) ...[
+                              const SizedBox(height: 4),
+                              Text(m.item.warrantyNote!, style: const TextStyle(fontSize: 12)),
+                            ],
+                            if (m.item.warrantyUntil != null || m.item.returnUntil != null) ...[
+                              const SizedBox(height: 4),
+                              Wrap(
+                                spacing: 6,
+                                children: [
+                                  if (m.item.warrantyUntil != null)
+                                    Chip(
+                                      label: Text('گارانتی تا ${ltr(DateFormat('yyyy-MM-dd').format(m.item.warrantyUntil!))}',
+                                          style: const TextStyle(fontSize: 11)),
+                                      visualDensity: VisualDensity.compact,
+                                      backgroundColor: Colors.blue.shade50,
+                                    ),
+                                  if (m.item.returnUntil != null)
+                                    Chip(
+                                      label: Text('مرجوعی تا ${ltr(DateFormat('yyyy-MM-dd').format(m.item.returnUntil!))}',
+                                          style: const TextStyle(fontSize: 11)),
+                                      visualDensity: VisualDensity.compact,
+                                      backgroundColor: Colors.orange.shade50,
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                        trailing: Text(
+                          m.item.price != null ? ltr(formatMoney(m.item.price!, currencyOf(m.t.accountId))) : '',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        isThreeLine: true,
+                        onTap: () => _openEditor(m.t),
+                      ),
+                    );
+                  },
+                ),
+    );
+  }
+}
+
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
   @override
@@ -3897,6 +4179,211 @@ class _ForecastScreenState extends State<ForecastScreen> {
   }
 }
 
+// ============================== Month calendar summary ==============================
+
+class MonthCalendarScreen extends StatefulWidget {
+  const MonthCalendarScreen({super.key});
+  @override
+  State<MonthCalendarScreen> createState() => _MonthCalendarScreenState();
+}
+
+class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
+  bool loading = true;
+  List<Transaction> tx = [];
+  List<Account> accounts = [];
+  late DateTime month;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    month = DateTime(now.year, now.month, 1);
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  String get primaryCurrency {
+    if (accounts.isEmpty) return 'EUR';
+    final counts = <String, int>{};
+    for (final a in accounts) {
+      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+    }
+    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final currency = primaryCurrency;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+    final dayIncome = <int, double>{};
+    final dayExpense = <int, double>{};
+    for (final t in tx) {
+      if (currencyOf(t.accountId) != currency) continue;
+      if (t.date.year != month.year || t.date.month != month.month) continue;
+      if (t.type == TxType.income) {
+        dayIncome[t.date.day] = (dayIncome[t.date.day] ?? 0) + t.amount;
+      } else {
+        dayExpense[t.date.day] = (dayExpense[t.date.day] ?? 0) + t.amount;
+      }
+    }
+
+    double dueIncome = 0, dueExpense = 0, plannedIncome = 0, plannedExpense = 0;
+    for (var d = 1; d <= daysInMonth; d++) {
+      final date = DateTime(month.year, month.month, d);
+      final future = date.isAfter(today);
+      if (future) {
+        plannedIncome += dayIncome[d] ?? 0;
+        plannedExpense += dayExpense[d] ?? 0;
+      } else {
+        dueIncome += dayIncome[d] ?? 0;
+        dueExpense += dayExpense[d] ?? 0;
+      }
+    }
+
+    // DateTime.weekday: Monday=1 .. Sunday=7. Grid starts on Saturday
+    // (common start-of-week for a Persian-speaking audience): map so
+    // Saturday=0 .. Friday=6.
+    final firstWeekday = DateTime(month.year, month.month, 1).weekday; // 1..7, Mon..Sun
+    final leadingBlanks = (firstWeekday + 1) % 7; // Sat=6->0, Sun=7->1, Mon=1->2, ... Fri=5->6
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('خلاصه ماه در یک نگاه')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
+                  tooltip: 'ماه قبل',
+                  onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
+                ),
+                Text('${_gregorianMonthNames[month.month - 1]} ${month.year}', style: Theme.of(context).textTheme.titleLarge),
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_ios, size: 18),
+                  tooltip: 'ماه بعد',
+                  onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('جمع تا امروز', style: TextStyle(fontWeight: FontWeight.bold)),
+                        Text(
+                          '${ltr('+${formatMoney(dueIncome, currency)}')}   ${ltr('-${formatMoney(dueExpense, currency)}')}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    if (plannedIncome > 0 || plannedExpense > 0) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('جمع سررسیدنشده', style: TextStyle(color: Colors.grey.shade600)),
+                          Text(
+                            '${ltr('+${formatMoney(plannedIncome, currency)}')}   ${ltr('-${formatMoney(plannedExpense, currency)}')}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج']
+                  .map((d) => Expanded(child: Center(child: Text(d, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)))))
+                  .toList(),
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: GridView.builder(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.72),
+                itemCount: leadingBlanks + daysInMonth,
+                itemBuilder: (context, index) {
+                  if (index < leadingBlanks) return const SizedBox.shrink();
+                  final day = index - leadingBlanks + 1;
+                  final date = DateTime(month.year, month.month, day);
+                  final future = date.isAfter(today);
+                  final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
+                  final inc = dayIncome[day] ?? 0;
+                  final exp = dayExpense[day] ?? 0;
+                  return Container(
+                    margin: const EdgeInsets.all(2),
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isToday ? Colors.indigo.shade50 : null,
+                      border: Border.all(color: isToday ? Colors.indigo.shade200 : Colors.grey.shade200),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        Text(
+                          ltr('$day'),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: future ? Colors.grey.shade400 : null,
+                          ),
+                        ),
+                        if (exp > 0)
+                          Text(
+                            ltr('-${exp.toStringAsFixed(0)}'),
+                            style: TextStyle(fontSize: 9, color: future ? Colors.red.shade200 : Colors.red.shade700),
+                          ),
+                        if (inc > 0)
+                          Text(
+                            ltr('+${inc.toStringAsFixed(0)}'),
+                            style: TextStyle(fontSize: 9, color: future ? Colors.green.shade200 : Colors.green.shade700),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class BackupRestoreScreen extends StatefulWidget {
   const BackupRestoreScreen({super.key});
   @override
@@ -4200,6 +4687,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   bool geminiFailed = false;
   String? lastGeminiErrorDetail;
   bool hasGeminiKey = false;
+  bool? keepReceipt;
+  String? keepReceiptReason;
   late List<ReceiptItemEntry> items;
 
   @override
@@ -4246,9 +4735,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               name: (e['name'] ?? '').toString(),
               quantity: (e['quantity'] as num?)?.toDouble(),
               price: (e['price'] as num?)?.toDouble(),
+              warrantyUntil: e['warrantyUntil'] != null ? DateTime.tryParse(e['warrantyUntil'].toString()) : null,
+              returnUntil: e['returnUntil'] != null ? DateTime.tryParse(e['returnUntil'].toString()) : null,
+              warrantyNote: e['warrantyNote']?.toString(),
             );
           }).where((e) => e.name.trim().isNotEmpty).toList();
         }
+        if (result['keepReceipt'] is bool) keepReceipt = result['keepReceipt'] as bool;
+        if (result['keepReceiptReason'] != null) keepReceiptReason = result['keepReceiptReason'].toString();
         final matched = _matchCategoryHint(result['category']?.toString(), categories, TxType.expense);
         if (matched != null) selectedCategory = matched;
       }
@@ -4308,19 +4802,28 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
     final priceCtrl = TextEditingController(text: existing?.price?.toString() ?? '');
+    final warrantyCtrl = TextEditingController(text: existing?.warrantyNote ?? '');
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(editIndex == null ? 'افزودن کالا' : 'ویرایش کالا'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
-            const SizedBox(height: 8),
-            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
-            const SizedBox(height: 8),
-            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+              const SizedBox(height: 8),
+              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+              const SizedBox(height: 8),
+              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+              const SizedBox(height: 8),
+              TextField(
+                controller: warrantyCtrl,
+                decoration: const InputDecoration(labelText: 'یادداشت گارانتی/مرجوعی (اختیاری)', border: OutlineInputBorder()),
+                maxLines: 2,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
@@ -4333,6 +4836,9 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       name: nameCtrl.text.trim(),
       quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
       price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      warrantyUntil: existing?.warrantyUntil,
+      returnUntil: existing?.returnUntil,
+      warrantyNote: warrantyCtrl.text.trim().isEmpty ? null : warrantyCtrl.text.trim(),
     );
     setState(() {
       if (editIndex != null) {
@@ -4486,6 +4992,45 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
           const SizedBox(height: 16),
+          if (keepReceipt != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: keepReceipt! ? Colors.amber.shade50 : Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: keepReceipt! ? Colors.amber.shade200 : Colors.green.shade200),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    keepReceipt! ? Icons.receipt_long : Icons.check_circle_outline,
+                    color: keepReceipt! ? Colors.amber.shade800 : Colors.green.shade800,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          keepReceipt! ? 'بهتر است فیش را نگه دارید' : 'نیازی به نگه‌داشتن فیش نیست',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: keepReceipt! ? Colors.amber.shade900 : Colors.green.shade900,
+                          ),
+                        ),
+                        if (keepReceiptReason != null) ...[
+                          const SizedBox(height: 2),
+                          Text(keepReceiptReason!, style: const TextStyle(fontSize: 12)),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -4502,11 +5047,42 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               child: ListTile(
                 dense: true,
                 title: Text(it.name),
-                subtitle: Text(
-                  '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
-                  '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                  '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                      '${it.quantity != null && it.price != null ? ' • ' : ''}'
+                      '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                    ),
+                    if (it.hasWarrantyInfo) ...[
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          if (it.warrantyUntil != null)
+                            Chip(
+                              avatar: const Icon(Icons.verified_outlined, size: 14),
+                              label: Text('گارانتی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!))}', style: const TextStyle(fontSize: 11)),
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              backgroundColor: Colors.blue.shade50,
+                            ),
+                          if (it.returnUntil != null)
+                            Chip(
+                              avatar: const Icon(Icons.assignment_return_outlined, size: 14),
+                              label: Text('مرجوعی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.returnUntil!))}', style: const TextStyle(fontSize: 11)),
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              backgroundColor: Colors.orange.shade50,
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
                 ),
+                isThreeLine: it.hasWarrantyInfo,
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),
                   onPressed: () => setState(() => items.removeAt(i)),
@@ -4681,6 +5257,10 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ Netto معتبر وارد کنید.')));
       return;
     }
+    final depositedAmount = double.tryParse(numCtrls['depositedAmount']!.text.replaceAll(',', '.'));
+    // The actual amount credited to the account can differ from netto (e.g.
+    // advances or other payroll-side deductions) - prefer it when present.
+    final transactionAmount = (depositedAmount != null && depositedAmount > 0) ? depositedAmount : netto;
     if (!draft && selectedCategory == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
       return;
@@ -4711,7 +5291,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     );
     final duplicate = existingTx.any((t) =>
         t.type == TxType.income &&
-        (t.amount - netto).abs() < 0.01 &&
+        (t.amount - transactionAmount).abs() < 0.01 &&
         t.date.year == date.year &&
         t.date.month == date.month &&
         t.date.day == date.day);
@@ -4733,7 +5313,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     final result = Transaction(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       type: TxType.income,
-      amount: netto,
+      amount: transactionAmount,
       categoryId: selectedCategory?.id ?? '_uncategorized_',
       accountId: selectedAccount?.id ?? 'default',
       date: date,
@@ -5109,19 +5689,28 @@ class _TransactionEditorState extends State<TransactionEditor> {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
     final priceCtrl = TextEditingController(text: existing?.price?.toString() ?? '');
+    final warrantyCtrl = TextEditingController(text: existing?.warrantyNote ?? '');
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(editIndex == null ? 'افزودن کالا' : 'ویرایش کالا'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
-            const SizedBox(height: 8),
-            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
-            const SizedBox(height: 8),
-            TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+              const SizedBox(height: 8),
+              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+              const SizedBox(height: 8),
+              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+              const SizedBox(height: 8),
+              TextField(
+                controller: warrantyCtrl,
+                decoration: const InputDecoration(labelText: 'یادداشت گارانتی/مرجوعی (اختیاری)', border: OutlineInputBorder()),
+                maxLines: 2,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
@@ -5134,6 +5723,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
       name: nameCtrl.text.trim(),
       quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
       price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      warrantyUntil: existing?.warrantyUntil,
+      returnUntil: existing?.returnUntil,
+      warrantyNote: warrantyCtrl.text.trim().isEmpty ? null : warrantyCtrl.text.trim(),
     );
     setState(() {
       if (editIndex != null) {
@@ -5476,11 +6068,42 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 child: ListTile(
                   dense: true,
                   title: Text(it.name),
-                  subtitle: Text(
-                    '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
-                    '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                    '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                        '${it.quantity != null && it.price != null ? ' • ' : ''}'
+                        '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                      ),
+                      if (it.hasWarrantyInfo) ...[
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            if (it.warrantyUntil != null)
+                              Chip(
+                                avatar: const Icon(Icons.verified_outlined, size: 14),
+                                label: Text('گارانتی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!))}', style: const TextStyle(fontSize: 11)),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                backgroundColor: Colors.blue.shade50,
+                              ),
+                            if (it.returnUntil != null)
+                              Chip(
+                                avatar: const Icon(Icons.assignment_return_outlined, size: 14),
+                                label: Text('مرجوعی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.returnUntil!))}', style: const TextStyle(fontSize: 11)),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                backgroundColor: Colors.orange.shade50,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
+                  isThreeLine: it.hasWarrantyInfo,
                   trailing: IconButton(
                     icon: const Icon(Icons.delete_outline, size: 20),
                     onPressed: () => setState(() {
@@ -5918,6 +6541,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
 
   Future<void> _editAccount({Account? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final balanceCtrl = TextEditingController(text: existing?.initialBalance != null && existing!.initialBalance != 0
+        ? existing.initialBalance.toStringAsFixed(2)
+        : '');
     AccountType type = existing?.type ?? AccountType.bank;
     String currency = existing?.currency ?? 'EUR';
     final result = await showDialog<Account>(
@@ -5925,25 +6551,33 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
         return AlertDialog(
           title: Text(existing == null ? 'حساب جدید' : 'ویرایش حساب'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام حساب'), autofocus: true),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<AccountType>(
-                initialValue: type,
-                decoration: const InputDecoration(labelText: 'نوع حساب'),
-                items: AccountType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.label))).toList(),
-                onChanged: (v) => setLocal(() => type = v ?? type),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: currency,
-                decoration: const InputDecoration(labelText: 'واحد پول'),
-                items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setLocal(() => currency = v ?? currency),
-              ),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام حساب'), autofocus: true),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<AccountType>(
+                  initialValue: type,
+                  decoration: const InputDecoration(labelText: 'نوع حساب'),
+                  items: AccountType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.label))).toList(),
+                  onChanged: (v) => setLocal(() => type = v ?? type),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: currency,
+                  decoration: const InputDecoration(labelText: 'واحد پول'),
+                  items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                  onChanged: (v) => setLocal(() => currency = v ?? currency),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: balanceCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  decoration: const InputDecoration(labelText: 'موجودی اولیه', hintText: '0'),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
@@ -5955,6 +6589,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   name: nameCtrl.text.trim(),
                   type: type,
                   currency: currency,
+                  initialBalance: double.tryParse(balanceCtrl.text.replaceAll(',', '.')) ?? 0,
                 );
                 Navigator.pop(ctx, acc);
               },
@@ -6031,7 +6666,11 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.account_balance_wallet_outlined),
                     title: Text(a.name),
-                    subtitle: Text('${a.type.label} • ${a.currency}'),
+                    subtitle: Text(
+                      a.initialBalance != 0
+                          ? '${a.type.label} • ${a.currency} • موجودی اولیه: ${ltr(formatMoney(a.initialBalance, a.currency))}'
+                          : '${a.type.label} • ${a.currency}',
+                    ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
