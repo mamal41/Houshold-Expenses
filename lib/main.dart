@@ -120,6 +120,44 @@ DateTime clampedMonthDate(int year, int month, int day) {
 
 // ============================== Models ==============================
 
+// Traditional Persian alphabetical order - Unicode code-point order does
+// NOT match this (e.g. 'پ' sorts after 'ت' by code point, but belongs right
+// after 'ب' in Persian), which made some categories (e.g. "پوشاک") sort
+// into the wrong place. Characters not in this list (numbers, spaces,
+// ZWNJ, Latin letters, etc.) fall back to plain code-point order, ranked
+// after all mapped letters.
+const _persianAlphabetOrder = 'ا آ ب پ ت ث ج چ ح خ د ذ ر ز ژ س ش ص ض ط ظ ع غ ف ق ک گ ل م ن و ه ی';
+final Map<int, int> _persianLetterRank = () {
+  final map = <int, int>{};
+  final letters = _persianAlphabetOrder.split(' ');
+  for (var i = 0; i < letters.length; i++) {
+    map[letters[i].codeUnitAt(0)] = i;
+  }
+  // Common alternate/Arabic forms some input methods produce, mapped to
+  // their Persian equivalent's rank.
+  map[0x064A] = map[0x06CC]!; // Arabic yeh -> Persian yeh (ی)
+  map[0x0643] = map[0x06A9]!; // Arabic kaf -> Persian kaf (ک)
+  return map;
+}();
+
+int persianCompare(String a, String b) {
+  final la = a.trim();
+  final lb = b.trim();
+  final len = la.length < lb.length ? la.length : lb.length;
+  for (var i = 0; i < len; i++) {
+    final ca = la.codeUnitAt(i);
+    final cb = lb.codeUnitAt(i);
+    if (ca == cb) continue;
+    final ra = _persianLetterRank[ca];
+    final rb = _persianLetterRank[cb];
+    if (ra != null && rb != null) return ra.compareTo(rb);
+    if (ra != null) return -1; // mapped Persian letters sort before anything unmapped
+    if (rb != null) return 1;
+    return ca.compareTo(cb);
+  }
+  return la.length.compareTo(lb.length);
+}
+
 class Category {
   final String id;
   final String name;
@@ -626,9 +664,10 @@ class NotificationService {
   Future<void> cancelForTransaction(String txId) async {
     // slot 0/1 = second-to-last/last reminders, slots 2..201 = optional
     // per-installment reminders (capped at 200 upcoming installments).
-    for (var slot = 0; slot < 202; slot++) {
-      await _plugin.cancel(_idFor(txId, slot));
-    }
+    // Run these in parallel rather than one at a time - awaiting 202
+    // sequential platform-channel round-trips was the main reason saving a
+    // transaction felt slow.
+    await Future.wait([for (var slot = 0; slot < 202; slot++) _plugin.cancel(_idFor(txId, slot))]);
   }
 
   /// Computes an absolute schedule instant for a given local wall-clock
@@ -663,10 +702,11 @@ class NotificationService {
       if (occurrences.length >= 2) targets[0] = occurrences[occurrences.length - 2];
       targets[1] = occurrences.last;
     }
+    final scheduleCalls = <Future<void>>[];
     for (final entry in targets.entries) {
       final when = DateTime(entry.value.year, entry.value.month, entry.value.day, 9).subtract(const Duration(days: 1));
       if (!when.isAfter(now)) continue;
-      await _plugin.zonedSchedule(
+      scheduleCalls.add(_plugin.zonedSchedule(
         _idFor(t.id, entry.key),
         categoryName,
         body,
@@ -674,7 +714,7 @@ class NotificationService {
         details,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      );
+      ));
     }
     final days = t.notifyDaysBeforeEach;
     if (days != null && days > 0) {
@@ -683,7 +723,7 @@ class NotificationService {
         final due = capped[i];
         final when = DateTime(due.year, due.month, due.day, 9).subtract(Duration(days: days));
         if (!when.isAfter(now)) continue;
-        await _plugin.zonedSchedule(
+        scheduleCalls.add(_plugin.zonedSchedule(
           _idFor(t.id, 2 + i),
           categoryName,
           '$days روز تا سررسید این قسط (${ltr(DateFormat('dd.MM.yyyy').format(due))})${t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : ''}',
@@ -691,9 +731,13 @@ class NotificationService {
           details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        );
+        ));
       }
     }
+    // Fire all the schedule calls in parallel instead of awaiting each one
+    // sequentially - this is what made saving a recurring transaction with
+    // per-installment reminders feel slow.
+    await Future.wait(scheduleCalls);
   }
 }
 
@@ -1127,7 +1171,7 @@ class Store {
     // Sort alphabetically (by name) every time; since children are always
     // filtered by parentId when rendered, a flat alphabetical sort keeps
     // each level's items alphabetical too.
-    final sorted = List.of(list)..sort((a, b) => a.name.compareTo(b.name));
+    final sorted = List.of(list)..sort((a, b) => persianCompare(a.name, b.name));
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_catKey, sorted.map((c) => jsonEncode(c.toJson())).toList());
   }
@@ -1490,6 +1534,7 @@ class AppDrawer extends StatelessWidget {
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
+            item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
             const Divider(height: 1),
             sectionLabel('داده'),
@@ -3369,8 +3414,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
               e.t.type == TxType.expense &&
               currencyOf(e.t.accountId) == currency &&
               !e.date.isBefore(mStart) &&
-              !e.date.isAfter(mEnd) &&
-              !e.date.isBefore(today))
+              !e.date.isAfter(mEnd))
           .fold(0.0, (s, e) => s + e.t.amount);
       chartMonths.add((month: mStart, expense: total));
     }
@@ -3493,29 +3537,26 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                     itemBuilder: (context, i) {
                       final e = entries[i];
                       final daysLeft = e.date.difference(today).inDays;
-                      return Opacity(
-                        opacity: e.isReal ? 1.0 : 0.6,
-                        child: Card(
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
-                              child: Icon(
-                                e.t.type == TxType.income ? Icons.add : Icons.remove,
-                                color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
-                              ),
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                            child: Icon(
+                              e.t.type == TxType.income ? Icons.add : Icons.remove,
+                              color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
                             ),
-                            title: Text(categoryName(e.t.categoryId)),
-                            subtitle: Text(
-                              daysLeft == 0
-                                  ? 'امروز'
-                                  : '${ltr(DateFormat('dd.MM.yyyy').format(e.date))} • ${ltr('$daysLeft')} روز دیگر',
-                            ),
-                            trailing: Text(
-                              ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
-                              ),
+                          ),
+                          title: Text(categoryName(e.t.categoryId)),
+                          subtitle: Text(
+                            daysLeft == 0
+                                ? 'امروز'
+                                : '${ltr(DateFormat('dd.MM.yyyy').format(e.date))} • ${ltr('$daysLeft')} روز دیگر',
+                          ),
+                          trailing: Text(
+                            ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
                             ),
                           ),
                         ),
@@ -3703,6 +3744,231 @@ Future<String> _buildExcelFile() async {
 enum _ReportPreset { thisMonth, lastMonth, thisQuarter, lastQuarter, thisYear, lastYear, custom }
 
 // ============================== Item search (warranty/returns lookup) ==============================
+
+// ============================== All transactions (search/filter/sort) ==============================
+
+enum _TxSortMode { dateDesc, dateAsc, createdDesc, createdAsc, amountDesc, amountAsc }
+
+class AllTransactionsScreen extends StatefulWidget {
+  const AllTransactionsScreen({super.key});
+  @override
+  State<AllTransactionsScreen> createState() => _AllTransactionsScreenState();
+}
+
+class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
+  bool loading = true;
+  List<Transaction> tx = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  final queryCtrl = TextEditingController();
+  String query = '';
+  TxType? typeFilter;
+  String? categoryFilter;
+  String? accountFilter;
+  _TxSortMode sort = _TxSortMode.dateDesc;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  Future<void> _openEditor(Transaction t) async {
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+    );
+    if (result == null) return;
+    final all = await Store.loadTransactions();
+    if (result is DeleteTransactionSignal) {
+      all.removeWhere((x) => x.id == result.id);
+    } else if (result is Transaction) {
+      final idx = all.indexWhere((x) => x.id == result.id);
+      if (idx >= 0) {
+        all[idx] = result;
+      } else {
+        all.add(result);
+      }
+    }
+    await Store.saveTransactions(all);
+    await _load();
+  }
+
+  String _sortLabel(_TxSortMode m) => switch (m) {
+        _TxSortMode.dateDesc => 'تاریخ تراکنش (جدیدترین)',
+        _TxSortMode.dateAsc => 'تاریخ تراکنش (قدیمی‌ترین)',
+        _TxSortMode.createdDesc => 'زمان ثبت (جدیدترین)',
+        _TxSortMode.createdAsc => 'زمان ثبت (قدیمی‌ترین)',
+        _TxSortMode.amountDesc => 'مبلغ (بیشترین)',
+        _TxSortMode.amountAsc => 'مبلغ (کمترین)',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final q = query.trim().toLowerCase();
+    var filtered = tx.where((t) {
+      if (typeFilter != null && t.type != typeFilter) return false;
+      if (categoryFilter != null && t.categoryId != categoryFilter) return false;
+      if (accountFilter != null && t.accountId != accountFilter) return false;
+      if (q.isNotEmpty) {
+        final hay = [
+          categoryName(t.categoryId),
+          t.note,
+          ...t.items.map((i) => i.name),
+        ].join(' ').toLowerCase();
+        if (!hay.contains(q)) return false;
+      }
+      return true;
+    }).toList();
+
+    int createdAtOf(Transaction t) => int.tryParse(t.id) ?? 0;
+    switch (sort) {
+      case _TxSortMode.dateDesc:
+        filtered.sort((a, b) => b.date.compareTo(a.date));
+        break;
+      case _TxSortMode.dateAsc:
+        filtered.sort((a, b) => a.date.compareTo(b.date));
+        break;
+      case _TxSortMode.createdDesc:
+        filtered.sort((a, b) => createdAtOf(b).compareTo(createdAtOf(a)));
+        break;
+      case _TxSortMode.createdAsc:
+        filtered.sort((a, b) => createdAtOf(a).compareTo(createdAtOf(b)));
+        break;
+      case _TxSortMode.amountDesc:
+        filtered.sort((a, b) => b.amount.compareTo(a.amount));
+        break;
+      case _TxSortMode.amountAsc:
+        filtered.sort((a, b) => a.amount.compareTo(b.amount));
+        break;
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('همه‌ی تراکنش‌ها')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: TextField(
+              controller: queryCtrl,
+              decoration: const InputDecoration(
+                hintText: 'جستجو در دسته‌بندی، توضیحات یا اقلام...',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => query = v),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                DropdownButton<TxType?>(
+                  value: typeFilter,
+                  hint: const Text('نوع'),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('همه‌ی انواع')),
+                    DropdownMenuItem(value: TxType.income, child: Text('درآمد')),
+                    DropdownMenuItem(value: TxType.expense, child: Text('هزینه')),
+                  ],
+                  onChanged: (v) => setState(() => typeFilter = v),
+                ),
+                DropdownButton<String?>(
+                  value: categoryFilter,
+                  hint: const Text('دسته‌بندی'),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
+                    ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
+                  ],
+                  onChanged: (v) => setState(() => categoryFilter = v),
+                ),
+                DropdownButton<String?>(
+                  value: accountFilter,
+                  hint: const Text('حساب'),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                    ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))),
+                  ],
+                  onChanged: (v) => setState(() => accountFilter = v),
+                ),
+                DropdownButton<_TxSortMode>(
+                  value: sort,
+                  items: _TxSortMode.values.map((m) => DropdownMenuItem(value: m, child: Text(_sortLabel(m)))).toList(),
+                  onChanged: (v) => setState(() => sort = v ?? sort),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text('${filtered.length} تراکنش', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: filtered.isEmpty
+                ? const Center(child: Text('تراکنشی با این شرایط پیدا نشد.'))
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: filtered.length,
+                    itemBuilder: (context, i) {
+                      final t = filtered[i];
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                            child: Icon(
+                              t.type == TxType.income ? Icons.add : Icons.remove,
+                              color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                            ),
+                          ),
+                          title: Text(categoryName(t.categoryId)),
+                          subtitle: Text(
+                            '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
+                            '${t.isRecurring ? ' • تکرارشونده' : ''}'
+                            '${t.draft ? ' • پیش‌نویس' : ''}',
+                          ),
+                          trailing: Text(
+                            ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                            ),
+                          ),
+                          onTap: () => _openEditor(t),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class ItemSearchScreen extends StatefulWidget {
   const ItemSearchScreen({super.key});
@@ -4397,6 +4663,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   bool loading = true;
   List<Transaction> tx = [];
   List<Account> accounts = [];
+  List<Category> categories = [];
   late DateTime month;
 
   @override
@@ -4410,12 +4677,71 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   Future<void> _load() async {
     tx = await Store.loadTransactions();
     accounts = await Store.loadAccounts();
+    categories = await Store.loadCategories();
     setState(() => loading = false);
   }
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
     return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  }
+
+  Future<void> _showDayTransactions(DateTime date) async {
+    final dayTx = tx.where((t) => t.date.year == date.year && t.date.month == date.month && t.date.day == date.day).toList();
+    if (dayTx.isEmpty) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.5,
+        builder: (ctx, scrollController) => Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(ltr(DateFormat('dd.MM.yyyy').format(date)), style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: dayTx.length,
+                  itemBuilder: (context, i) {
+                    final t = dayTx[i];
+                    return Card(
+                      child: ListTile(
+                        title: Text(categoryName(t.categoryId)),
+                        subtitle: t.note.isNotEmpty ? Text(t.note, maxLines: 1, overflow: TextOverflow.ellipsis) : null,
+                        trailing: Text(
+                          ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                          ),
+                        ),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+                          );
+                          await _load();
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   String get primaryCurrency {
@@ -4482,13 +4808,13 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.arrow_back_ios, size: 18),
+                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
                   tooltip: 'ماه قبل',
                   onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
                 ),
                 Text('${_gregorianMonthNames[month.month - 1]} ${month.year}', style: Theme.of(context).textTheme.titleLarge),
                 IconButton(
-                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
+                  icon: const Icon(Icons.arrow_back_ios, size: 18),
                   tooltip: 'ماه بعد',
                   onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
                 ),
@@ -4564,7 +4890,10 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                   final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
                   final inc = (dayIncome[day] ?? 0) + (dayIncomeProjected[day] ?? 0);
                   final exp = (dayExpense[day] ?? 0) + (dayExpenseProjected[day] ?? 0);
-                  return Container(
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () => _showDayTransactions(date),
+                    child: Container(
                     margin: const EdgeInsets.all(2),
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     decoration: BoxDecoration(
@@ -4595,6 +4924,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                           ),
                       ],
                     ),
+                  ),
                   );
                 },
               ),
@@ -5896,10 +6226,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
       notifyDaysBeforeEach: notifyEnabled && notifyEachEnabled ? int.tryParse(notifyDaysCtrl.text) : null,
       payslipDetails: payslipDetails,
     );
+    // Scheduling/cancelling reminders doesn't need to block the save flow -
+    // let it run in the background so the screen closes immediately.
     if (notifyEnabled) {
-      await NotificationService.instance.scheduleForTransaction(result, selectedCategory!.name);
+      unawaited(NotificationService.instance.scheduleForTransaction(result, selectedCategory!.name));
     } else {
-      await NotificationService.instance.cancelForTransaction(result.id);
+      unawaited(NotificationService.instance.cancelForTransaction(result.id));
     }
     if (!context.mounted) return true;
     Navigator.pop(context, result);
@@ -6441,7 +6773,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
       iconCodePoint: iconResult.icon.codePoint,
       iconNeedsRetry: iconResult.isFallback,
     );
-    setState(() => categories = [...categories, newCat]..sort((a, b) => a.name.compareTo(b.name)));
+    setState(() => categories = [...categories, newCat]..sort((a, b) => persianCompare(a.name, b.name)));
     await Store.saveCategories(categories);
   }
 
@@ -6581,7 +6913,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       iconCodePoint: iconResult.icon.codePoint,
       iconNeedsRetry: iconResult.isFallback,
     );
-    setState(() => categories = [...categories, newCat]..sort((a, b) => a.name.compareTo(b.name)));
+    setState(() => categories = [...categories, newCat]..sort((a, b) => persianCompare(a.name, b.name)));
     await Store.saveCategories(categories);
   }
 
@@ -6609,7 +6941,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     }
     setState(() {
       categories = categories.map((x) => x.id == c.id ? x.copyWith(name: name) : x).toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+        ..sort((a, b) => persianCompare(a.name, b.name));
     });
     await Store.saveCategories(categories);
   }
