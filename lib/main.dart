@@ -2263,18 +2263,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return map;
   }
 
-  DateTime? get lastIncomeDate {
-    DateTime? latest;
-    for (final t in tx) {
-      if (t.type == TxType.income) {
-        if (latest == null || t.date.isAfter(latest)) latest = t.date;
-      }
-    }
-    return latest;
-  }
-
   Map<String, Map<String, double>> get periodStatsByCurrency {
-    final start = lastIncomeDate;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final map = <String, Map<String, double>>{};
@@ -2282,11 +2271,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // Not-yet-due (future-dated) transactions shouldn't count toward the
       // period's totals until their own date actually arrives.
       if (t.date.isAfter(today)) continue;
-      if (start != null) {
-        if (t.date.isBefore(DateTime(start.year, start.month, start.day))) continue;
-      } else {
-        if (!(t.date.year == now.year && t.date.month == now.month)) continue;
-      }
+      if (!(t.date.year == now.year && t.date.month == now.month)) continue;
       final cur = currencyOf(t.accountId);
       map.putIfAbsent(cur, () => {'income': 0, 'expense': 0});
       if (t.type == TxType.income) {
@@ -2306,16 +2291,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// aggregation (including drill-down by category) happens inside
   /// [DashboardCharts] itself.
   List<Transaction> get expenseTransactionsForPeriod {
-    final start = lastIncomeDate;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     return tx.where((t) {
       if (t.type != TxType.expense) return false;
       if (currencyOf(t.accountId) != primaryCurrency) return false;
       if (t.date.isAfter(today)) return false;
-      if (start != null) {
-        return !t.date.isBefore(DateTime(start.year, start.month, start.day));
-      }
       return t.date.year == now.year && t.date.month == now.month;
     }).toList();
   }
@@ -2397,10 +2378,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final balances = totalBalanceByCurrency;
     final period = periodStatsByCurrency;
-    final start = lastIncomeDate;
-    final periodLabel = start == null
-        ? 'این ماه'
-        : 'از ${ltr(DateFormat('dd.MM').format(start))} تا امروز (بعد از آخرین حقوق)';
+    const periodLabel = 'این ماه';
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -2505,18 +2483,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 final today = DateTime.now();
                 final todayMidnight = DateTime(today.year, today.month, today.day);
                 final pastOrDue = tx.where((t) => !t.date.isAfter(todayMidnight)).toList();
-                // Not-yet-due entries: real future-dated transactions, plus
-                // projected occurrences of recurring transactions.
-                final future = occurrencesWithRecurringProjections(tx, horizonDays: 400)
-                    .where((e) => e.date.isAfter(todayMidnight))
-                    .toList()
-                  ..sort((a, b) => a.date.compareTo(b.date));
                 var nextMonthNum = today.month + 1;
                 var nextMonthYear = today.year;
                 if (nextMonthNum > 12) {
                   nextMonthNum = 1;
                   nextMonthYear++;
                 }
+                final endOfNextMonth = DateTime(nextMonthYear, nextMonthNum + 1, 0);
+                // Not-yet-due entries through the end of next calendar month
+                // (covers the rest of this month plus all of next month,
+                // but no further): real future-dated transactions, plus
+                // projected occurrences of recurring transactions.
+                final future = occurrencesWithRecurringProjections(tx, horizonDays: 60)
+                    .where((e) => e.date.isAfter(todayMidnight) && !e.date.isAfter(endOfNextMonth))
+                    .toList()
+                  ..sort((a, b) => a.date.compareTo(b.date));
 
                 // Group already-due transactions by month, most recent first
                 // (tx is already sorted by date descending), keeping only
@@ -3442,40 +3423,42 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                       Text('هزینه‌ی پیش‌بینی‌شده (شامل تراکنش‌های تکرارشونده)', style: Theme.of(context).textTheme.titleSmall),
                       const SizedBox(height: 12),
                       SizedBox(
-                        height: 160,
+                        height: 180,
                         child: maxChart <= 0
                             ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
-                            : BarChart(
-                                BarChartData(
-                                  maxY: maxChart * 1.15,
-                                  barGroups: [
-                                    for (var i = 0; i < chartMonths.length; i++)
-                                      BarChartGroupData(x: i, barRods: [
-                                        BarChartRodData(toY: chartMonths[i].expense, color: Colors.red.shade400, width: 16),
-                                      ]),
-                                  ],
-                                  titlesData: FlTitlesData(
-                                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                    bottomTitles: AxisTitles(
-                                      sideTitles: SideTitles(
-                                        showTitles: true,
-                                        getTitlesWidget: (value, meta) {
-                                          final i = value.toInt();
-                                          if (i < 0 || i >= chartMonths.length) return const SizedBox.shrink();
-                                          return Padding(
-                                            padding: const EdgeInsets.only(top: 4),
-                                            child: Text(_gregorianMonthNames[chartMonths[i].month.month - 1].substring(0, 3),
-                                                style: const TextStyle(fontSize: 10)),
-                                          );
-                                        },
+                            : Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  for (var i = 0; i < chartMonths.length; i++)
+                                    Expanded(
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            chartMonths[i].expense > 0 ? ltr(formatMoney(chartMonths[i].expense, currency)) : '',
+                                            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
+                                            textAlign: TextAlign.center,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Container(
+                                            height: maxChart > 0 ? 110 * (chartMonths[i].expense / maxChart).clamp(0.02, 1.0) : 2,
+                                            margin: const EdgeInsets.symmetric(horizontal: 4),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red.shade400,
+                                              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            _gregorianMonthNames[chartMonths[i].month.month - 1].substring(0, 3),
+                                            style: const TextStyle(fontSize: 10),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  ),
-                                  gridData: const FlGridData(show: false),
-                                  borderData: FlBorderData(show: false),
-                                ),
+                                ],
                               ),
                       ),
                     ],
@@ -4499,13 +4482,13 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
+                  icon: const Icon(Icons.arrow_back_ios, size: 18),
                   tooltip: 'ماه قبل',
                   onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
                 ),
                 Text('${_gregorianMonthNames[month.month - 1]} ${month.year}', style: Theme.of(context).textTheme.titleLarge),
                 IconButton(
-                  icon: const Icon(Icons.arrow_back_ios, size: 18),
+                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
                   tooltip: 'ماه بعد',
                   onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
                 ),
