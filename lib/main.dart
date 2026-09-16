@@ -4808,15 +4808,15 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
-                  tooltip: 'ماه قبل',
-                  onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
-                ),
-                Text('${_gregorianMonthNames[month.month - 1]} ${month.year}', style: Theme.of(context).textTheme.titleLarge),
-                IconButton(
                   icon: const Icon(Icons.arrow_back_ios, size: 18),
                   tooltip: 'ماه بعد',
                   onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
+                ),
+                Text('${_gregorianMonthNames[month.month - 1]} ${month.year}', style: Theme.of(context).textTheme.titleLarge),
+                IconButton(
+                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
+                  tooltip: 'ماه قبل',
+                  onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
                 ),
               ],
             ),
