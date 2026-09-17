@@ -3458,9 +3458,14 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     final allOccurrences = occurrencesWithRecurringProjections(tx, horizonDays: 220);
     final entries = allOccurrences
         .where((e) =>
-            !e.date.isBefore(selectedRange.start) &&
             !e.date.isAfter(selectedRange.end) &&
-            !e.date.isBefore(today) &&
+            // A recurring transaction's occurrence (today or later) always
+            // counts as an upcoming/scheduled payment; a one-off
+            // transaction only counts if it's genuinely in the future -
+            // one dated today has already happened (it's just today's
+            // regular spending), not something still "coming up".
+            (e.t.isRecurring ? !e.date.isBefore(today) : e.date.isAfter(today)) &&
+            !e.date.isBefore(selectedRange.start) &&
             (accountFilter == null || e.t.accountId == accountFilter))
         .toList()
       ..sort((a, b) => a.date.compareTo(b.date));
