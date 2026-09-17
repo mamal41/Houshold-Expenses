@@ -83,7 +83,7 @@ enum TxType { expense, income }
 
 enum RecurrenceFrequency { none, weekly, monthly, quarterly, yearly, custom }
 
-enum AccountType { cash, bank, creditCard, savings, other }
+enum AccountType { cash, bank, creditCard, savings, investment, other }
 
 enum ScanSource { camera, gallery, pdf }
 
@@ -98,6 +98,8 @@ extension AccountTypeLabel on AccountType {
         return 'کارت اعتباری';
       case AccountType.savings:
         return 'پس‌انداز';
+      case AccountType.investment:
+        return 'سرمایه‌گذاری';
       case AccountType.other:
         return 'سایر';
     }
@@ -359,6 +361,7 @@ class Transaction {
   final String notifyMessage; // custom reminder text (e.g. "cancel this subscription")
   final int? notifyDaysBeforeEach; // also remind this many days before EVERY installment's due date
   final PayslipDetails? payslipDetails; // structured fields extracted from a scanned payslip
+  final String? imagePath; // persisted copy of the scanned receipt/payslip image (drafts only)
 
   const Transaction({
     required this.id,
@@ -381,6 +384,7 @@ class Transaction {
     this.notifyMessage = '',
     this.notifyDaysBeforeEach,
     this.payslipDetails,
+    this.imagePath,
   });
 
   bool get isRecurring => recurrence != RecurrenceFrequency.none;
@@ -407,6 +411,8 @@ class Transaction {
     bool clearNotifyDaysBeforeEach = false,
     PayslipDetails? payslipDetails,
     bool clearPayslipDetails = false,
+    String? imagePath,
+    bool clearImagePath = false,
     bool clearRecurrenceDay = false,
     bool clearRecurrenceWeekday = false,
     bool clearRecurrenceIntervalDays = false,
@@ -434,6 +440,7 @@ class Transaction {
         notifyMessage: notifyMessage ?? this.notifyMessage,
         notifyDaysBeforeEach: clearNotifyDaysBeforeEach ? null : (notifyDaysBeforeEach ?? this.notifyDaysBeforeEach),
         payslipDetails: clearPayslipDetails ? null : (payslipDetails ?? this.payslipDetails),
+        imagePath: clearImagePath ? null : (imagePath ?? this.imagePath),
       );
 
   Map<String, dynamic> toJson() => {
@@ -457,6 +464,7 @@ class Transaction {
         'notifyMessage': notifyMessage,
         'notifyDaysBeforeEach': notifyDaysBeforeEach,
         'payslipDetails': payslipDetails?.toJson(),
+        'imagePath': imagePath,
       };
 
   factory Transaction.fromJson(Map<String, dynamic> j) {
@@ -490,6 +498,7 @@ class Transaction {
       notifyMessage: j['notifyMessage'] ?? '',
       notifyDaysBeforeEach: j['notifyDaysBeforeEach'],
       payslipDetails: j['payslipDetails'] != null ? PayslipDetails.fromJson(j['payslipDetails']) : null,
+      imagePath: j['imagePath'],
     );
   }
 }
@@ -780,11 +789,13 @@ const defaultCategories = <Category>[
   Category(id: 'e_subscription_software', name: 'اشتراک نرم‌افزار', parentId: 'e_subscription', type: TxType.expense),
   Category(id: 'e_insurance', name: 'بیمه', type: TxType.expense),
   Category(id: 'e_misc', name: 'متفرقه', type: TxType.expense),
+  Category(id: '_transfer_out_', name: 'انتقال بین حساب‌ها', type: TxType.expense),
   Category(id: 'i_salary', name: 'حقوق', type: TxType.income),
   Category(id: 'i_freelance', name: 'فریلنسری', type: TxType.income),
   Category(id: 'i_investment', name: 'سرمایه‌گذاری', type: TxType.income),
   Category(id: 'i_gift', name: 'هدیه', type: TxType.income),
   Category(id: 'i_misc', name: 'متفرقه', type: TxType.income),
+  Category(id: '_transfer_in_', name: 'انتقال بین حساب‌ها', type: TxType.income),
 ];
 
 const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'EUR');
@@ -805,11 +816,13 @@ const kCategoryIcons = <String, IconData>{
   'e_insurance': Icons.health_and_safety_outlined,
   'e_car_parking': Icons.local_parking_outlined,
   'e_misc': Icons.more_horiz,
+  '_transfer_out_': Icons.swap_horiz,
   'i_salary': Icons.payments_outlined,
   'i_freelance': Icons.laptop_mac_outlined,
   'i_investment': Icons.trending_up,
   'i_gift': Icons.card_giftcard_outlined,
   'i_misc': Icons.more_horiz,
+  '_transfer_in_': Icons.swap_horiz,
 };
 
 IconData iconForCategory(Category? c, List<Category> all) {
@@ -1117,6 +1130,29 @@ class Store {
     await sp.setStringList(_txKey, list.map((t) => jsonEncode(t.toJson())).toList());
   }
 
+  /// Adds or updates a single transaction against the LATEST persisted
+  /// list (re-read fresh, not whatever stale copy a screen happened to be
+  /// holding). This avoids two screens' full-list overwrites racing and
+  /// silently clobbering each other's edits - the likely cause of
+  /// transactions occasionally "not saving" despite the save button
+  /// appearing to work.
+  static Future<void> upsertTransaction(Transaction t) async {
+    final list = await loadTransactions();
+    final idx = list.indexWhere((x) => x.id == t.id);
+    if (idx >= 0) {
+      list[idx] = t;
+    } else {
+      list.add(t);
+    }
+    await saveTransactions(list);
+  }
+
+  static Future<void> deleteTransaction(String id) async {
+    final list = await loadTransactions();
+    list.removeWhere((x) => x.id == id);
+    await saveTransactions(list);
+  }
+
   static Future<List<Category>> loadCategories() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_catKey);
@@ -1153,7 +1189,14 @@ class Store {
       list = [...list, ...defaultCategories.where((c) => c.id == 'e_car_parking')];
       changed = true;
     }
-    for (final newId in ['e_loans_installment_purchase', 'e_subscription', 'e_insurance', 'e_subscription_software']) {
+    for (final newId in [
+      'e_loans_installment_purchase',
+      'e_subscription',
+      'e_insurance',
+      'e_subscription_software',
+      '_transfer_out_',
+      '_transfer_in_',
+    ]) {
       final def = defaultCategories.firstWhere((c) => c.id == newId);
       final alreadyById = list.any((c) => c.id == newId);
       final alreadyByName =
@@ -1164,7 +1207,12 @@ class Store {
       }
     }
     if (changed) await saveCategories(list);
-    return list;
+    // Always return in sorted order - saveCategories sorts what it writes
+    // to disk, but without this the in-memory list handed back here (right
+    // after a migration added something) would still be in insertion
+    // order, which is exactly what caused newly-added categories to
+    // stubbornly appear at the end of the list instead of alphabetically.
+    return List.of(list)..sort((a, b) => persianCompare(a.name, b.name));
   }
 
   static Future<void> saveCategories(List<Category> list) async {
@@ -1531,6 +1579,7 @@ class AppDrawer extends StatelessWidget {
             sectionLabel('دسته‌بندی‌ها و حساب‌ها'),
             item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
             item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
+            item(13, Icons.swap_horiz, 'انتقال بین حساب‌ها', () => const TransferScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
@@ -1832,6 +1881,19 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
 
 /// Renders the first page of a PDF at [path] to a temporary JPEG image and
 /// returns the image file path. Only the first page is processed for now.
+/// Copies a scanned receipt/payslip image (which otherwise lives in a
+/// temp directory the OS can clear at any time) into permanent app
+/// storage, so a saved draft can still show/re-run AI on its image later.
+Future<String> persistDraftImage(String tempPath, String txId) async {
+  final dir = await getApplicationDocumentsDirectory();
+  final draftsDir = Directory('${dir.path}/draft_receipts');
+  if (!await draftsDir.exists()) await draftsDir.create(recursive: true);
+  final ext = tempPath.split('.').last;
+  final destPath = '${draftsDir.path}/$txId.$ext';
+  await File(tempPath).copy(destPath);
+  return destPath;
+}
+
 Future<String> rasterizeFirstPdfPage(String path) async {
   final doc = await PdfDocument.openFile(path);
   final page = await doc.getPage(1);
@@ -2259,6 +2321,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Category> categories = [];
   List<Account> accounts = [];
   bool loading = true;
+  String? dashboardAccountFilter;
 
   @override
   void initState() {
@@ -2276,10 +2339,6 @@ class _HomeScreenState extends State<HomeScreen> {
     // icon last time (e.g. Gemini was unavailable); does nothing if none
     // are pending.
     unawaited(retryPendingCategoryIcons());
-  }
-
-  Future<void> _save() async {
-    await Store.saveTransactions(tx);
   }
 
   String categoryName(String id) {
@@ -2317,6 +2376,9 @@ class _HomeScreenState extends State<HomeScreen> {
       // period's totals until their own date actually arrives.
       if (t.date.isAfter(today)) continue;
       if (!(t.date.year == now.year && t.date.month == now.month)) continue;
+      // Transfers between the user's own accounts are net-neutral, not
+      // real income/expense - they shouldn't inflate these totals.
+      if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') continue;
       final cur = currencyOf(t.accountId);
       map.putIfAbsent(cur, () => {'income': 0, 'expense': 0});
       if (t.type == TxType.income) {
@@ -2328,7 +2390,15 @@ class _HomeScreenState extends State<HomeScreen> {
     return map;
   }
 
-  String get primaryCurrency => accounts.isNotEmpty ? accounts.first.currency : 'EUR';
+  String get primaryCurrency {
+    if (dashboardAccountFilter != null) return currencyOf(dashboardAccountFilter!);
+    if (accounts.isEmpty) return 'EUR';
+    final counts = <String, int>{};
+    for (final a in accounts) {
+      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+    }
+    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+  }
 
   /// Top-level category (parent rolled up) expense totals for the current
   /// period (same period as [periodStatsByCurrency]), in [primaryCurrency].
@@ -2340,7 +2410,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final today = DateTime(now.year, now.month, now.day);
     return tx.where((t) {
       if (t.type != TxType.expense) return false;
-      if (currencyOf(t.accountId) != primaryCurrency) return false;
+      if (t.categoryId == '_transfer_out_') return false;
+      if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) return false;
       if (t.date.isAfter(today)) return false;
       return t.date.year == now.year && t.date.month == now.month;
     }).toList();
@@ -2361,7 +2432,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       var income = 0.0, expense = 0.0;
       for (final t in tx) {
-        if (currencyOf(t.accountId) != primaryCurrency) continue;
+        if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') continue;
+        if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) continue;
         if (t.date.isAfter(today)) continue;
         if (t.date.year == y && t.date.month == m) {
           if (t.type == TxType.income) {
@@ -2390,21 +2462,19 @@ class _HomeScreenState extends State<HomeScreen> {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     if (result is DeleteTransactionSignal) {
-      setState(() => tx.removeWhere((x) => x.id == result.id));
-      await _save();
+      await Store.deleteTransaction(result.id);
+    } else if (result is Transaction) {
+      await Store.upsertTransaction(result);
+    } else {
       return;
     }
-    if (result is! Transaction) return;
-    setState(() {
-      final idx = tx.indexWhere((x) => x.id == result.id);
-      if (idx >= 0) {
-        tx[idx] = result;
-      } else {
-        tx.add(result);
-      }
-      tx.sort((a, b) => b.date.compareTo(a.date));
-    });
-    await _save();
+    // Always reload from storage after a write, rather than trusting this
+    // screen's own (possibly stale) in-memory list - upsertTransaction /
+    // deleteTransaction already operate on the freshest persisted data, so
+    // this keeps the UI in sync with what was actually saved.
+    tx = await Store.loadTransactions();
+    tx.sort((a, b) => b.date.compareTo(a.date));
+    if (mounted) setState(() {});
   }
 
   Future<void> _openDrafts() async {
@@ -2414,8 +2484,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _delete(Transaction t) async {
     await NotificationService.instance.cancelForTransaction(t.id);
-    setState(() => tx.removeWhere((x) => x.id == t.id));
-    await _save();
+    await Store.deleteTransaction(t.id);
+    tx = await Store.loadTransactions();
+    tx.sort((a, b) => b.date.compareTo(a.date));
+    if (mounted) setState(() {});
   }
 
   @override
@@ -2503,7 +2575,21 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (tx.isNotEmpty)
+            if (tx.isNotEmpty) ...[
+              if (accounts.length > 1)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: DropdownButtonFormField<String?>(
+                    initialValue: dashboardAccountFilter,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                      ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
+                    ],
+                    onChanged: (v) => setState(() => dashboardAccountFilter = v),
+                  ),
+                ),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -2515,6 +2601,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+            ],
             const SizedBox(height: 16),
             Text(tr('transactions'), style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
@@ -3027,26 +3114,17 @@ class _DraftsScreenState extends State<DraftsScreen> {
       MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
     );
     if (result == null) return;
-    final all = await Store.loadTransactions();
     if (result is DeleteTransactionSignal) {
-      all.removeWhere((x) => x.id == result.id);
+      await Store.deleteTransaction(result.id);
     } else if (result is Transaction) {
-      final idx = all.indexWhere((x) => x.id == result.id);
-      if (idx >= 0) {
-        all[idx] = result;
-      } else {
-        all.add(result);
-      }
+      await Store.upsertTransaction(result);
     }
-    await Store.saveTransactions(all);
     await _load();
   }
 
   Future<void> _delete(Transaction t) async {
     await NotificationService.instance.cancelForTransaction(t.id);
-    final all = await Store.loadTransactions();
-    all.removeWhere((x) => x.id == t.id);
-    await Store.saveTransactions(all);
+    await Store.deleteTransaction(t.id);
     await _load();
   }
 
@@ -3174,28 +3252,19 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
       MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
     );
     if (result == null) return;
-    final all = await Store.loadTransactions();
     final newCategories = await Store.loadCategories();
     if (result is DeleteTransactionSignal) {
-      all.removeWhere((x) => x.id == result.id);
+      await Store.deleteTransaction(result.id);
     } else if (result is Transaction) {
-      final idx = all.indexWhere((x) => x.id == result.id);
-      if (idx >= 0) {
-        all[idx] = result;
-      } else {
-        all.add(result);
-      }
+      await Store.upsertTransaction(result);
     }
-    await Store.saveTransactions(all);
     categories = newCategories;
     await _load();
   }
 
   Future<void> _delete(Transaction t) async {
     await NotificationService.instance.cancelForTransaction(t.id);
-    final all = await Store.loadTransactions();
-    all.removeWhere((x) => x.id == t.id);
-    await Store.saveTransactions(all);
+    await Store.deleteTransaction(t.id);
     await _load();
   }
 
@@ -3285,6 +3354,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   _UpcomingRange range = _UpcomingRange.endOfThisMonth;
   DateTime customMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
   bool showChart = false;
+  String? accountFilter;
 
   @override
   void initState() {
@@ -3310,6 +3380,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   }
 
   String get primaryCurrency {
+    if (accountFilter != null) return currencyOf(accountFilter!);
     if (accounts.isEmpty) return 'EUR';
     final counts = <String, int>{};
     for (final a in accounts) {
@@ -3386,7 +3457,11 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
 
     final allOccurrences = occurrencesWithRecurringProjections(tx, horizonDays: 220);
     final entries = allOccurrences
-        .where((e) => !e.date.isBefore(selectedRange.start) && !e.date.isAfter(selectedRange.end) && !e.date.isBefore(today))
+        .where((e) =>
+            !e.date.isBefore(selectedRange.start) &&
+            !e.date.isAfter(selectedRange.end) &&
+            !e.date.isBefore(today) &&
+            (accountFilter == null || e.t.accountId == accountFilter))
         .toList()
       ..sort((a, b) => a.date.compareTo(b.date));
 
@@ -3412,7 +3487,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       final total = allOccurrences
           .where((e) =>
               e.t.type == TxType.expense &&
-              currencyOf(e.t.accountId) == currency &&
+              (accountFilter != null ? e.t.accountId == accountFilter : currencyOf(e.t.accountId) == currency) &&
               !e.date.isBefore(mStart) &&
               !e.date.isAfter(mEnd))
           .fold(0.0, (s, e) => s + e.t.amount);
@@ -3453,6 +3528,19 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                   onSelected: (v) => setState(() => showChart = v),
                 ),
               ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: DropdownButtonFormField<String?>(
+              initialValue: accountFilter,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
+              ],
+              onChanged: (v) => setState(() => accountFilter = v),
             ),
           ),
           if (showChart)
@@ -3616,18 +3704,11 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
       MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
     );
     if (result == null) return;
-    final all = await Store.loadTransactions();
     if (result is DeleteTransactionSignal) {
-      all.removeWhere((x) => x.id == result.id);
+      await Store.deleteTransaction(result.id);
     } else if (result is Transaction) {
-      final idx = all.indexWhere((x) => x.id == result.id);
-      if (idx >= 0) {
-        all[idx] = result;
-      } else {
-        all.add(result);
-      }
+      await Store.upsertTransaction(result);
     }
-    await Store.saveTransactions(all);
     await _load();
   }
 
@@ -3749,6 +3830,161 @@ enum _ReportPreset { thisMonth, lastMonth, thisQuarter, lastQuarter, thisYear, l
 
 enum _TxSortMode { dateDesc, dateAsc, createdDesc, createdAsc, amountDesc, amountAsc }
 
+// ============================== Transfer between accounts ==============================
+
+class TransferScreen extends StatefulWidget {
+  const TransferScreen({super.key});
+  @override
+  State<TransferScreen> createState() => _TransferScreenState();
+}
+
+class _TransferScreenState extends State<TransferScreen> {
+  bool loading = true;
+  List<Account> accounts = [];
+  Account? fromAccount;
+  Account? toAccount;
+  final amountCtrl = TextEditingController();
+  final noteCtrl = TextEditingController();
+  DateTime date = DateTime.now();
+  bool saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    accounts = await Store.loadAccounts();
+    if (accounts.length >= 2) {
+      fromAccount = accounts[0];
+      toAccount = accounts[1];
+    } else if (accounts.length == 1) {
+      fromAccount = accounts[0];
+    }
+    setState(() => loading = false);
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: date,
+      firstDate: DateTime(2015),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => date = picked);
+  }
+
+  Future<void> _save() async {
+    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    if (amount == null || amount <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
+      return;
+    }
+    if (fromAccount == null || toAccount == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حساب مبدأ و مقصد را انتخاب کنید.')));
+      return;
+    }
+    if (fromAccount!.id == toAccount!.id) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حساب مبدأ و مقصد نمی‌توانند یکسان باشند.')));
+      return;
+    }
+    if (fromAccount!.currency != toAccount!.currency) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('انتقال بین حساب‌های با ارز متفاوت پشتیبانی نمی‌شود (نرخ تبدیل لازم است).'),
+      ));
+      return;
+    }
+    setState(() => saving = true);
+    final baseId = DateTime.now().microsecondsSinceEpoch.toString();
+    final note = noteCtrl.text.trim();
+    final outTx = Transaction(
+      id: '${baseId}_out',
+      type: TxType.expense,
+      amount: amount,
+      categoryId: '_transfer_out_',
+      accountId: fromAccount!.id,
+      date: date,
+      note: note.isEmpty ? 'انتقال به ${toAccount!.name}' : note,
+    );
+    final inTx = Transaction(
+      id: '${baseId}_in',
+      type: TxType.income,
+      amount: amount,
+      categoryId: '_transfer_in_',
+      accountId: toAccount!.id,
+      date: date,
+      note: note.isEmpty ? 'انتقال از ${fromAccount!.name}' : note,
+    );
+    await Store.upsertTransaction(outTx);
+    await Store.upsertTransaction(inTx);
+    if (!mounted) return;
+    setState(() => saving = false);
+    Navigator.pop(context, true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (accounts.length < 2) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('انتقال بین حساب‌ها')),
+        body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('برای انتقال، حداقل به دو حساب نیاز دارید.'))),
+      );
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('انتقال بین حساب‌ها')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          DropdownButtonFormField<Account>(
+            initialValue: fromAccount,
+            decoration: const InputDecoration(labelText: 'از حساب', border: OutlineInputBorder()),
+            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+            onChanged: (v) => setState(() => fromAccount = v),
+          ),
+          const SizedBox(height: 12),
+          Center(child: Icon(Icons.arrow_downward, color: Colors.grey.shade500)),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<Account>(
+            initialValue: toAccount,
+            decoration: const InputDecoration(labelText: 'به حساب', border: OutlineInputBorder()),
+            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+            onChanged: (v) => setState(() => toAccount = v),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: amountCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 100.00', border: const OutlineInputBorder()),
+          ),
+          const SizedBox(height: 16),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr('date')),
+            subtitle: Text(ltr(DateFormat('dd.MM.yyyy').format(date))),
+            trailing: const Icon(Icons.calendar_today, size: 18),
+            onTap: _pickDate,
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: noteCtrl,
+            decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: saving ? null : _save,
+            icon: saving
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.swap_horiz),
+            label: const Text('انتقال'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class AllTransactionsScreen extends StatefulWidget {
   const AllTransactionsScreen({super.key});
   @override
@@ -3765,7 +4001,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
   TxType? typeFilter;
   String? categoryFilter;
   String? accountFilter;
-  _TxSortMode sort = _TxSortMode.dateDesc;
+  _TxSortMode sort = _TxSortMode.createdDesc;
 
   @override
   void initState() {
@@ -3796,18 +4032,11 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
       MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
     );
     if (result == null) return;
-    final all = await Store.loadTransactions();
     if (result is DeleteTransactionSignal) {
-      all.removeWhere((x) => x.id == result.id);
+      await Store.deleteTransaction(result.id);
     } else if (result is Transaction) {
-      final idx = all.indexWhere((x) => x.id == result.id);
-      if (idx >= 0) {
-        all[idx] = result;
-      } else {
-        all.add(result);
-      }
+      await Store.upsertTransaction(result);
     }
-    await Store.saveTransactions(all);
     await _load();
   }
 
@@ -3819,6 +4048,39 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         _TxSortMode.amountDesc => 'مبلغ (بیشترین)',
         _TxSortMode.amountAsc => 'مبلغ (کمترین)',
       };
+
+  Widget _filterPill<T>({
+    required BuildContext context,
+    required IconData icon,
+    required T value,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: Colors.grey.shade600),
+          const SizedBox(width: 6),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<T>(
+              value: value,
+              isDense: true,
+              icon: const Icon(Icons.expand_more, size: 16),
+              style: TextStyle(fontSize: 13, color: Theme.of(context).textTheme.bodyMedium?.color),
+              items: items,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3865,28 +4127,39 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
       appBar: AppBar(title: const Text('همه‌ی تراکنش‌ها')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: TextField(
               controller: queryCtrl,
               decoration: const InputDecoration(
                 hintText: 'جستجو در دسته‌بندی، توضیحات یا اقلام...',
                 prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
+                border: InputBorder.none,
                 isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 14),
               ),
               onChanged: (v) => setState(() => query = v),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text('فیلتر و مرتب‌سازی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                DropdownButton<TxType?>(
+                _filterPill<TxType?>(
+                  context: context,
+                  icon: Icons.swap_vert,
                   value: typeFilter,
-                  hint: const Text('نوع'),
                   items: const [
                     DropdownMenuItem(value: null, child: Text('همه‌ی انواع')),
                     DropdownMenuItem(value: TxType.income, child: Text('درآمد')),
@@ -3894,25 +4167,29 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                   ],
                   onChanged: (v) => setState(() => typeFilter = v),
                 ),
-                DropdownButton<String?>(
+                _filterPill<String?>(
+                  context: context,
+                  icon: Icons.category_outlined,
                   value: categoryFilter,
-                  hint: const Text('دسته‌بندی'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
                     ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
                   ],
                   onChanged: (v) => setState(() => categoryFilter = v),
                 ),
-                DropdownButton<String?>(
+                _filterPill<String?>(
+                  context: context,
+                  icon: Icons.account_balance_wallet_outlined,
                   value: accountFilter,
-                  hint: const Text('حساب'),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
                     ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))),
                   ],
                   onChanged: (v) => setState(() => accountFilter = v),
                 ),
-                DropdownButton<_TxSortMode>(
+                _filterPill<_TxSortMode>(
+                  context: context,
+                  icon: Icons.sort,
                   value: sort,
                   items: _TxSortMode.values.map((m) => DropdownMenuItem(value: m, child: Text(_sortLabel(m)))).toList(),
                   onChanged: (v) => setState(() => sort = v ?? sort),
@@ -3920,6 +4197,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
               ],
             ),
           ),
+          const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Align(
@@ -4013,18 +4291,11 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
       MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
     );
     if (result == null) return;
-    final all = await Store.loadTransactions();
     if (result is DeleteTransactionSignal) {
-      all.removeWhere((x) => x.id == result.id);
+      await Store.deleteTransaction(result.id);
     } else if (result is Transaction) {
-      final idx = all.indexWhere((x) => x.id == result.id);
-      if (idx >= 0) {
-        all[idx] = result;
-      } else {
-        all.add(result);
-      }
+      await Store.upsertTransaction(result);
     }
-    await Store.saveTransactions(all);
     await _load();
   }
 
@@ -4665,6 +4936,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   List<Account> accounts = [];
   List<Category> categories = [];
   late DateTime month;
+  String? accountFilter;
 
   @override
   void initState() {
@@ -4692,7 +4964,13 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   }
 
   Future<void> _showDayTransactions(DateTime date) async {
-    final dayTx = tx.where((t) => t.date.year == date.year && t.date.month == date.month && t.date.day == date.day).toList();
+    final dayTx = tx
+        .where((t) =>
+            t.date.year == date.year &&
+            t.date.month == date.month &&
+            t.date.day == date.day &&
+            (accountFilter == null || t.accountId == accountFilter))
+        .toList();
     if (dayTx.isEmpty) return;
     await showModalBottomSheet(
       context: context,
@@ -4745,6 +5023,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   }
 
   String get primaryCurrency {
+    if (accountFilter != null) return currencyOf(accountFilter!);
     if (accounts.isEmpty) return 'EUR';
     final counts = <String, int>{};
     for (final a in accounts) {
@@ -4766,7 +5045,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     final dayIncomeProjected = <int, double>{};
     final dayExpenseProjected = <int, double>{};
     for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 400)) {
-      if (currencyOf(e.t.accountId) != currency) continue;
+      if (accountFilter != null ? e.t.accountId != accountFilter : currencyOf(e.t.accountId) != currency) continue;
       if (e.date.year != month.year || e.date.month != month.month) continue;
       final notYetDue = e.date.isAfter(today);
       if (e.t.type == TxType.income) {
@@ -4821,6 +5100,20 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: DropdownButtonFormField<String?>(
+              initialValue: accountFilter,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
+              ],
+              onChanged: (v) => setState(() => accountFilter = v),
+            ),
+          ),
+          const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Card(
@@ -5436,8 +5729,17 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       if (proceed != true) return;
     }
     if (!context.mounted) return;
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+    String? persistedImage;
+    if (draft) {
+      try {
+        persistedImage = await persistDraftImage(widget.imagePath, id);
+      } catch (_) {
+        // best-effort only - saving the draft itself matters more than the image copy
+      }
+    }
     final result = Transaction(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: id,
       type: TxType.expense,
       amount: total,
       categoryId: selectedCategory?.id ?? '_uncategorized_',
@@ -5446,6 +5748,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       note: merchantCtrl.text.trim(),
       draft: draft,
       items: items,
+      imagePath: persistedImage,
     );
     Navigator.pop(context, result);
   }
@@ -5483,9 +5786,28 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
             )
           else
-            const Text(
-              'برای بهبود دقت با هوش مصنوعی، کلید Gemini را از منوی «تنظیمات» وارد کنید.',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+            InkWell(
+              onTap: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
+                final key = await Store.loadGeminiKey();
+                if (!mounted) return;
+                setState(() => hasGeminiKey = key != null && key.trim().isNotEmpty);
+              },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 16, color: Colors.grey),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'برای بهبود دقت با هوش مصنوعی، یک کلید Gemini در «تنظیمات › هوش مصنوعی (Gemini)» وارد کنید.',
+                        style: TextStyle(color: Colors.grey, fontSize: 12, decoration: TextDecoration.underline),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           if (geminiFailed)
             Padding(
@@ -5862,8 +6184,17 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       if (proceed != true) return;
     }
     if (!context.mounted) return;
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+    String? persistedImage;
+    if (draft) {
+      try {
+        persistedImage = await persistDraftImage(widget.imagePath, id);
+      } catch (_) {
+        // best-effort only - saving the draft itself matters more than the image copy
+      }
+    }
     final result = Transaction(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: id,
       type: TxType.income,
       amount: transactionAmount,
       categoryId: selectedCategory?.id ?? '_uncategorized_',
@@ -5872,6 +6203,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       note: '',
       draft: draft,
       payslipDetails: details,
+      imagePath: persistedImage,
     );
     if (!context.mounted) return;
     Navigator.pop(context, result);
@@ -5910,9 +6242,28 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
             )
           else
-            const Text(
-              'برای بهبود دقت با هوش مصنوعی، کلید Gemini را از منوی «تنظیمات» وارد کنید.',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+            InkWell(
+              onTap: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
+                final key = await Store.loadGeminiKey();
+                if (!mounted) return;
+                setState(() => hasGeminiKey = key != null && key.trim().isNotEmpty);
+              },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 16, color: Colors.grey),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'برای بهبود دقت با هوش مصنوعی، یک کلید Gemini در «تنظیمات › هوش مصنوعی (Gemini)» وارد کنید.',
+                        style: TextStyle(color: Colors.grey, fontSize: 12, decoration: TextDecoration.underline),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           if (geminiFailed)
             Padding(
@@ -6139,6 +6490,30 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (selectedAccount == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک حساب انتخاب کنید.')));
       return false;
+    }
+    final existingList = await Store.loadTransactions();
+    final duplicate = existingList.any((t) =>
+        t.id != widget.existing?.id &&
+        t.type == type &&
+        (t.amount - amount).abs() < 0.01 &&
+        t.date.year == date.year &&
+        t.date.month == date.month &&
+        t.date.day == date.day &&
+        t.categoryId == selectedCategory!.id);
+    if (duplicate) {
+      if (!context.mounted) return false;
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تراکنش مشابه'),
+          content: const Text('یک تراکنش با همین مبلغ، تاریخ و دسته‌بندی قبلاً ثبت شده. ممکن است این تراکنش تکراری باشد. باز هم ثبت شود؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+          ],
+        ),
+      );
+      if (proceed != true) return false;
     }
     int? recDay;
     int? recWeekday;
@@ -6497,19 +6872,52 @@ class _TransactionEditorState extends State<TransactionEditor> {
       appBar: AppBar(
         title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
         actions: [
-          if (widget.existing == null)
+          if (widget.existing?.imagePath != null)
             IconButton(
-              icon: const Icon(Icons.document_scanner_outlined),
-              tooltip: 'خواندن از عکس یا فایل رسید/فیش حقوقی',
+              icon: const Icon(Icons.image_search_outlined),
+              tooltip: 'بازبینی تصویر رسید/فیش (اجرای دوباره‌ی هوش مصنوعی)',
               onPressed: () async {
-                final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
+                final existing = widget.existing!;
+                Transaction? result;
+                if (existing.type == TxType.expense) {
+                  final draftInit = ReceiptDraft(
+                    merchant: existing.note,
+                    date: existing.date,
+                    total: existing.amount,
+                    items: existing.items,
+                    categoryHint: selectedCategory?.name,
+                  );
+                  result = await Navigator.push<Transaction>(
+                    context,
+                    MaterialPageRoute(builder: (_) => ReceiptReviewScreen(imagePath: existing.imagePath!, initial: draftInit)),
+                  );
+                } else {
+                  result = await Navigator.push<Transaction>(
+                    context,
+                    MaterialPageRoute(builder: (_) => PayslipReviewScreen(imagePath: existing.imagePath!, initial: const {})),
+                  );
+                }
                 if (result == null) return;
                 if (!context.mounted) return;
-                // A scanned transaction supersedes anything typed manually
-                // so far in this form; bypass the "unsaved changes" guard
-                // instead of letting it swallow the scan result.
+                // Keep the same id as the transaction being edited, so
+                // saving replaces it instead of creating a duplicate.
                 _dirty = false;
-                Navigator.pop(context, result);
+                Navigator.pop(
+                  context,
+                  Transaction(
+                    id: existing.id,
+                    type: result.type,
+                    amount: result.amount,
+                    categoryId: result.categoryId,
+                    accountId: result.accountId,
+                    date: result.date,
+                    note: result.note,
+                    draft: result.draft,
+                    items: result.items,
+                    payslipDetails: result.payslipDetails,
+                    imagePath: result.imagePath ?? existing.imagePath,
+                  ),
+                );
               },
             ),
           if (widget.existing != null)
@@ -6539,6 +6947,32 @@ class _TransactionEditorState extends State<TransactionEditor> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (widget.existing == null) ...[
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+              icon: const Icon(Icons.document_scanner_outlined),
+              label: const Text('خواندن از عکس یا فایل رسید/فیش حقوقی', style: TextStyle(fontSize: 15)),
+              onPressed: () async {
+                final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
+                if (result == null) return;
+                if (!context.mounted) return;
+                // A scanned transaction supersedes anything typed manually
+                // so far in this form; bypass the "unsaved changes" guard
+                // instead of letting it swallow the scan result.
+                _dirty = false;
+                Navigator.pop(context, result);
+              },
+            ),
+            const SizedBox(height: 16),
+            const Row(
+              children: [
+                Expanded(child: Divider()),
+                Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('یا وارد کنید', style: TextStyle(color: Colors.grey, fontSize: 12))),
+                Expanded(child: Divider()),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
           SegmentedButton<TxType>(
             segments: const [
               ButtonSegment(value: TxType.expense, label: Text('هزینه'), icon: Icon(Icons.arrow_upward)),
