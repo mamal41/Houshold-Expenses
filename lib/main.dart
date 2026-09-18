@@ -1316,6 +1316,15 @@ class Store {
     await sp.setStringList(_txKey, list.map((t) => jsonEncode(t.toJson())).toList());
   }
 
+  /// A transfer between accounts is stored as two linked transactions
+  /// (ids "<base>_out" and "<base>_in"). Given either leg's id, returns
+  /// the other leg's id, or null if this isn't a transfer transaction.
+  static String? _transferPairId(String id) {
+    if (id.endsWith('_out')) return '${id.substring(0, id.length - 4)}_in';
+    if (id.endsWith('_in')) return '${id.substring(0, id.length - 3)}_out';
+    return null;
+  }
+
   /// Adds or updates a single transaction against the LATEST persisted
   /// list (re-read fresh, not whatever stale copy a screen happened to be
   /// holding). This avoids two screens' full-list overwrites racing and
@@ -1330,12 +1339,38 @@ class Store {
     } else {
       list.add(t);
     }
+    // A transfer is really one event told from two accounts' sides -
+    // editing the amount/date/recurrence on one leg should keep the other
+    // leg (kept in its own type/category/account/note) in sync, so the
+    // pair doesn't silently drift apart.
+    if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') {
+      final pairId = _transferPairId(t.id);
+      if (pairId != null) {
+        final pairIdx = list.indexWhere((x) => x.id == pairId);
+        if (pairIdx >= 0) {
+          list[pairIdx] = list[pairIdx].copyWith(
+            amount: t.amount,
+            date: t.date,
+            recurrence: t.recurrence,
+            recurrenceDay: t.recurrenceDay,
+            recurrenceWeekday: t.recurrenceWeekday,
+            recurrenceIntervalDays: t.recurrenceIntervalDays,
+            installments: t.installments,
+            recurrenceEndDate: t.recurrenceEndDate,
+          );
+        }
+      }
+    }
     await saveTransactions(list);
   }
 
   static Future<void> deleteTransaction(String id) async {
     final list = await loadTransactions();
     list.removeWhere((x) => x.id == id);
+    // Deleting one leg of a transfer without the other would leave a
+    // one-sided "phantom" transaction behind - remove both together.
+    final pairId = _transferPairId(id);
+    if (pairId != null) list.removeWhere((x) => x.id == pairId);
     await saveTransactions(list);
   }
 
