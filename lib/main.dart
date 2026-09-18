@@ -30,6 +30,7 @@ void main() async {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   await NotificationService.instance.init();
   currentLanguage.value = await Store.loadLanguage();
+  currentThemeMode.value = await Store.loadThemeMode();
   runApp(const MoneyApp());
 }
 
@@ -62,7 +63,7 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
       title: const Text('تغییرات ذخیره نشده'),
       content: const Text('چیزی تغییر کرده یا اضافه شده که هنوز ذخیره نشده. چه کار کنم؟'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('انصراف')),
+        TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: Text(tr('cancel'))),
         TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خروج بدون ذخیره')),
         if (onSave != null) FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('ذخیره و خروج')),
       ],
@@ -1131,6 +1132,7 @@ class Store {
   static const _accKey = 'accounts_v2';
   static const _geminiKey = 'gemini_api_key';
   static const _langKey = 'app_language';
+  static const _themeModeKey = 'app_theme_mode';
   static const _iconRetryDateKey = 'last_icon_retry_date';
 
   static Future<DateTime?> loadLastIconRetryDate() async {
@@ -1246,6 +1248,17 @@ class Store {
   static Future<void> saveLanguage(AppLanguage lang) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_langKey, lang.name);
+  }
+
+  static Future<ThemeMode> loadThemeMode() async {
+    final sp = await SharedPreferences.getInstance();
+    final code = sp.getString(_themeModeKey);
+    return ThemeMode.values.firstWhere((m) => m.name == code, orElse: () => ThemeMode.system);
+  }
+
+  static Future<void> saveThemeMode(ThemeMode mode) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_themeModeKey, mode.name);
   }
 
   static Future<List<Transaction>> loadTransactions() async {
@@ -1402,6 +1415,7 @@ extension AppLanguageX on AppLanguage {
 }
 
 final ValueNotifier<AppLanguage> currentLanguage = ValueNotifier(AppLanguage.fa);
+final ValueNotifier<ThemeMode> currentThemeMode = ValueNotifier(ThemeMode.system);
 
 /// Minimal, hand-maintained translation table. Covers the app's highest
 /// traffic labels first (navigation, home screen, settings); the rest of
@@ -1474,6 +1488,20 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'custom_month': {AppLanguage.fa: 'ماه دلخواه', AppLanguage.en: 'Custom month', AppLanguage.de: 'Bestimmter Monat'},
   'add_account': {AppLanguage.fa: 'حساب جدید', AppLanguage.en: 'New account', AppLanguage.de: 'Neues Konto'},
   'delete_target': {AppLanguage.fa: 'حذف هدف', AppLanguage.en: 'Delete goal', AppLanguage.de: 'Ziel löschen'},
+  'quantity': {AppLanguage.fa: 'تعداد', AppLanguage.en: 'Quantity', AppLanguage.de: 'Menge'},
+  'price': {AppLanguage.fa: 'قیمت', AppLanguage.en: 'Price', AppLanguage.de: 'Preis'},
+  'item_name': {AppLanguage.fa: 'نام کالا', AppLanguage.en: 'Item name', AppLanguage.de: 'Artikelname'},
+  'recurrence_type': {AppLanguage.fa: 'نوع تکرار', AppLanguage.en: 'Recurrence type', AppLanguage.de: 'Wiederholungstyp'},
+  'weekday': {AppLanguage.fa: 'روز هفته', AppLanguage.en: 'Weekday', AppLanguage.de: 'Wochentag'},
+  'total_installments': {AppLanguage.fa: 'تعداد کل اقساط', AppLanguage.en: 'Total installments', AppLanguage.de: 'Gesamtzahl der Raten'},
+  'save_as_draft': {AppLanguage.fa: 'ذخیره به‌صورت پیش‌نویس', AppLanguage.en: 'Save as draft', AppLanguage.de: 'Als Entwurf speichern'},
+  'installment_reminder': {AppLanguage.fa: 'اعلان اقساط', AppLanguage.en: 'Installment reminder', AppLanguage.de: 'Ratenerinnerung'},
+  'reminder_note': {AppLanguage.fa: 'پیام یادآوری (اختیاری)', AppLanguage.en: 'Reminder note (optional)', AppLanguage.de: 'Erinnerungsnotiz (optional)'},
+  'delete_transaction_confirm': {
+    AppLanguage.fa: 'این تراکنش حذف شود؟',
+    AppLanguage.en: 'Delete this transaction?',
+    AppLanguage.de: 'Diese Buchung löschen?',
+  },
   'app_lock_title': {AppLanguage.fa: 'قفل برنامه', AppLanguage.en: 'App lock', AppLanguage.de: 'App-Sperre'},
   'backup_restore_title': {AppLanguage.fa: 'پشتیبان‌گیری و بازیابی', AppLanguage.en: 'Backup & restore', AppLanguage.de: 'Sicherung & Wiederherstellung'},
   'scan_title': {AppLanguage.fa: 'اسکن رسید یا فیش حقوقی', AppLanguage.en: 'Scan receipt or payslip', AppLanguage.de: 'Beleg oder Lohnabrechnung scannen'},
@@ -1505,23 +1533,27 @@ class _MoneyAppState extends State<MoneyApp> {
   @override
   void initState() {
     super.initState();
-    currentLanguage.addListener(_onLanguageChanged);
+    currentLanguage.addListener(_onChanged);
+    currentThemeMode.addListener(_onChanged);
   }
 
   @override
   void dispose() {
-    currentLanguage.removeListener(_onLanguageChanged);
+    currentLanguage.removeListener(_onChanged);
+    currentThemeMode.removeListener(_onChanged);
     super.dispose();
   }
 
-  void _onLanguageChanged() => setState(() {});
+  void _onChanged() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: tr('app_title'),
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.light),
+      darkTheme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.dark),
+      themeMode: currentThemeMode.value,
       locale: currentLanguage.value.locale,
       supportedLocales: const [Locale('fa'), Locale('en'), Locale('de')],
       localizationsDelegates: const [
@@ -1748,7 +1780,6 @@ class AppDrawer extends StatelessWidget {
             item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
-            item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
             item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
             const Divider(height: 1),
@@ -1793,6 +1824,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LanguageSettingsScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.dark_mode_outlined),
+            title: const Text('ظاهر برنامه'),
+            subtitle: ValueListenableBuilder<ThemeMode>(
+              valueListenable: currentThemeMode,
+              builder: (context, mode, _) => Text(switch (mode) {
+                ThemeMode.system => 'پیش‌فرض سیستم',
+                ThemeMode.light => 'روشن',
+                ThemeMode.dark => 'تیره',
+              }),
+            ),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppearanceSettingsScreen())),
           ),
           ListTile(
             leading: const Icon(Icons.auto_awesome_outlined),
@@ -1844,6 +1889,54 @@ class LanguageSettingsScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class AppearanceSettingsScreen extends StatelessWidget {
+  const AppearanceSettingsScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('ظاهر برنامه')),
+      body: ValueListenableBuilder<ThemeMode>(
+        valueListenable: currentThemeMode,
+        builder: (context, mode, _) => ListView(
+          children: [
+            RadioListTile<ThemeMode>(
+              title: const Text('پیش‌فرض سیستم'),
+              subtitle: const Text('تنظیم روشن/تیره‌ی گوشی را دنبال کند'),
+              value: ThemeMode.system,
+              groupValue: mode,
+              onChanged: (v) async {
+                if (v == null) return;
+                currentThemeMode.value = v;
+                await Store.saveThemeMode(v);
+              },
+            ),
+            RadioListTile<ThemeMode>(
+              title: const Text('روشن'),
+              value: ThemeMode.light,
+              groupValue: mode,
+              onChanged: (v) async {
+                if (v == null) return;
+                currentThemeMode.value = v;
+                await Store.saveThemeMode(v);
+              },
+            ),
+            RadioListTile<ThemeMode>(
+              title: const Text('تیره'),
+              value: ThemeMode.dark,
+              groupValue: mode,
+              onChanged: (v) async {
+                if (v == null) return;
+                currentThemeMode.value = v;
+                await Store.saveThemeMode(v);
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2928,8 +3021,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: const Text('حذف تراکنش'),
                   content: const Text('این تراکنش حذف شود؟'),
                   actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
                   ],
                 ),
               ) ??
@@ -3319,8 +3412,8 @@ class _DraftsScreenState extends State<DraftsScreen> {
                         title: const Text('حذف پیش‌نویس'),
                         content: const Text('این پیش‌نویس حذف شود؟'),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
                         ],
                       ),
                     ),
@@ -3461,8 +3554,8 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                       title: const Text('حذف تراکنش تکرارشونده'),
                       content: const Text('این تراکنش تکرارشونده حذف شود؟'),
                       actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
                       ],
                     ),
                   ),
@@ -4523,6 +4616,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
   TxType? typeFilter;
   String? categoryFilter;
   String? accountFilter;
+  bool? recurringFilter; // null = all, true = recurring only, false = non-recurring only
   _TxSortMode sort = _TxSortMode.createdDesc;
 
   @override
@@ -4612,6 +4706,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
       if (typeFilter != null && t.type != typeFilter) return false;
       if (categoryFilter != null && t.categoryId != categoryFilter) return false;
       if (accountFilter != null && t.accountId != accountFilter) return false;
+      if (recurringFilter != null && t.isRecurring != recurringFilter) return false;
       if (q.isNotEmpty) {
         final hay = [
           categoryName(t.categoryId),
@@ -4688,6 +4783,17 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     DropdownMenuItem(value: TxType.expense, child: Text('هزینه')),
                   ],
                   onChanged: (v) => setState(() => typeFilter = v),
+                ),
+                _filterPill<bool?>(
+                  context: context,
+                  icon: Icons.repeat,
+                  value: recurringFilter,
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('همه')),
+                    DropdownMenuItem(value: true, child: Text('تکرارشونده')),
+                    DropdownMenuItem(value: false, child: Text('غیرتکرارشونده')),
+                  ],
+                  onChanged: (v) => setState(() => recurringFilter = v),
                 ),
                 _filterPill<String?>(
                   context: context,
@@ -6178,11 +6284,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+              TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
               const SizedBox(height: 8),
-              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('quantity'))),
               const SizedBox(height: 8),
-              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('price'))),
               const SizedBox(height: 8),
               TextField(
                 controller: warrantyCtrl,
@@ -6193,7 +6299,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? 'افزودن' : 'ذخیره')),
         ],
       ),
@@ -6243,7 +6349,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           title: const Text('تراکنش مشابه'),
           content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین رسید باشد. باز هم ثبت شود؟'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
             FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
           ],
         ),
@@ -6431,7 +6537,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(tr('items'), style: Theme.of(context).textTheme.titleMedium),
-              TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
+              TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: Text(tr('add'))),
             ],
           ),
           if (items.isEmpty)
@@ -6698,7 +6804,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           title: const Text('تراکنش مشابه'),
           content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین فیش باشد. باز هم ثبت شود؟'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
             FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
           ],
         ),
@@ -7030,7 +7136,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           title: const Text('تراکنش مشابه'),
           content: const Text('یک تراکنش با همین مبلغ، تاریخ و دسته‌بندی قبلاً ثبت شده. ممکن است این تراکنش تکراری باشد. باز هم ثبت شود؟'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
             FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
           ],
         ),
@@ -7149,11 +7255,11 @@ class _TransactionEditorState extends State<TransactionEditor> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام کالا'), autofocus: true),
+              TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
               const SizedBox(height: 8),
-              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'تعداد')),
+              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('quantity'))),
               const SizedBox(height: 8),
-              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'قیمت')),
+              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('price'))),
               const SizedBox(height: 8),
               TextField(
                 controller: warrantyCtrl,
@@ -7164,7 +7270,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? 'افزودن' : 'ذخیره')),
         ],
       ),
@@ -7208,7 +7314,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       children: [
         DropdownButtonFormField<RecurrenceFrequency>(
           initialValue: recurrence,
-          decoration: const InputDecoration(labelText: 'نوع تکرار', border: OutlineInputBorder()),
+          decoration: InputDecoration(labelText: tr('recurrence_type'), border: const OutlineInputBorder()),
           items: const [
             DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
             DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی (روز مشخصی از هفته)')),
@@ -7238,7 +7344,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
             initialValue: weekday,
-            decoration: const InputDecoration(labelText: 'روز هفته', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('weekday'), border: const OutlineInputBorder()),
             items: List.generate(
               7,
               (i) => DropdownMenuItem(value: i + 1, child: Text(_weekdayNames[i])),
@@ -7301,7 +7407,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             TextField(
               controller: installmentsCtrl,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'تعداد کل اقساط', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('total_installments'), border: const OutlineInputBorder()),
             ),
           ],
           if (preview != null) ...[
@@ -7314,7 +7420,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('اعلان اقساط'),
+            title: Text(tr('installment_reminder')),
             value: notifyEnabled,
             onChanged: (v) async {
               if (v) await NotificationService.instance.requestPermission();
@@ -7364,10 +7470,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
             const SizedBox(height: 8),
             TextField(
               controller: notifyMessageCtrl,
-              decoration: const InputDecoration(
-                labelText: 'پیام یادآوری (اختیاری)',
+              decoration: InputDecoration(
+                labelText: tr('reminder_note'),
                 hintText: 'مثلاً: یادت نره اشتراک رو کنسل کنی',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
               ),
             ),
           ],
@@ -7453,8 +7559,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     title: const Text('حذف تراکنش'),
                     content: const Text('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.'),
                     actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
                     ],
                   ),
                 );
@@ -7566,7 +7672,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(tr('items'), style: Theme.of(context).textTheme.titleMedium),
-                TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: const Text('افزودن')),
+                TextButton.icon(onPressed: _addItemRow, icon: const Icon(Icons.add), label: Text(tr('add'))),
               ],
             ),
             if (items.isEmpty)
@@ -7659,7 +7765,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('ذخیره به‌صورت پیش‌نویس'),
+            title: Text(tr('save_as_draft')),
             subtitle: const Text('پیش‌نویس‌ها بعداً قابل بررسی و تأیید نهایی هستند.'),
             value: draft,
             onChanged: (v) => setState(() {
@@ -7668,7 +7774,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             }),
           ),
           const SizedBox(height: 12),
-          FilledButton(onPressed: _save, child: const Text('ذخیره')),
+          FilledButton(onPressed: _save, child: Text(tr('save'))),
         ],
       ),
     ),
@@ -7706,8 +7812,8 @@ class _CategoryPickerState extends State<CategoryPicker> {
         title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید در «$parentName»'),
         content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('افزودن')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('add'))),
         ],
       ),
     );
@@ -7846,8 +7952,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
         title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید'),
         content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('افزودن')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('add'))),
         ],
       ),
     );
@@ -7881,8 +7987,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
         title: const Text('تغییر نام دسته‌بندی'),
         content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام جدید'), autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('ذخیره')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
         ],
       ),
     );
@@ -7914,8 +8020,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
           '\nتراکنش‌هایی که از این دسته‌بندی استفاده کرده‌اند، به دسته‌بندی بالاتر منتقل می‌شوند و نام «${c.name}» به توضیحات آن‌ها اضافه می‌شود.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
         ],
       ),
     );
@@ -8090,7 +8196,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('انصراف')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
             FilledButton(
               onPressed: () {
                 if (nameCtrl.text.trim().isEmpty) return;
@@ -8103,7 +8209,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                 );
                 Navigator.pop(ctx, acc);
               },
-              child: const Text('ذخیره'),
+              child: Text(tr('save')),
             ),
           ],
         );
@@ -8153,8 +8259,8 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
         title: const Text('حذف حساب'),
         content: Text('حساب «${a.name}» حذف شود؟'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('انصراف')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
         ],
       ),
     );
