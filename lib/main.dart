@@ -213,17 +213,35 @@ class SavingsGoal {
   final String name;
   final double targetAmount;
   final DateTime? targetDate;
-  final String accountId; // progress = this account's current balance
-  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, required this.accountId});
+  final String currency;
+  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, this.currency = 'EUR'});
 
   Map<String, dynamic> toJson() =>
-      {'id': id, 'name': name, 'targetAmount': targetAmount, 'targetDate': targetDate?.toIso8601String(), 'accountId': accountId};
+      {'id': id, 'name': name, 'targetAmount': targetAmount, 'targetDate': targetDate?.toIso8601String(), 'currency': currency};
   factory SavingsGoal.fromJson(Map<String, dynamic> j) => SavingsGoal(
         id: j['id'],
         name: j['name'],
         targetAmount: (j['targetAmount'] as num).toDouble(),
         targetDate: j['targetDate'] != null ? DateTime.tryParse(j['targetDate']) : null,
-        accountId: j['accountId'],
+        currency: j['currency'] ?? 'EUR',
+      );
+}
+
+class SavingsContribution {
+  final String id;
+  final String goalId;
+  final double amount;
+  final DateTime date;
+  final String note;
+  const SavingsContribution({required this.id, required this.goalId, required this.amount, required this.date, this.note = ''});
+
+  Map<String, dynamic> toJson() => {'id': id, 'goalId': goalId, 'amount': amount, 'date': date.toIso8601String(), 'note': note};
+  factory SavingsContribution.fromJson(Map<String, dynamic> j) => SavingsContribution(
+        id: j['id'],
+        goalId: j['goalId'],
+        amount: (j['amount'] as num).toDouble(),
+        date: DateTime.parse(j['date']),
+        note: j['note'] ?? '',
       );
 }
 
@@ -1044,7 +1062,6 @@ Future<void> checkBudgetGoals() async {
     for (final t in tx) {
       if (t.type != TxType.expense) continue;
       if (t.date.year != now.year || t.date.month != now.month) continue;
-      if (t.categoryId == '_transfer_out_') continue;
       final match = categories.where((c) => c.id == t.categoryId).toList();
       var cat = match.isEmpty ? null : match.first;
       while (cat?.parentId != null) {
@@ -1100,6 +1117,19 @@ class Store {
   static Future<void> saveSavingsGoals(List<SavingsGoal> list) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_savingsGoalKey, list.map((g) => jsonEncode(g.toJson())).toList());
+  }
+
+  static const _savingsContribKey = 'savings_contributions';
+
+  static Future<List<SavingsContribution>> loadSavingsContributions() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getStringList(_savingsContribKey) ?? [];
+    return raw.map((s) => SavingsContribution.fromJson(jsonDecode(s))).toList();
+  }
+
+  static Future<void> saveSavingsContributions(List<SavingsContribution> list) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_savingsContribKey, list.map((c) => jsonEncode(c.toJson())).toList());
   }
 
   static Future<List<BudgetGoal>> loadBudgetGoals() async {
@@ -1902,40 +1932,30 @@ class AppearanceSettingsScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('ظاهر برنامه')),
       body: ValueListenableBuilder<ThemeMode>(
         valueListenable: currentThemeMode,
-        builder: (context, mode, _) => ListView(
-          children: [
-            RadioListTile<ThemeMode>(
-              title: const Text('پیش‌فرض سیستم'),
-              subtitle: const Text('تنظیم روشن/تیره‌ی گوشی را دنبال کند'),
-              value: ThemeMode.system,
-              groupValue: mode,
-              onChanged: (v) async {
-                if (v == null) return;
-                currentThemeMode.value = v;
-                await Store.saveThemeMode(v);
-              },
-            ),
-            RadioListTile<ThemeMode>(
-              title: const Text('روشن'),
-              value: ThemeMode.light,
-              groupValue: mode,
-              onChanged: (v) async {
-                if (v == null) return;
-                currentThemeMode.value = v;
-                await Store.saveThemeMode(v);
-              },
-            ),
-            RadioListTile<ThemeMode>(
-              title: const Text('تیره'),
-              value: ThemeMode.dark,
-              groupValue: mode,
-              onChanged: (v) async {
-                if (v == null) return;
-                currentThemeMode.value = v;
-                await Store.saveThemeMode(v);
-              },
-            ),
-          ],
+        builder: (context, mode, _) => RadioGroup<ThemeMode>(
+          groupValue: mode,
+          onChanged: (v) async {
+            if (v == null) return;
+            currentThemeMode.value = v;
+            await Store.saveThemeMode(v);
+          },
+          child: ListView(
+            children: const [
+              RadioListTile<ThemeMode>(
+                title: Text('پیش‌فرض سیستم'),
+                subtitle: Text('تنظیم روشن/تیره‌ی گوشی را دنبال کند'),
+                value: ThemeMode.system,
+              ),
+              RadioListTile<ThemeMode>(
+                title: Text('روشن'),
+                value: ThemeMode.light,
+              ),
+              RadioListTile<ThemeMode>(
+                title: Text('تیره'),
+                value: ThemeMode.dark,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2636,9 +2656,6 @@ class _HomeScreenState extends State<HomeScreen> {
       // period's totals until their own date actually arrives.
       if (t.date.isAfter(today)) continue;
       if (!(t.date.year == now.year && t.date.month == now.month)) continue;
-      // Transfers between the user's own accounts are net-neutral, not
-      // real income/expense - they shouldn't inflate these totals.
-      if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') continue;
       final cur = currencyOf(t.accountId);
       map.putIfAbsent(cur, () => {'income': 0, 'expense': 0});
       if (t.type == TxType.income) {
@@ -2670,7 +2687,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final today = DateTime(now.year, now.month, now.day);
     return tx.where((t) {
       if (t.type != TxType.expense) return false;
-      if (t.categoryId == '_transfer_out_') return false;
       if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) return false;
       if (t.date.isAfter(today)) return false;
       return t.date.year == now.year && t.date.month == now.month;
@@ -2692,7 +2708,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       var income = 0.0, expense = 0.0;
       for (final t in tx) {
-        if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') continue;
         if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) continue;
         if (t.date.isAfter(today)) continue;
         if (t.date.year == y && t.date.month == m) {
@@ -4130,7 +4145,6 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
     for (final t in tx) {
       if (t.type != TxType.expense) continue;
       if (t.date.year != now.year || t.date.month != now.month) continue;
-      if (t.categoryId == '_transfer_out_') continue;
       var cat = categories.where((c) => c.id == t.categoryId).toList();
       var current = cat.isEmpty ? null : cat.first;
       while (current?.parentId != null) {
@@ -4242,9 +4256,8 @@ class SavingsGoalsScreen extends StatefulWidget {
 
 class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   bool loading = true;
-  List<Account> accounts = [];
-  List<Transaction> tx = [];
   List<SavingsGoal> goals = [];
+  List<SavingsContribution> contributions = [];
 
   @override
   void initState() {
@@ -4253,51 +4266,31 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   }
 
   Future<void> _load() async {
-    accounts = await Store.loadAccounts();
-    tx = await Store.loadTransactions();
     goals = await Store.loadSavingsGoals();
+    contributions = await Store.loadSavingsContributions();
     setState(() => loading = false);
   }
 
-  Account? _accountOf(String id) {
-    final m = accounts.where((a) => a.id == id).toList();
-    return m.isEmpty ? null : m.first;
-  }
+  double _totalFor(String goalId) => contributions.where((c) => c.goalId == goalId).fold(0.0, (s, c) => s + c.amount);
 
-  double _balanceFor(String accountId) {
-    final acc = _accountOf(accountId);
-    if (acc == null) return 0;
-    var balance = acc.initialBalance;
-    for (final t in tx) {
-      if (t.accountId != accountId) continue;
-      balance += t.type == TxType.income ? t.amount : -t.amount;
-    }
-    return balance;
-  }
-
-  /// Average net monthly change for this account, based on all months
-  /// since its earliest transaction (or this month, if there are none
-  /// yet) - used to give a rough "at this pace" projection.
-  double _avgMonthlyGrowth(String accountId) {
-    final accountTx = tx.where((t) => t.accountId == accountId).toList();
-    if (accountTx.isEmpty) return 0;
-    accountTx.sort((a, b) => a.date.compareTo(b.date));
-    final first = accountTx.first.date;
+  /// Average monthly contribution based on months since the first
+  /// contribution to this goal - used for a rough "at this pace" estimate.
+  double _avgMonthlyContribution(String goalId) {
+    final list = contributions.where((c) => c.goalId == goalId).toList();
+    if (list.isEmpty) return 0;
+    list.sort((a, b) => a.date.compareTo(b.date));
+    final first = list.first.date;
     final now = DateTime.now();
     final months = ((now.year - first.year) * 12 + now.month - first.month + 1).clamp(1, 1000);
-    final net = accountTx.fold(0.0, (s, t) => s + (t.type == TxType.income ? t.amount : -t.amount));
-    return net / months;
+    final total = list.fold(0.0, (s, c) => s + c.amount);
+    return total / months;
   }
 
   Future<void> _addOrEditGoal({SavingsGoal? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final amountCtrl = TextEditingController(text: existing?.targetAmount.toStringAsFixed(0) ?? '');
-    Account? account = existing != null ? _accountOf(existing.accountId) : (accounts.isNotEmpty ? accounts.first : null);
+    String currency = existing?.currency ?? 'EUR';
     DateTime? targetDate = existing?.targetDate;
-    if (accounts.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اول باید حداقل یک حساب بسازید.')));
-      return;
-    }
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
@@ -4309,17 +4302,26 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
               children: [
                 TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام هدف (مثلاً خرید ماشین)'), autofocus: true),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: amountCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: 'مبلغ هدف'),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<Account>(
-                  initialValue: account,
-                  decoration: const InputDecoration(labelText: 'حساب پس‌انداز/سرمایه‌گذاری'),
-                  items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
-                  onChanged: (v) => setLocal(() => account = v),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: TextField(
+                        controller: amountCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(labelText: 'مبلغ هدف'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: currency,
+                        decoration: const InputDecoration(labelText: 'واحد پول'),
+                        items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                        onChanged: (v) => setLocal(() => currency = v ?? currency),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 ListTile(
@@ -4350,23 +4352,122 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
     );
     if (result == null && existing != null) {
       goals.removeWhere((g) => g.id == existing.id);
+      contributions.removeWhere((c) => c.goalId == existing.id);
       await Store.saveSavingsGoals(goals);
+      await Store.saveSavingsContributions(contributions);
       setState(() {});
       return;
     }
     if (result != true) return;
     final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
-    if (nameCtrl.text.trim().isEmpty || amount == null || amount <= 0 || account == null) return;
+    if (nameCtrl.text.trim().isEmpty || amount == null || amount <= 0) return;
     final goal = SavingsGoal(
       id: existing?.id ?? 'sg_${DateTime.now().microsecondsSinceEpoch}',
       name: nameCtrl.text.trim(),
       targetAmount: amount,
       targetDate: targetDate,
-      accountId: account!.id,
+      currency: currency,
     );
     goals = [...goals.where((g) => g.id != goal.id), goal];
     await Store.saveSavingsGoals(goals);
     setState(() {});
+  }
+
+  Future<void> _addContribution(SavingsGoal g) async {
+    final amountCtrl = TextEditingController();
+    DateTime date = DateTime.now();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return AlertDialog(
+          title: Text('واریز به «${g.name}»'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: 'مبلغ واریزی (${g.currency})'),
+                autofocus: true,
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(ltr(DateFormat('dd.MM.yyyy').format(date))),
+                trailing: const Icon(Icons.calendar_today, size: 18),
+                onTap: () async {
+                  final picked =
+                      await showDatePicker(context: ctx, initialDate: date, firstDate: DateTime(2015), lastDate: DateTime.now());
+                  if (picked != null) setLocal(() => date = picked);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('confirm'))),
+          ],
+        );
+      }),
+    );
+    if (result != true) return;
+    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    if (amount == null || amount <= 0) return;
+    final contribution = SavingsContribution(
+      id: 'sc_${DateTime.now().microsecondsSinceEpoch}',
+      goalId: g.id,
+      amount: amount,
+      date: date,
+    );
+    contributions = [...contributions, contribution];
+    await Store.saveSavingsContributions(contributions);
+    setState(() {});
+  }
+
+  Future<void> _showContributions(SavingsGoal g) async {
+    final list = contributions.where((c) => c.goalId == g.id).toList()..sort((a, b) => b.date.compareTo(a.date));
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.5,
+        builder: (ctx, scrollController) => Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('واریزی\u200cهای «${g.name}»', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Expanded(
+                child: list.isEmpty
+                    ? const Center(child: Text('هنوز واریزی\u200cای ثبت نشده.'))
+                    : ListView.builder(
+                        controller: scrollController,
+                        itemCount: list.length,
+                        itemBuilder: (context, i) {
+                          final c = list[i];
+                          return ListTile(
+                            title: Text(ltr(formatMoney(c.amount, g.currency))),
+                            subtitle: Text(ltr(DateFormat('dd.MM.yyyy').format(c.date))),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 20),
+                              onPressed: () async {
+                                contributions.removeWhere((x) => x.id == c.id);
+                                await Store.saveSavingsContributions(contributions);
+                                if (context.mounted) Navigator.pop(context);
+                                setState(() {});
+                              },
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -4380,23 +4481,21 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
         label: Text(tr('new_goal')),
       ),
       body: goals.isEmpty
-          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز هدف پس‌اندازی تعریف نشده.')))
+          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز هدف پس\u200cاندازی تعریف نشده.')))
           : ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
               itemCount: goals.length,
               itemBuilder: (context, i) {
                 final g = goals[i];
-                final account = _accountOf(g.accountId);
-                final currency = account?.currency ?? 'EUR';
-                final current = _balanceFor(g.accountId);
+                final current = _totalFor(g.id);
                 final ratio = (current / g.targetAmount).clamp(0.0, 1.0);
-                final growth = _avgMonthlyGrowth(g.accountId);
+                final growth = _avgMonthlyContribution(g.id);
                 String? projection;
                 if (current >= g.targetAmount) {
-                  projection = 'به هدف رسیدی! 🎉';
+                  projection = 'به هدف رسیدی! \u{1F389}';
                 } else if (growth > 0) {
                   final monthsLeft = ((g.targetAmount - current) / growth).ceil();
-                  projection = 'با روند فعلی، حدود $monthsLeft ماه دیگر به هدف می‌رسی.';
+                  projection = 'با روند فعلی، حدود $monthsLeft ماه دیگر به هدف می\u200cرسی.';
                 }
                 return Card(
                   child: Padding(
@@ -4414,8 +4513,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                             ),
                           ],
                         ),
-                        if (account != null) Text(account.name, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 4),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(4),
                           child: LinearProgressIndicator(
@@ -4427,16 +4525,34 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${ltr(formatMoney(current, currency))} از ${ltr(formatMoney(g.targetAmount, currency))} (${(ratio * 100).round()}%)',
+                          '${ltr(formatMoney(current, g.currency))} از ${ltr(formatMoney(g.targetAmount, g.currency))} (${(ratio * 100).round()}%)',
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         ),
                         if (g.targetDate != null)
-                          Text('تا ${ltr(DateFormat('dd.MM.yyyy').format(g.targetDate!))}', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                          Text(
+                            'تا ${ltr(DateFormat('dd.MM.yyyy').format(g.targetDate!))}',
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                          ),
                         if (projection != null)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(projection, style: TextStyle(fontSize: 12, color: Colors.indigo.shade700)),
                           ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => _addContribution(g),
+                              icon: const Icon(Icons.add, size: 16),
+                              label: const Text('واریز'),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => _showContributions(g),
+                              icon: const Icon(Icons.history, size: 16),
+                              label: const Text('تاریخچه'),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -4462,6 +4578,13 @@ class _TransferScreenState extends State<TransferScreen> {
   final noteCtrl = TextEditingController();
   DateTime date = DateTime.now();
   bool saving = false;
+  RecurrenceFrequency recurrence = RecurrenceFrequency.none;
+  final dayCtrl = TextEditingController();
+  int weekday = 1;
+  final intervalCtrl = TextEditingController(text: '30');
+  final installmentsCtrl = TextEditingController();
+  DateTime? endDate;
+  String endMode = 'unlimited'; // 'unlimited' | 'installments' | 'date'
 
   @override
   void initState() {
@@ -4510,6 +4633,43 @@ class _TransferScreenState extends State<TransferScreen> {
       ));
       return;
     }
+    int? recDay;
+    int? recWeekday;
+    int? recInterval;
+    int? recInstallments;
+    DateTime? recEndDate;
+    if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
+      recDay = int.tryParse(dayCtrl.text);
+      if (recDay == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
+        return;
+      }
+      if (recDay < 1) recDay = 1;
+      if (recDay > 31) recDay = 31;
+    } else if (recurrence == RecurrenceFrequency.weekly) {
+      recWeekday = weekday;
+    } else if (recurrence == RecurrenceFrequency.custom) {
+      recInterval = int.tryParse(intervalCtrl.text);
+      if (recInterval == null || recInterval <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
+        return;
+      }
+    }
+    if (recurrence != RecurrenceFrequency.none) {
+      if (endMode == 'installments') {
+        recInstallments = int.tryParse(installmentsCtrl.text);
+        if (recInstallments == null || recInstallments <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد کل اقساط را درست وارد کنید.')));
+          return;
+        }
+      } else if (endMode == 'date') {
+        if (endDate == null) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تاریخ پایان را انتخاب کنید.')));
+          return;
+        }
+        recEndDate = endDate;
+      }
+    }
     setState(() => saving = true);
     final baseId = DateTime.now().microsecondsSinceEpoch.toString();
     final note = noteCtrl.text.trim();
@@ -4521,6 +4681,12 @@ class _TransferScreenState extends State<TransferScreen> {
       accountId: fromAccount!.id,
       date: date,
       note: note.isEmpty ? 'انتقال به ${toAccount!.name}' : note,
+      recurrence: recurrence,
+      recurrenceDay: recDay,
+      recurrenceWeekday: recWeekday,
+      recurrenceIntervalDays: recInterval,
+      installments: recInstallments,
+      recurrenceEndDate: recEndDate,
     );
     final inTx = Transaction(
       id: '${baseId}_in',
@@ -4530,6 +4696,12 @@ class _TransferScreenState extends State<TransferScreen> {
       accountId: toAccount!.id,
       date: date,
       note: note.isEmpty ? 'انتقال از ${fromAccount!.name}' : note,
+      recurrence: recurrence,
+      recurrenceDay: recDay,
+      recurrenceWeekday: recWeekday,
+      recurrenceIntervalDays: recInterval,
+      installments: recInstallments,
+      recurrenceEndDate: recEndDate,
     );
     await Store.upsertTransaction(outTx);
     await Store.upsertTransaction(inTx);
@@ -4581,6 +4753,82 @@ class _TransferScreenState extends State<TransferScreen> {
             trailing: const Icon(Icons.calendar_today, size: 18),
             onTap: _pickDate,
           ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<RecurrenceFrequency>(
+            initialValue: recurrence,
+            decoration: InputDecoration(labelText: tr('recurrence_type'), border: const OutlineInputBorder()),
+            items: const [
+              DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
+              DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی')),
+              DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه')),
+              DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text('فصلی (هر سه ماه)')),
+              DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('سالانه')),
+              DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
+            ],
+            onChanged: (v) => setState(() => recurrence = v ?? RecurrenceFrequency.none),
+          ),
+          if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: dayCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'روز سررسید در ماه (۱ تا ۳۱) *', border: OutlineInputBorder()),
+            ),
+          ],
+          if (recurrence == RecurrenceFrequency.weekly) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<int>(
+              initialValue: weekday,
+              decoration: InputDecoration(labelText: tr('weekday'), border: const OutlineInputBorder()),
+              items: List.generate(7, (i) => i + 1).map((w) => DropdownMenuItem(value: w, child: Text(_weekdayNames[w - 1]))).toList(),
+              onChanged: (v) => setState(() => weekday = v ?? weekday),
+            ),
+          ],
+          if (recurrence == RecurrenceFrequency.custom) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: intervalCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'هر چند روز یک‌بار؟', border: OutlineInputBorder()),
+            ),
+          ],
+          if (recurrence != RecurrenceFrequency.none) ...[
+            const SizedBox(height: 12),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'unlimited', label: Text('نامحدود')),
+                ButtonSegment(value: 'installments', label: Text('تعداد قسط')),
+                ButtonSegment(value: 'date', label: Text('تاریخ پایان')),
+              ],
+              selected: {endMode},
+              onSelectionChanged: (s) => setState(() => endMode = s.first),
+            ),
+            if (endMode == 'installments') ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: installmentsCtrl,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(labelText: tr('total_installments'), border: const OutlineInputBorder()),
+              ),
+            ],
+            if (endMode == 'date') ...[
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(endDate == null ? 'تاریخ پایان را انتخاب کنید' : ltr(DateFormat('dd.MM.yyyy').format(endDate!))),
+                trailing: const Icon(Icons.calendar_today, size: 18),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: endDate ?? date.add(const Duration(days: 30)),
+                    firstDate: date,
+                    lastDate: DateTime.now().add(const Duration(days: 365 * 20)),
+                  );
+                  if (picked != null) setState(() => endDate = picked);
+                },
+              ),
+            ],
+          ],
           const SizedBox(height: 8),
           TextField(
             controller: noteCtrl,
