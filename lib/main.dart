@@ -197,6 +197,35 @@ class Category {
       );
 }
 
+class BudgetGoal {
+  final String categoryId;
+  final double monthlyAmount;
+  const BudgetGoal({required this.categoryId, required this.monthlyAmount});
+
+  Map<String, dynamic> toJson() => {'categoryId': categoryId, 'monthlyAmount': monthlyAmount};
+  factory BudgetGoal.fromJson(Map<String, dynamic> j) =>
+      BudgetGoal(categoryId: j['categoryId'], monthlyAmount: (j['monthlyAmount'] as num).toDouble());
+}
+
+class SavingsGoal {
+  final String id;
+  final String name;
+  final double targetAmount;
+  final DateTime? targetDate;
+  final String accountId; // progress = this account's current balance
+  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, required this.accountId});
+
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'name': name, 'targetAmount': targetAmount, 'targetDate': targetDate?.toIso8601String(), 'accountId': accountId};
+  factory SavingsGoal.fromJson(Map<String, dynamic> j) => SavingsGoal(
+        id: j['id'],
+        name: j['name'],
+        targetAmount: (j['targetAmount'] as num).toDouble(),
+        targetDate: j['targetDate'] != null ? DateTime.tryParse(j['targetDate']) : null,
+        accountId: j['accountId'],
+      );
+}
+
 class Account {
   final String id;
   final String name;
@@ -668,6 +697,15 @@ class NotificationService {
         ?.requestNotificationsPermission();
   }
 
+  /// Shows an immediate (not scheduled) notification, e.g. for a budget
+  /// goal threshold that was just crossed.
+  Future<void> showNow(int id, String title, String body) async {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails('budget_goals', 'اهداف هزینه', importance: Importance.high, priority: Priority.high),
+    );
+    await _plugin.show(id, title, body, details);
+  }
+
   int _idFor(String txId, int slot) => (txId.hashCode & 0xffff) * 1000 + slot;
 
   Future<void> cancelForTransaction(String txId) async {
@@ -980,11 +1018,116 @@ Future<void> retryPendingCategoryIcons() async {
   if (changed) await Store.saveCategories(updated);
 }
 
+/// Compares this month's spending against any configured budget goals and
+/// fires a one-time notification the first time a category crosses 80%
+/// (approaching), 100% (met), or passes 100% (exceeded) of its goal for
+/// the month - never repeats the same threshold twice in one month.
+Future<void> checkBudgetGoals() async {
+  final goals = await Store.loadBudgetGoals();
+  if (goals.isEmpty) return;
+  final tx = await Store.loadTransactions();
+  final categories = await Store.loadCategories();
+  final now = DateTime.now();
+  final monthKey = '${now.year}-${now.month}';
+  final notifyState = await Store.loadBudgetNotifyState();
+  var changed = false;
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? '' : m.first.name;
+  }
+
+  for (final goal in goals) {
+    if (goal.monthlyAmount <= 0) continue;
+    double spend = 0;
+    for (final t in tx) {
+      if (t.type != TxType.expense) continue;
+      if (t.date.year != now.year || t.date.month != now.month) continue;
+      if (t.categoryId == '_transfer_out_') continue;
+      final match = categories.where((c) => c.id == t.categoryId).toList();
+      var cat = match.isEmpty ? null : match.first;
+      while (cat?.parentId != null) {
+        final pm = categories.where((c) => c.id == cat!.parentId).toList();
+        if (pm.isEmpty) break;
+        cat = pm.first;
+      }
+      if (cat?.id == goal.categoryId) spend += t.amount;
+    }
+    final ratio = spend / goal.monthlyAmount;
+    String? level;
+    if (ratio >= 1.05) {
+      level = 'exceeded';
+    } else if (ratio >= 1.0) {
+      level = 'met';
+    } else if (ratio >= 0.8) {
+      level = 'approaching';
+    }
+    if (level == null) continue;
+    const severity = {'approaching': 1, 'met': 2, 'exceeded': 3};
+    final key = '${goal.categoryId}_$monthKey';
+    final already = notifyState[key];
+    if (already != null && severity[already]! >= severity[level]!) continue;
+    notifyState[key] = level;
+    changed = true;
+    final name = categoryName(goal.categoryId);
+    final title = switch (level) {
+      'exceeded' => 'هدف هزینه‌ی «$name» رد شد',
+      'met' => 'هدف هزینه‌ی «$name» به پایان رسید',
+      _ => 'نزدیک شدن به هدف هزینه‌ی «$name»',
+    };
+    final body = '${(ratio * 100).round()}% از هدف این ماه (${spend.toStringAsFixed(0)} از ${goal.monthlyAmount.toStringAsFixed(0)}) خرج شده.';
+    await NotificationService.instance.showNow(goal.categoryId.hashCode & 0xffff, title, body);
+  }
+  if (changed) await Store.saveBudgetNotifyState(notifyState);
+}
+
 // ============================== Storage ==============================
 
 class Store {
   static const _txKey = 'transactions';
   static const _catKey = 'categories_v2';
+  static const _budgetKey = 'budget_goals';
+  static const _budgetNotifyKey = 'budget_goal_notify_state';
+  static const _savingsGoalKey = 'savings_goals';
+
+  static Future<List<SavingsGoal>> loadSavingsGoals() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getStringList(_savingsGoalKey) ?? [];
+    return raw.map((s) => SavingsGoal.fromJson(jsonDecode(s))).toList();
+  }
+
+  static Future<void> saveSavingsGoals(List<SavingsGoal> list) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_savingsGoalKey, list.map((g) => jsonEncode(g.toJson())).toList());
+  }
+
+  static Future<List<BudgetGoal>> loadBudgetGoals() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getStringList(_budgetKey) ?? [];
+    return raw.map((s) => BudgetGoal.fromJson(jsonDecode(s))).toList();
+  }
+
+  static Future<void> saveBudgetGoals(List<BudgetGoal> list) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_budgetKey, list.map((g) => jsonEncode(g.toJson())).toList());
+  }
+
+  /// Which notification threshold ("approaching"/"met"/"exceeded") was
+  /// already sent for each "categoryId_yyyy-mm" this month, so the same
+  /// alert isn't repeated every time the check runs.
+  static Future<Map<String, String>> loadBudgetNotifyState() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_budgetNotifyKey);
+    if (raw == null) return {};
+    return Map<String, String>.from(jsonDecode(raw));
+  }
+
+  static Future<void> saveBudgetNotifyState(Map<String, String> state) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_budgetNotifyKey, jsonEncode(state));
+  }
+
+
   static const _accKey = 'accounts_v2';
   static const _geminiKey = 'gemini_api_key';
   static const _langKey = 'app_language';
@@ -1580,6 +1723,8 @@ class AppDrawer extends StatelessWidget {
             item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
             item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
             item(13, Icons.swap_horiz, 'انتقال بین حساب‌ها', () => const TransferScreen()),
+            item(14, Icons.flag_outlined, 'اهداف هزینه', () => const BudgetGoalsScreen()),
+            item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(4, Icons.repeat, tr('recurring_transactions'), () => const RecurringTransactionsScreen()),
@@ -2339,6 +2484,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // icon last time (e.g. Gemini was unavailable); does nothing if none
     // are pending.
     unawaited(retryPendingCategoryIcons());
+    unawaited(checkBudgetGoals());
   }
 
   String categoryName(String id) {
@@ -3836,6 +3982,356 @@ enum _ReportPreset { thisMonth, lastMonth, thisQuarter, lastQuarter, thisYear, l
 enum _TxSortMode { dateDesc, dateAsc, createdDesc, createdAsc, amountDesc, amountAsc }
 
 // ============================== Transfer between accounts ==============================
+
+// ============================== Budget goals ==============================
+
+class BudgetGoalsScreen extends StatefulWidget {
+  const BudgetGoalsScreen({super.key});
+  @override
+  State<BudgetGoalsScreen> createState() => _BudgetGoalsScreenState();
+}
+
+class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
+  bool loading = true;
+  List<Category> categories = [];
+  List<Transaction> tx = [];
+  List<BudgetGoal> goals = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    categories = await Store.loadCategories();
+    tx = await Store.loadTransactions();
+    goals = await Store.loadBudgetGoals();
+    setState(() => loading = false);
+  }
+
+  double _spendFor(String categoryId) {
+    final now = DateTime.now();
+    var spend = 0.0;
+    for (final t in tx) {
+      if (t.type != TxType.expense) continue;
+      if (t.date.year != now.year || t.date.month != now.month) continue;
+      if (t.categoryId == '_transfer_out_') continue;
+      var cat = categories.where((c) => c.id == t.categoryId).toList();
+      var current = cat.isEmpty ? null : cat.first;
+      while (current?.parentId != null) {
+        final pm = categories.where((c) => c.id == current!.parentId).toList();
+        if (pm.isEmpty) break;
+        current = pm.first;
+      }
+      if (current?.id == categoryId) spend += t.amount;
+    }
+    return spend;
+  }
+
+  Future<void> _editGoal(Category c) async {
+    final existing = goals.where((g) => g.categoryId == c.id).toList();
+    final ctrl = TextEditingController(text: existing.isEmpty ? '' : existing.first.monthlyAmount.toStringAsFixed(0));
+    final result = await showDialog<double?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('هدف هزینه‌ی ${c.name}'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'مبلغ هدف در ماه', hintText: 'مثلاً 200'),
+          autofocus: true,
+        ),
+        actions: [
+          if (existing.isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 0.0),
+              child: const Text('حذف هدف', style: TextStyle(color: Colors.red)),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.'))),
+            child: Text(tr('save')),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    final updated = goals.where((g) => g.categoryId != c.id).toList();
+    if (result > 0) updated.add(BudgetGoal(categoryId: c.id, monthlyAmount: result));
+    await Store.saveBudgetGoals(updated);
+    setState(() => goals = updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null).toList()
+      ..sort((a, b) => persianCompare(a.name, b.name));
+    return Scaffold(
+      appBar: AppBar(title: const Text('اهداف هزینه')),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: topCategories.length,
+        itemBuilder: (context, i) {
+          final c = topCategories[i];
+          final goalMatch = goals.where((g) => g.categoryId == c.id).toList();
+          final goal = goalMatch.isEmpty ? null : goalMatch.first;
+          final spend = goal == null ? 0.0 : _spendFor(c.id);
+          final ratio = goal == null ? 0.0 : (spend / goal.monthlyAmount).clamp(0.0, 1.5);
+          final color = ratio >= 1.0 ? Colors.red : (ratio >= 0.8 ? Colors.orange : Colors.green);
+          return Card(
+            child: ListTile(
+              leading: Icon(iconForCategory(c, categories)),
+              title: Text(c.name),
+              subtitle: goal == null
+                  ? const Text('هدفی تنظیم نشده', style: TextStyle(color: Colors.grey, fontSize: 12))
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: ratio > 1.0 ? 1.0 : ratio,
+                              minHeight: 8,
+                              backgroundColor: Colors.grey.shade200,
+                              color: color,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${spend.toStringAsFixed(0)} از ${goal.monthlyAmount.toStringAsFixed(0)} (${(ratio * 100).round()}%)',
+                            style: TextStyle(fontSize: 11, color: color),
+                          ),
+                        ],
+                      ),
+                    ),
+              trailing: const Icon(Icons.edit_outlined, size: 18),
+              onTap: () => _editGoal(c),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ============================== Savings goals ==============================
+
+class SavingsGoalsScreen extends StatefulWidget {
+  const SavingsGoalsScreen({super.key});
+  @override
+  State<SavingsGoalsScreen> createState() => _SavingsGoalsScreenState();
+}
+
+class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
+  bool loading = true;
+  List<Account> accounts = [];
+  List<Transaction> tx = [];
+  List<SavingsGoal> goals = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    accounts = await Store.loadAccounts();
+    tx = await Store.loadTransactions();
+    goals = await Store.loadSavingsGoals();
+    setState(() => loading = false);
+  }
+
+  Account? _accountOf(String id) {
+    final m = accounts.where((a) => a.id == id).toList();
+    return m.isEmpty ? null : m.first;
+  }
+
+  double _balanceFor(String accountId) {
+    final acc = _accountOf(accountId);
+    if (acc == null) return 0;
+    var balance = acc.initialBalance;
+    for (final t in tx) {
+      if (t.accountId != accountId) continue;
+      balance += t.type == TxType.income ? t.amount : -t.amount;
+    }
+    return balance;
+  }
+
+  /// Average net monthly change for this account, based on all months
+  /// since its earliest transaction (or this month, if there are none
+  /// yet) - used to give a rough "at this pace" projection.
+  double _avgMonthlyGrowth(String accountId) {
+    final accountTx = tx.where((t) => t.accountId == accountId).toList();
+    if (accountTx.isEmpty) return 0;
+    accountTx.sort((a, b) => a.date.compareTo(b.date));
+    final first = accountTx.first.date;
+    final now = DateTime.now();
+    final months = ((now.year - first.year) * 12 + now.month - first.month + 1).clamp(1, 1000);
+    final net = accountTx.fold(0.0, (s, t) => s + (t.type == TxType.income ? t.amount : -t.amount));
+    return net / months;
+  }
+
+  Future<void> _addOrEditGoal({SavingsGoal? existing}) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final amountCtrl = TextEditingController(text: existing?.targetAmount.toStringAsFixed(0) ?? '');
+    Account? account = existing != null ? _accountOf(existing.accountId) : (accounts.isNotEmpty ? accounts.first : null);
+    DateTime? targetDate = existing?.targetDate;
+    if (accounts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اول باید حداقل یک حساب بسازید.')));
+      return;
+    }
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return AlertDialog(
+          title: Text(existing == null ? 'هدف پس‌انداز جدید' : 'ویرایش هدف'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام هدف (مثلاً خرید ماشین)'), autofocus: true),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'مبلغ هدف'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<Account>(
+                  initialValue: account,
+                  decoration: const InputDecoration(labelText: 'حساب پس‌انداز/سرمایه‌گذاری'),
+                  items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+                  onChanged: (v) => setLocal(() => account = v),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(targetDate == null ? 'تاریخ هدف (اختیاری)' : ltr(DateFormat('dd.MM.yyyy').format(targetDate!))),
+                  trailing: const Icon(Icons.calendar_today, size: 18),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: ctx,
+                      initialDate: targetDate ?? DateTime.now().add(const Duration(days: 365)),
+                      firstDate: DateTime.now(),
+                      lastDate: DateTime.now().add(const Duration(days: 365 * 20)),
+                    );
+                    if (picked != null) setLocal(() => targetDate = picked);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            if (existing != null)
+              TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('حذف هدف', style: TextStyle(color: Colors.red))),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('save'))),
+          ],
+        );
+      }),
+    );
+    if (result == null && existing != null) {
+      goals.removeWhere((g) => g.id == existing.id);
+      await Store.saveSavingsGoals(goals);
+      setState(() {});
+      return;
+    }
+    if (result != true) return;
+    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    if (nameCtrl.text.trim().isEmpty || amount == null || amount <= 0 || account == null) return;
+    final goal = SavingsGoal(
+      id: existing?.id ?? 'sg_${DateTime.now().microsecondsSinceEpoch}',
+      name: nameCtrl.text.trim(),
+      targetAmount: amount,
+      targetDate: targetDate,
+      accountId: account!.id,
+    );
+    goals = [...goals.where((g) => g.id != goal.id), goal];
+    await Store.saveSavingsGoals(goals);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('اهداف پس‌انداز')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _addOrEditGoal(),
+        icon: const Icon(Icons.add),
+        label: const Text('هدف جدید'),
+      ),
+      body: goals.isEmpty
+          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز هدف پس‌اندازی تعریف نشده.')))
+          : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              itemCount: goals.length,
+              itemBuilder: (context, i) {
+                final g = goals[i];
+                final account = _accountOf(g.accountId);
+                final currency = account?.currency ?? 'EUR';
+                final current = _balanceFor(g.accountId);
+                final ratio = (current / g.targetAmount).clamp(0.0, 1.0);
+                final growth = _avgMonthlyGrowth(g.accountId);
+                String? projection;
+                if (current >= g.targetAmount) {
+                  projection = 'به هدف رسیدی! 🎉';
+                } else if (growth > 0) {
+                  final monthsLeft = ((g.targetAmount - current) / growth).ceil();
+                  projection = 'با روند فعلی، حدود $monthsLeft ماه دیگر به هدف می‌رسی.';
+                }
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(child: Text(g.name, style: Theme.of(context).textTheme.titleMedium)),
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined, size: 18),
+                              onPressed: () => _addOrEditGoal(existing: g),
+                            ),
+                          ],
+                        ),
+                        if (account != null) Text(account.name, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: ratio,
+                            minHeight: 10,
+                            backgroundColor: Colors.grey.shade200,
+                            color: ratio >= 1.0 ? Colors.green : Colors.indigo,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '${ltr(formatMoney(current, currency))} از ${ltr(formatMoney(g.targetAmount, currency))} (${(ratio * 100).round()}%)',
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        if (g.targetDate != null)
+                          Text('تا ${ltr(DateFormat('dd.MM.yyyy').format(g.targetDate!))}', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                        if (projection != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(projection, style: TextStyle(fontSize: 12, color: Colors.indigo.shade700)),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
 
 class TransferScreen extends StatefulWidget {
   const TransferScreen({super.key});
