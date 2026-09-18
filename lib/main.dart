@@ -1453,6 +1453,27 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'expense_by_category': {AppLanguage.fa: 'هزینه‌ها بر اساس دسته‌بندی', AppLanguage.en: 'Expenses by category', AppLanguage.de: 'Ausgaben nach Kategorie'},
   'last_6_months': {AppLanguage.fa: 'روند ۶ ماه اخیر', AppLanguage.en: 'Last 6 months trend', AppLanguage.de: 'Trend der letzten 6 Monate'},
   'gemini_key': {AppLanguage.fa: 'کلید Gemini API', AppLanguage.en: 'Gemini API key', AppLanguage.de: 'Gemini-API-Schlüssel'},
+  'upcoming_payments': {AppLanguage.fa: 'پرداخت‌های پیش‌رو', AppLanguage.en: 'Upcoming payments', AppLanguage.de: 'Bevorstehende Zahlungen'},
+  'budget_goals': {AppLanguage.fa: 'اهداف هزینه', AppLanguage.en: 'Budget goals', AppLanguage.de: 'Budgetziele'},
+  'savings_goals': {AppLanguage.fa: 'اهداف پس‌انداز', AppLanguage.en: 'Savings goals', AppLanguage.de: 'Sparziele'},
+  'transfer_between_accounts': {AppLanguage.fa: 'انتقال بین حساب‌ها', AppLanguage.en: 'Transfer between accounts', AppLanguage.de: 'Kontoübertragung'},
+  'all_transactions': {AppLanguage.fa: 'همه‌ی تراکنش‌ها', AppLanguage.en: 'All transactions', AppLanguage.de: 'Alle Buchungen'},
+  'full_reporting': {AppLanguage.fa: 'گزارش‌گیری کامل', AppLanguage.en: 'Full reporting', AppLanguage.de: 'Vollständiger Bericht'},
+  'expense_forecast': {AppLanguage.fa: 'پیش‌بینی هزینه', AppLanguage.en: 'Expense forecast', AppLanguage.de: 'Ausgabenprognose'},
+  'month_calendar': {AppLanguage.fa: 'خلاصه ماه در یک نگاه', AppLanguage.en: 'Month at a glance', AppLanguage.de: 'Monat im Überblick'},
+  'search': {AppLanguage.fa: 'جستجو', AppLanguage.en: 'Search', AppLanguage.de: 'Suche'},
+  'filter': {AppLanguage.fa: 'فیلتر', AppLanguage.en: 'Filter', AppLanguage.de: 'Filter'},
+  'sort': {AppLanguage.fa: 'مرتب‌سازی', AppLanguage.en: 'Sort', AppLanguage.de: 'Sortieren'},
+  'from_account': {AppLanguage.fa: 'از حساب', AppLanguage.en: 'From account', AppLanguage.de: 'Von Konto'},
+  'to_account': {AppLanguage.fa: 'به حساب', AppLanguage.en: 'To account', AppLanguage.de: 'Zu Konto'},
+  'all_accounts': {AppLanguage.fa: 'همه‌ی حساب‌ها', AppLanguage.en: 'All accounts', AppLanguage.de: 'Alle Konten'},
+  'new_goal': {AppLanguage.fa: 'هدف جدید', AppLanguage.en: 'New goal', AppLanguage.de: 'Neues Ziel'},
+  'transfer': {AppLanguage.fa: 'انتقال', AppLanguage.en: 'Transfer', AppLanguage.de: 'Überweisen'},
+  'this_month': {AppLanguage.fa: 'این ماه', AppLanguage.en: 'This month', AppLanguage.de: 'Diesen Monat'},
+  'next_month': {AppLanguage.fa: 'ماه بعد', AppLanguage.en: 'Next month', AppLanguage.de: 'Nächsten Monat'},
+  'custom_month': {AppLanguage.fa: 'ماه دلخواه', AppLanguage.en: 'Custom month', AppLanguage.de: 'Bestimmter Monat'},
+  'add_account': {AppLanguage.fa: 'حساب جدید', AppLanguage.en: 'New account', AppLanguage.de: 'Neues Konto'},
+  'delete_target': {AppLanguage.fa: 'حذف هدف', AppLanguage.en: 'Delete goal', AppLanguage.de: 'Ziel löschen'},
   'app_lock_title': {AppLanguage.fa: 'قفل برنامه', AppLanguage.en: 'App lock', AppLanguage.de: 'App-Sperre'},
   'backup_restore_title': {AppLanguage.fa: 'پشتیبان‌گیری و بازیابی', AppLanguage.en: 'Backup & restore', AppLanguage.de: 'Sicherung & Wiederherstellung'},
   'scan_title': {AppLanguage.fa: 'اسکن رسید یا فیش حقوقی', AppLanguage.en: 'Scan receipt or payslip', AppLanguage.de: 'Beleg oder Lohnabrechnung scannen'},
@@ -2730,7 +2751,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
                     items: [
-                      const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                      DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
                       ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
                     ],
                     onChanged: (v) => setState(() => dashboardAccountFilter = v),
@@ -3647,7 +3668,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     final maxChart = chartMonths.fold(0.0, (m, c) => c.expense > m ? c.expense : m);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('پرداخت‌های پیش‌رو')),
+      appBar: AppBar(title: Text(tr('upcoming_payments'))),
       body: Column(
         children: [
           Padding(
@@ -3688,7 +3709,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
               items: [
-                const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
                 ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
               ],
               onChanged: (v) => setState(() => accountFilter = v),
@@ -4069,7 +4090,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
     final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null).toList()
       ..sort((a, b) => persianCompare(a.name, b.name));
     return Scaffold(
-      appBar: AppBar(title: const Text('اهداف هزینه')),
+      appBar: AppBar(title: Text(tr('budget_goals'))),
       body: ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: topCategories.length,
@@ -4259,11 +4280,11 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('اهداف پس‌انداز')),
+      appBar: AppBar(title: Text(tr('savings_goals'))),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addOrEditGoal(),
         icon: const Icon(Icons.add),
-        label: const Text('هدف جدید'),
+        label: Text(tr('new_goal')),
       ),
       body: goals.isEmpty
           ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز هدف پس‌اندازی تعریف نشده.')))
@@ -4429,18 +4450,18 @@ class _TransferScreenState extends State<TransferScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     if (accounts.length < 2) {
       return Scaffold(
-        appBar: AppBar(title: const Text('انتقال بین حساب‌ها')),
+        appBar: AppBar(title: Text(tr('transfer_between_accounts'))),
         body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('برای انتقال، حداقل به دو حساب نیاز دارید.'))),
       );
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('انتقال بین حساب‌ها')),
+      appBar: AppBar(title: Text(tr('transfer_between_accounts'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           DropdownButtonFormField<Account>(
             initialValue: fromAccount,
-            decoration: const InputDecoration(labelText: 'از حساب', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('from_account'), border: const OutlineInputBorder()),
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => fromAccount = v),
           ),
@@ -4449,7 +4470,7 @@ class _TransferScreenState extends State<TransferScreen> {
           const SizedBox(height: 12),
           DropdownButtonFormField<Account>(
             initialValue: toAccount,
-            decoration: const InputDecoration(labelText: 'به حساب', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('to_account'), border: const OutlineInputBorder()),
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
             onChanged: (v) => setState(() => toAccount = v),
           ),
@@ -4478,7 +4499,7 @@ class _TransferScreenState extends State<TransferScreen> {
             icon: saving
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.swap_horiz),
-            label: const Text('انتقال'),
+            label: Text(tr('transfer')),
           ),
         ],
       ),
@@ -4625,7 +4646,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('همه‌ی تراکنش‌ها')),
+      appBar: AppBar(title: Text(tr('all_transactions'))),
       body: Column(
         children: [
           Container(
@@ -4683,7 +4704,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                   icon: Icons.account_balance_wallet_outlined,
                   value: accountFilter,
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                    DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
                     ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))),
                   ],
                   onChanged: (v) => setState(() => accountFilter = v),
@@ -5098,7 +5119,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('گزارش‌گیری کامل')),
+      appBar: AppBar(title: Text(tr('full_reporting'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -5326,7 +5347,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('پیش‌بینی هزینه')),
+      appBar: AppBar(title: Text(tr('expense_forecast'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -5579,7 +5600,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     final leadingBlanks = (firstWeekday + 1) % 7; // Sat=6->0, Sun=7->1, Mon=1->2, ... Fri=5->6
 
     return Scaffold(
-      appBar: AppBar(title: const Text('خلاصه ماه در یک نگاه')),
+      appBar: AppBar(title: Text(tr('month_calendar'))),
       body: Column(
         children: [
           Padding(
@@ -5608,7 +5629,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
               items: [
-                const DropdownMenuItem(value: null, child: Text('همه‌ی حساب‌ها')),
+                DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
                 ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
               ],
               onChanged: (v) => setState(() => accountFilter = v),
