@@ -5146,6 +5146,15 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     await _load();
   }
 
+  String _sortLabel(_TxSortMode m) => switch (m) {
+        _TxSortMode.dateDesc => 'تاریخ تراکنش (جدیدترین)',
+        _TxSortMode.dateAsc => 'تاریخ تراکنش (قدیمی‌ترین)',
+        _TxSortMode.createdDesc => 'زمان ثبت (جدیدترین)',
+        _TxSortMode.createdAsc => 'زمان ثبت (قدیمی‌ترین)',
+        _TxSortMode.amountDesc => 'مبلغ (بیشترین)',
+        _TxSortMode.amountAsc => 'مبلغ (کمترین)',
+      };
+
   int get _activeFilterCount =>
       (typeFilter != null ? 1 : 0) +
       (categoryFilter != null ? 1 : 0) +
@@ -6331,7 +6340,15 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                   tooltip: 'ماه بعد',
                   onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
                 ),
-                Text('${_gregorianMonthNames[month.month - 1]} ${month.year}', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  currentCalendarSystem.value == CalendarSystem.jalali
+                      ? () {
+                          final j = gregorianToJalali(month.year, month.month, 1);
+                          return '${_jalaliMonthNames[j[1] - 1]} ${persianDigits('${j[0]}')}';
+                        }()
+                      : '${_gregorianMonthNames[month.month - 1]} ${month.year}',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 IconButton(
                   icon: const Icon(Icons.arrow_forward_ios, size: 18),
                   tooltip: 'ماه قبل',
