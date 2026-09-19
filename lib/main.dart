@@ -31,13 +31,126 @@ void main() async {
   await NotificationService.instance.init();
   currentLanguage.value = await Store.loadLanguage();
   currentThemeMode.value = await Store.loadThemeMode();
+  currentCalendarSystem.value = await Store.loadCalendarSystem();
   runApp(const MoneyApp());
 }
 
 // Isolates an LTR chunk (numbers, dates, currency) inside RTL Persian text
 // so it always renders left-to-right in the right place, instead of the
 // Unicode bidi algorithm re-ordering symbols/signs relative to the digits.
+enum CalendarSystem { gregorian, jalali }
+
+final ValueNotifier<CalendarSystem> currentCalendarSystem = ValueNotifier(CalendarSystem.gregorian);
+
+const _jalaliMonthNames = [
+  'فروردین',
+  'اردیبهشت',
+  'خرداد',
+  'تیر',
+  'مرداد',
+  'شهریور',
+  'مهر',
+  'آبان',
+  'آذر',
+  'دی',
+  'بهمن',
+  'اسفند',
+];
+
+/// Gregorian -> Jalali (Solar Hijri) conversion. Standard algorithm (as
+/// used by jalaali-js and most Persian-calendar libraries) - no external
+/// package needed.
+List<int> gregorianToJalali(int gy, int gm, int gd) {
+  const gDaysInMonth = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  var jy = gy > 1600 ? 979 : 0;
+  gy = gy > 1600 ? gy - 1600 : gy - 621;
+  final gy2 = gm > 2 ? gy + 1 : gy;
+  var days = 365 * gy + ((gy2 + 3) ~/ 4) - ((gy2 + 99) ~/ 100) + ((gy2 + 399) ~/ 400) - 80 + gd + gDaysInMonth[gm - 1];
+  jy += 33 * (days ~/ 12053);
+  days %= 12053;
+  jy += 4 * (days ~/ 1461);
+  days %= 1461;
+  if (days > 365) {
+    jy += (days - 1) ~/ 365;
+    days = (days - 1) % 365;
+  }
+  int jm, jd;
+  if (days < 186) {
+    jm = 1 + (days ~/ 31);
+    jd = 1 + (days % 31);
+  } else {
+    jm = 7 + ((days - 186) ~/ 30);
+    jd = 1 + ((days - 186) % 30);
+  }
+  return [jy, jm, jd];
+}
+
+/// Jalali (Solar Hijri) -> Gregorian conversion, inverse of the above.
+List<int> jalaliToGregorian(int jy, int jm, int jd) {
+  var gy = jy > 979 ? 1600 : 621;
+  jy = jy > 979 ? jy - 979 : jy;
+  var days = 365 * jy + ((jy ~/ 33) * 8) + (((jy % 33) + 3) ~/ 4) + 78 + jd + (jm < 7 ? (jm - 1) * 31 : ((jm - 7) * 30) + 186);
+  gy += 400 * (days ~/ 146097);
+  days %= 146097;
+  if (days > 36524) {
+    days--;
+    gy += 100 * (days ~/ 36524);
+    days %= 36524;
+    if (days >= 365) days++;
+  }
+  gy += 4 * (days ~/ 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += (days - 1) ~/ 365;
+    days = (days - 1) % 365;
+  }
+  var gd = days + 1;
+  final isLeap = (gy % 4 == 0 && gy % 100 != 0) || (gy % 400 == 0);
+  final salA = [0, 31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  var gm = 1;
+  for (gm = 1; gm <= 12; gm++) {
+    if (gd <= salA[gm]) break;
+    gd -= salA[gm];
+  }
+  return [gy, gm, gd];
+}
+
 String ltr(String s) => '\u2066$s\u2069';
+
+const _persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+
+/// Converts ASCII digits to Persian numerals when the app language is
+/// Persian; passes other characters (and other languages' text) through
+/// unchanged.
+String persianDigits(String input) {
+  if (currentLanguage.value != AppLanguage.fa) return input;
+  final buffer = StringBuffer();
+  for (final rune in input.runes) {
+    if (rune >= 0x30 && rune <= 0x39) {
+      buffer.write(_persianDigits[rune - 0x30]);
+    } else {
+      buffer.writeCharCode(rune);
+    }
+  }
+  return buffer.toString();
+}
+
+/// Formats a date as dd.MM.yyyy, in Persian digits when the app language
+/// is Persian, LTR-isolated so it doesn't get visually reordered inside
+/// RTL text.
+/// Formats a date as dd.MM.yyyy (Gregorian) or the Jalali equivalent
+/// depending on the chosen calendar system, in Persian digits when the
+/// app language is Persian, LTR-isolated so it doesn't get visually
+/// reordered inside RTL text.
+String formatDate(DateTime d) {
+  if (currentCalendarSystem.value == CalendarSystem.jalali) {
+    final j = gregorianToJalali(d.year, d.month, d.day);
+    final jd = j[2].toString().padLeft(2, '0');
+    final jm = j[1].toString().padLeft(2, '0');
+    return ltr(persianDigits('$jd.$jm.${j[0]}'));
+  }
+  return ltr(persianDigits(DateFormat('dd.MM.yyyy').format(d)));
+}
 
 Future<bool> confirmExitApp(BuildContext context) async {
   final result = await showDialog<bool>(
@@ -792,7 +905,7 @@ class NotificationService {
         scheduleCalls.add(_plugin.zonedSchedule(
           _idFor(t.id, 2 + i),
           categoryName,
-          '$days روز تا سررسید این قسط (${ltr(DateFormat('dd.MM.yyyy').format(due))})${t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : ''}',
+          '$days روز تا سررسید این قسط (${formatDate(due)})${t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : ''}',
           _asTZDateTime(when),
           details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -1291,6 +1404,19 @@ class Store {
     await sp.setString(_themeModeKey, mode.name);
   }
 
+  static const _calendarSystemKey = 'app_calendar_system';
+
+  static Future<CalendarSystem> loadCalendarSystem() async {
+    final sp = await SharedPreferences.getInstance();
+    final code = sp.getString(_calendarSystemKey);
+    return CalendarSystem.values.firstWhere((c) => c.name == code, orElse: () => CalendarSystem.gregorian);
+  }
+
+  static Future<void> saveCalendarSystem(CalendarSystem system) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_calendarSystemKey, system.name);
+  }
+
   static Future<List<Transaction>> loadTransactions() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_txKey) ?? [];
@@ -1600,12 +1726,14 @@ class _MoneyAppState extends State<MoneyApp> {
     super.initState();
     currentLanguage.addListener(_onChanged);
     currentThemeMode.addListener(_onChanged);
+    currentCalendarSystem.addListener(_onChanged);
   }
 
   @override
   void dispose() {
     currentLanguage.removeListener(_onChanged);
     currentThemeMode.removeListener(_onChanged);
+    currentCalendarSystem.removeListener(_onChanged);
     super.dispose();
   }
 
@@ -1646,7 +1774,7 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   bool _lockEnabled = false;
   bool _unlocked = false;
   DateTime? _pausedAt;
-  static const _graceDuration = Duration(minutes: 2);
+  static const _graceDuration = Duration(minutes: 5);
 
   @override
   void initState() {
@@ -1905,6 +2033,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppearanceSettingsScreen())),
           ),
           ListTile(
+            leading: const Icon(Icons.calendar_month_outlined),
+            title: const Text('تقویم'),
+            subtitle: ValueListenableBuilder<CalendarSystem>(
+              valueListenable: currentCalendarSystem,
+              builder: (context, system, _) => Text(system == CalendarSystem.jalali ? 'هجری شمسی' : 'میلادی'),
+            ),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarSettingsScreen())),
+          ),
+          ListTile(
             leading: const Icon(Icons.auto_awesome_outlined),
             title: const Text('هوش مصنوعی (Gemini)'),
             subtitle: const Text('کلید API برای بهبود خواندن رسید و فیش حقوقی'),
@@ -1988,6 +2126,41 @@ class AppearanceSettingsScreen extends StatelessWidget {
               RadioListTile<ThemeMode>(
                 title: Text('تیره'),
                 value: ThemeMode.dark,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class CalendarSettingsScreen extends StatelessWidget {
+  const CalendarSettingsScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('تقویم')),
+      body: ValueListenableBuilder<CalendarSystem>(
+        valueListenable: currentCalendarSystem,
+        builder: (context, system, _) => RadioGroup<CalendarSystem>(
+          groupValue: system,
+          onChanged: (v) async {
+            if (v == null) return;
+            currentCalendarSystem.value = v;
+            await Store.saveCalendarSystem(v);
+          },
+          child: ListView(
+            children: const [
+              RadioListTile<CalendarSystem>(
+                title: Text('هجری شمسی'),
+                subtitle: Text('مثلاً ۰۱.۰۷.۱۴۰۵'),
+                value: CalendarSystem.jalali,
+              ),
+              RadioListTile<CalendarSystem>(
+                title: Text('میلادی'),
+                subtitle: Text('مثلاً 23.09.2026'),
+                value: CalendarSystem.gregorian,
               ),
             ],
           ),
@@ -2601,7 +2774,7 @@ Future<Map<String, dynamic>?> geminiExtractPayslip(String apiKey, String imagePa
 // ============================== Money formatting ==============================
 
 String formatMoney(double amount, String currency) {
-  final n = amount.toStringAsFixed(2);
+  final n = persianDigits(amount.toStringAsFixed(2));
   switch (currency) {
     case 'EUR':
       return ltr('€$n');
@@ -2620,6 +2793,17 @@ String formatMoney(double amount, String currency) {
     default:
       return ltr('$n $currency');
   }
+}
+
+/// The main, memorable title for a transaction list row: the item name if
+/// there's exactly one, "first item + N more" if there are several, the
+/// transaction's own note if there are no items but a note was entered,
+/// and the category name as a last resort so the line is never blank.
+String txMainTitle(Transaction t, String categoryName) {
+  if (t.items.length == 1) return t.items.first.name;
+  if (t.items.length > 1) return '${t.items.first.name} +${t.items.length - 1} قلم دیگر';
+  if (t.note.trim().isNotEmpty) return t.note.trim();
+  return categoryName;
 }
 
 // ============================== Home screen ==============================
@@ -3021,11 +3205,25 @@ class _HomeScreenState extends State<HomeScreen> {
             color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
           ),
         ),
-        title: Text(categoryName(t.categoryId)),
-        subtitle: Text(
-          '${ltr(DateFormat('dd.MM.yyyy').format(displayDate ?? t.date))}'
-          '${projected ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
-          '${t.draft ? ' • پیش‌نویس' : ''}',
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${categoryName(t.categoryId)} • ${formatDate(displayDate ?? t.date)}'
+              '${projected ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
+              '${t.draft ? ' • پیش‌نویس' : ''}',
+              style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 1),
+            Text(
+              txMainTitle(t, categoryName(t.categoryId)),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
         trailing: Text(
           ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -3302,7 +3500,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
                             if (i < 0 || i >= monthly.length) return const SizedBox.shrink();
                             return Padding(
                               padding: const EdgeInsets.only(top: 4),
-                              child: Text(ltr(DateFormat('MM/yy').format(monthly[i].month)), style: const TextStyle(fontSize: 10)),
+                              child: Text(ltr(persianDigits(DateFormat('MM/yy').format(monthly[i].month))), style: const TextStyle(fontSize: 10)),
                             );
                           },
                         ),
@@ -3483,7 +3681,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                           ),
                         ),
                         title: Text(categoryName(t.categoryId)),
-                        subtitle: Text(ltr(DateFormat('dd.MM.yyyy').format(t.date))),
+                        subtitle: Text(formatDate(t.date)),
                         trailing: Text(
                           ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
                           style: TextStyle(
@@ -3550,7 +3748,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
       case RecurrenceFrequency.quarterly:
         return 'فصلی (روز ${t.recurrenceDay ?? '?'})';
       case RecurrenceFrequency.yearly:
-        return 'سالانه (${ltr(DateFormat('dd.MM').format(t.date))})';
+        return 'سالانه (${ltr(persianDigits(DateFormat('dd.MM').format(t.date)))})';
       case RecurrenceFrequency.none:
         return '';
     }
@@ -3627,7 +3825,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                       title: Text(categoryName(t.categoryId)),
                       subtitle: Text(
                         '${_recurrenceLabel(t)}'
-                        '${next != null ? ' • سررسید بعدی: ${ltr(DateFormat('dd.MM.yyyy').format(next))}' : ''}',
+                        '${next != null ? ' • سررسید بعدی: ${formatDate(next)}' : ''}',
                       ),
                       trailing: Text(
                         ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -3953,7 +4151,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                           subtitle: Text(
                             daysLeft == 0
                                 ? 'امروز'
-                                : '${ltr(DateFormat('dd.MM.yyyy').format(e.date))} • ${ltr('$daysLeft')} روز دیگر',
+                                : '${formatDate(e.date)} • ${ltr(persianDigits('$daysLeft'))} روز دیگر',
                           ),
                           trailing: Text(
                             ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
@@ -4048,7 +4246,7 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
                           ),
                           title: Text(categoryName(t.categoryId)),
                           subtitle: Text(
-                            '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
+                            '${formatDate(t.date)}'
                             '${t.note.isNotEmpty ? ' • ${t.note}' : ''}',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -4361,7 +4559,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 const SizedBox(height: 12),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(targetDate == null ? 'تاریخ هدف (اختیاری)' : ltr(DateFormat('dd.MM.yyyy').format(targetDate!))),
+                  title: Text(targetDate == null ? 'تاریخ هدف (اختیاری)' : formatDate(targetDate!)),
                   trailing: const Icon(Icons.calendar_today, size: 18),
                   onTap: () async {
                     final picked = await showDatePicker(
@@ -4369,6 +4567,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                       initialDate: targetDate ?? DateTime.now().add(const Duration(days: 365)),
                       firstDate: DateTime.now(),
                       lastDate: DateTime.now().add(const Duration(days: 365 * 20)),
+                      builder: (ctx2, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
                     );
                     if (picked != null) setLocal(() => targetDate = picked);
                   },
@@ -4428,11 +4627,17 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
               const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(ltr(DateFormat('dd.MM.yyyy').format(date))),
+                title: Text(formatDate(date)),
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
                   final picked =
-                      await showDatePicker(context: ctx, initialDate: date, firstDate: DateTime(2015), lastDate: DateTime.now());
+                      await showDatePicker(
+                        context: ctx,
+                        initialDate: date,
+                        firstDate: DateTime(2015),
+                        lastDate: DateTime.now(),
+                        builder: (ctx2, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+                      );
                   if (picked != null) setLocal(() => date = picked);
                 },
               ),
@@ -4484,7 +4689,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                           final c = list[i];
                           return ListTile(
                             title: Text(ltr(formatMoney(c.amount, g.currency))),
-                            subtitle: Text(ltr(DateFormat('dd.MM.yyyy').format(c.date))),
+                            subtitle: Text(formatDate(c.date)),
                             trailing: IconButton(
                               icon: const Icon(Icons.delete_outline, size: 20),
                               onPressed: () async {
@@ -4565,7 +4770,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         ),
                         if (g.targetDate != null)
                           Text(
-                            'تا ${ltr(DateFormat('dd.MM.yyyy').format(g.targetDate!))}',
+                            'تا ${formatDate(g.targetDate!)}',
                             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                           ),
                         if (projection != null)
@@ -4644,6 +4849,7 @@ class _TransferScreenState extends State<TransferScreen> {
       initialDate: date,
       firstDate: DateTime(2015),
       lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
     );
     if (picked != null) setState(() => date = picked);
   }
@@ -4784,7 +4990,7 @@ class _TransferScreenState extends State<TransferScreen> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text(tr('date')),
-            subtitle: Text(ltr(DateFormat('dd.MM.yyyy').format(date))),
+            subtitle: Text(formatDate(date)),
             trailing: const Icon(Icons.calendar_today, size: 18),
             onTap: _pickDate,
           ),
@@ -4850,7 +5056,7 @@ class _TransferScreenState extends State<TransferScreen> {
               const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(endDate == null ? 'تاریخ پایان را انتخاب کنید' : ltr(DateFormat('dd.MM.yyyy').format(endDate!))),
+                title: Text(endDate == null ? 'تاریخ پایان را انتخاب کنید' : formatDate(endDate!)),
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -4858,6 +5064,7 @@ class _TransferScreenState extends State<TransferScreen> {
                     initialDate: endDate ?? date.add(const Duration(days: 30)),
                     firstDate: date,
                     lastDate: DateTime.now().add(const Duration(days: 365 * 20)),
+                    builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
                   );
                   if (picked != null) setState(() => endDate = picked);
                 },
@@ -4939,14 +5146,124 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     await _load();
   }
 
-  String _sortLabel(_TxSortMode m) => switch (m) {
-        _TxSortMode.dateDesc => 'تاریخ تراکنش (جدیدترین)',
-        _TxSortMode.dateAsc => 'تاریخ تراکنش (قدیمی‌ترین)',
-        _TxSortMode.createdDesc => 'زمان ثبت (جدیدترین)',
-        _TxSortMode.createdAsc => 'زمان ثبت (قدیمی‌ترین)',
-        _TxSortMode.amountDesc => 'مبلغ (بیشترین)',
-        _TxSortMode.amountAsc => 'مبلغ (کمترین)',
-      };
+  int get _activeFilterCount =>
+      (typeFilter != null ? 1 : 0) +
+      (categoryFilter != null ? 1 : 0) +
+      (accountFilter != null ? 1 : 0) +
+      (recurringFilter != null ? 1 : 0);
+
+  Future<void> _openFilterSheet() async {
+    TxType? localType = typeFilter;
+    String? localCategory = categoryFilter;
+    String? localAccount = accountFilter;
+    bool? localRecurring = recurringFilter;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: StatefulBuilder(builder: (ctx, setLocal) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(tr('filter'), style: Theme.of(context).textTheme.titleMedium),
+                    TextButton(
+                      onPressed: () => setLocal(() {
+                        localType = null;
+                        localCategory = null;
+                        localAccount = null;
+                        localRecurring = null;
+                      }),
+                      child: const Text('پاک‌کردن همه'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text('نوع تراکنش', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<TxType?>(
+                  initialValue: localType,
+                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('همه‌ی انواع')),
+                    DropdownMenuItem(value: TxType.income, child: Text('درآمد')),
+                    DropdownMenuItem(value: TxType.expense, child: Text('هزینه')),
+                  ],
+                  onChanged: (v) => setLocal(() => localType = v),
+                ),
+                const SizedBox(height: 16),
+                Text('تکرارشوندگی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<bool?>(
+                  initialValue: localRecurring,
+                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('همه')),
+                    DropdownMenuItem(value: true, child: Text('فقط تکرارشونده')),
+                    DropdownMenuItem(value: false, child: Text('فقط غیرتکرارشونده')),
+                  ],
+                  onChanged: (v) => setLocal(() => localRecurring = v),
+                ),
+                const SizedBox(height: 16),
+                Text('دسته‌بندی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String?>(
+                  initialValue: localCategory,
+                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
+                    ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
+                  ],
+                  onChanged: (v) => setLocal(() => localCategory = v),
+                ),
+                const SizedBox(height: 16),
+                Text('حساب', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String?>(
+                  initialValue: localAccount,
+                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                  items: [
+                    DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
+                    ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))),
+                  ],
+                  onChanged: (v) => setLocal(() => localAccount = v),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+                  onPressed: () {
+                    setState(() {
+                      typeFilter = localType;
+                      categoryFilter = localCategory;
+                      accountFilter = localAccount;
+                      recurringFilter = localRecurring;
+                    });
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('اعمال فیلتر'),
+                ),
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _appliedFilterChip(String label, VoidCallback onClear) {
+    return Chip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      onDeleted: onClear,
+      deleteIconColor: Colors.grey.shade600,
+      visualDensity: VisualDensity.compact,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+    );
+  }
 
   Widget _filterPill<T>({
     required BuildContext context,
@@ -5046,68 +5363,65 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
               onChanged: (v) => setState(() => query = v),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text('فیلتر و مرتب‌سازی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-          ),
+          const SizedBox(height: 10),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            child: Row(
               children: [
-                _filterPill<TxType?>(
-                  context: context,
-                  icon: Icons.swap_vert,
-                  value: typeFilter,
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('همه‌ی انواع')),
-                    DropdownMenuItem(value: TxType.income, child: Text('درآمد')),
-                    DropdownMenuItem(value: TxType.expense, child: Text('هزینه')),
-                  ],
-                  onChanged: (v) => setState(() => typeFilter = v),
+                OutlinedButton.icon(
+                  onPressed: _openFilterSheet,
+                  icon: Badge(
+                    label: Text('$_activeFilterCount'),
+                    isLabelVisible: _activeFilterCount > 0,
+                    child: const Icon(Icons.filter_list, size: 18),
+                  ),
+                  label: Text(tr('filter')),
                 ),
-                _filterPill<bool?>(
-                  context: context,
-                  icon: Icons.repeat,
-                  value: recurringFilter,
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('همه')),
-                    DropdownMenuItem(value: true, child: Text('تکرارشونده')),
-                    DropdownMenuItem(value: false, child: Text('غیرتکرارشونده')),
-                  ],
-                  onChanged: (v) => setState(() => recurringFilter = v),
-                ),
-                _filterPill<String?>(
-                  context: context,
-                  icon: Icons.category_outlined,
-                  value: categoryFilter,
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
-                    ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
-                  ],
-                  onChanged: (v) => setState(() => categoryFilter = v),
-                ),
-                _filterPill<String?>(
-                  context: context,
-                  icon: Icons.account_balance_wallet_outlined,
-                  value: accountFilter,
-                  items: [
-                    DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
-                    ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name))),
-                  ],
-                  onChanged: (v) => setState(() => accountFilter = v),
-                ),
-                _filterPill<_TxSortMode>(
-                  context: context,
-                  icon: Icons.sort,
-                  value: sort,
-                  items: _TxSortMode.values.map((m) => DropdownMenuItem(value: m, child: Text(_sortLabel(m)))).toList(),
-                  onChanged: (v) => setState(() => sort = v ?? sort),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _filterPill<_TxSortMode>(
+                    context: context,
+                    icon: Icons.sort,
+                    value: sort,
+                    items: _TxSortMode.values.map((m) => DropdownMenuItem(value: m, child: Text(_sortLabel(m)))).toList(),
+                    onChanged: (v) => setState(() => sort = v ?? sort),
+                  ),
                 ),
               ],
             ),
           ),
+          if (_activeFilterCount > 0) ...[
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (typeFilter != null)
+                    _appliedFilterChip(
+                      typeFilter == TxType.income ? 'نوع: درآمد' : 'نوع: هزینه',
+                      () => setState(() => typeFilter = null),
+                    ),
+                  if (recurringFilter != null)
+                    _appliedFilterChip(
+                      recurringFilter! ? 'فقط تکرارشونده' : 'فقط غیرتکرارشونده',
+                      () => setState(() => recurringFilter = null),
+                    ),
+                  if (categoryFilter != null)
+                    _appliedFilterChip(
+                      'دسته‌بندی: ${categoryName(categoryFilter!)}',
+                      () => setState(() => categoryFilter = null),
+                    ),
+                  if (accountFilter != null)
+                    _appliedFilterChip(
+                      'حساب: ${accounts.where((a) => a.id == accountFilter).isEmpty ? '' : accounts.firstWhere((a) => a.id == accountFilter).name}',
+                      () => setState(() => accountFilter = null),
+                    ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -5134,11 +5448,25 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                               color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
                             ),
                           ),
-                          title: Text(categoryName(t.categoryId)),
-                          subtitle: Text(
-                            '${ltr(DateFormat('dd.MM.yyyy').format(t.date))}'
-                            '${t.isRecurring ? ' • تکرارشونده' : ''}'
-                            '${t.draft ? ' • پیش‌نویس' : ''}',
+                          title: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${categoryName(t.categoryId)} • ${formatDate(t.date)}'
+                                '${t.isRecurring ? ' • تکرارشونده' : ''}'
+                                '${t.draft ? ' • پیش‌نویس' : ''}',
+                                style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                txMainTitle(t, categoryName(t.categoryId)),
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
                           trailing: Text(
                             ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -5249,7 +5577,7 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('${categoryName(m.t.categoryId)} • ${ltr(DateFormat('dd.MM.yyyy').format(m.t.date))}'),
+                            Text('${categoryName(m.t.categoryId)} • ${formatDate(m.t.date)}'),
                             if (m.item.warrantyNote != null) ...[
                               const SizedBox(height: 4),
                               Text(m.item.warrantyNote!, style: const TextStyle(fontSize: 12)),
@@ -5261,14 +5589,14 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
                                 children: [
                                   if (m.item.warrantyUntil != null)
                                     Chip(
-                                      label: Text('گارانتی تا ${ltr(DateFormat('yyyy-MM-dd').format(m.item.warrantyUntil!))}',
+                                      label: Text('گارانتی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(m.item.warrantyUntil!)))}',
                                           style: const TextStyle(fontSize: 11)),
                                       visualDensity: VisualDensity.compact,
                                       backgroundColor: Colors.blue.shade50,
                                     ),
                                   if (m.item.returnUntil != null)
                                     Chip(
-                                      label: Text('مرجوعی تا ${ltr(DateFormat('yyyy-MM-dd').format(m.item.returnUntil!))}',
+                                      label: Text('مرجوعی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(m.item.returnUntil!)))}',
                                           style: const TextStyle(fontSize: 11)),
                                       visualDensity: VisualDensity.compact,
                                       backgroundColor: Colors.orange.shade50,
@@ -5520,7 +5848,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ChoiceChip(label: Text(_presetLabel(p)), selected: preset == p, onSelected: (_) => _applyPreset(p)),
               ActionChip(
                 label: Text(preset == _ReportPreset.custom
-                    ? '${ltr(DateFormat('dd.MM.yy').format(rangeStart))} - ${ltr(DateFormat('dd.MM.yy').format(rangeEnd))}'
+                    ? '${ltr(persianDigits(DateFormat('dd.MM.yy').format(rangeStart)))} - ${ltr(persianDigits(DateFormat('dd.MM.yy').format(rangeEnd)))}'
                     : 'بازه‌ی دلخواه'),
                 avatar: const Icon(Icons.date_range, size: 18),
                 onPressed: _pickCustomRange,
@@ -5606,7 +5934,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         child: LinearProgressIndicator(
                           value: maxCategoryAmount > 0 ? e.value / maxCategoryAmount : 0,
                           minHeight: 6,
-                          backgroundColor: Colors.grey.shade200,
+                          backgroundColor: Colors.grey.withValues(alpha: 0.2),
+                          color: Colors.indigo.shade300,
                         ),
                       ),
                     ],
@@ -5894,7 +6223,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(ltr(DateFormat('dd.MM.yyyy').format(date)), style: Theme.of(context).textTheme.titleMedium),
+              Text(formatDate(date), style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 12),
               Expanded(
                 child: ListView.builder(
@@ -6109,7 +6438,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                       mainAxisAlignment: MainAxisAlignment.start,
                       children: [
                         Text(
-                          ltr('$day'),
+                          ltr(persianDigits('$day')),
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
@@ -6749,7 +7078,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
+            title: Text('تاریخ: ${formatDate(date)}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showDatePicker(
@@ -6849,7 +7178,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           if (it.warrantyUntil != null)
                             Chip(
                               avatar: const Icon(Icons.verified_outlined, size: 14),
-                              label: Text('گارانتی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!))}', style: const TextStyle(fontSize: 11)),
+                              label: Text('گارانتی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!)))}', style: const TextStyle(fontSize: 11)),
                               visualDensity: VisualDensity.compact,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               backgroundColor: Colors.blue.shade50,
@@ -6857,7 +7186,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           if (it.returnUntil != null)
                             Chip(
                               avatar: const Icon(Icons.assignment_return_outlined, size: 14),
-                              label: Text('مرجوعی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.returnUntil!))}', style: const TextStyle(fontSize: 11)),
+                              label: Text('مرجوعی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.returnUntil!)))}', style: const TextStyle(fontSize: 11)),
                               visualDensity: VisualDensity.compact,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               backgroundColor: Colors.orange.shade50,
@@ -7211,7 +7540,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               ))),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
+            title: Text('تاریخ: ${formatDate(date)}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showDatePicker(
@@ -7667,7 +7996,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-              title: Text(endDate == null ? 'انتخاب تاریخ آخرین پرداخت' : 'تا: ${ltr(DateFormat('dd.MM.yyyy').format(endDate!))}'),
+              title: Text(endDate == null ? 'انتخاب تاریخ آخرین پرداخت' : 'تا: ${formatDate(endDate!)}'),
               trailing: const Icon(Icons.event),
               onTap: () async {
                 final d = await showDatePicker(
@@ -7696,7 +8025,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           if (preview != null) ...[
             const SizedBox(height: 8),
             Text(
-              'سررسید بعدی: ${ltr(DateFormat('dd.MM.yyyy').format(preview))}',
+              'سررسید بعدی: ${formatDate(preview)}',
               style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.w600),
             ),
           ],
@@ -7924,7 +8253,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 16),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${ltr(DateFormat('dd.MM.yyyy').format(date))}'),
+            title: Text('تاریخ: ${formatDate(date)}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showDatePicker(
@@ -7984,7 +8313,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                             if (it.warrantyUntil != null)
                               Chip(
                                 avatar: const Icon(Icons.verified_outlined, size: 14),
-                                label: Text('گارانتی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!))}', style: const TextStyle(fontSize: 11)),
+                                label: Text('گارانتی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!)))}', style: const TextStyle(fontSize: 11)),
                                 visualDensity: VisualDensity.compact,
                                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 backgroundColor: Colors.blue.shade50,
@@ -7992,7 +8321,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                             if (it.returnUntil != null)
                               Chip(
                                 avatar: const Icon(Icons.assignment_return_outlined, size: 14),
-                                label: Text('مرجوعی تا ${ltr(DateFormat('yyyy-MM-dd').format(it.returnUntil!))}', style: const TextStyle(fontSize: 11)),
+                                label: Text('مرجوعی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.returnUntil!)))}', style: const TextStyle(fontSize: 11)),
                                 visualDensity: VisualDensity.compact,
                                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 backgroundColor: Colors.orange.shade50,
