@@ -274,6 +274,38 @@ int persianCompare(String a, String b) {
   return la.length.compareTo(lb.length);
 }
 
+/// Categories for [type], ordered as: each top-level category (Persian
+/// alphabetical), immediately followed by its own subcategories (also
+/// Persian alphabetical) - for filter/picker lists where subcategories
+/// should visually nest under their parent instead of being mixed into
+/// one flat alphabetical list.
+List<Category> categoriesInHierarchicalOrder(List<Category> categories, TxType type) {
+  final result = <Category>[];
+  final tops = categories.where((c) => c.type == type && c.parentId == null).toList()..sort((a, b) => persianCompare(a.name, b.name));
+  for (final top in tops) {
+    result.add(top);
+    final children = categories.where((c) => c.type == type && c.parentId == top.id).toList()..sort((a, b) => persianCompare(a.name, b.name));
+    result.addAll(children);
+  }
+  return result;
+}
+
+/// True if [txCategoryId] is exactly [filterCategoryId], or a descendant
+/// of it (so picking a top-level category in a filter also matches every
+/// transaction filed under one of its subcategories).
+bool categoryMatchesFilter(String txCategoryId, String filterCategoryId, List<Category> categories) {
+  if (txCategoryId == filterCategoryId) return true;
+  var current = categories.where((c) => c.id == txCategoryId).toList();
+  var cat = current.isEmpty ? null : current.first;
+  while (cat?.parentId != null) {
+    if (cat!.parentId == filterCategoryId) return true;
+    final pm = categories.where((c) => c.id == cat!.parentId).toList();
+    if (pm.isEmpty) break;
+    cat = pm.first;
+  }
+  return false;
+}
+
 class Category {
   final String id;
   final String name;
@@ -1212,6 +1244,79 @@ Future<void> checkBudgetGoals() async {
   if (changed) await Store.saveBudgetNotifyState(notifyState);
 }
 
+/// Compares this month's spending in each top-level expense category
+/// against the average of the previous [lookbackMonths] months (not
+/// counting the current, still-in-progress month), and fires a one-time
+/// notification when the current pace is unusually high - a spike worth
+/// noticing even if no budget goal was ever set for that category.
+Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
+  final tx = await Store.loadTransactions();
+  final categories = await Store.loadCategories();
+  final now = DateTime.now();
+  final monthKey = '${now.year}-${now.month}';
+  final notifyState = await Store.loadAnomalyNotifyState();
+  var changed = false;
+
+  String categoryName(String id) {
+    final m = categories.where((c) => c.id == id).toList();
+    return m.isEmpty ? '' : m.first.name;
+  }
+
+  Category? topCategoryOf(String id) {
+    final match = categories.where((c) => c.id == id).toList();
+    var cat = match.isEmpty ? null : match.first;
+    while (cat?.parentId != null) {
+      final pm = categories.where((c) => c.id == cat!.parentId).toList();
+      if (pm.isEmpty) break;
+      cat = pm.first;
+    }
+    return cat;
+  }
+
+  final topExpenseCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null);
+  for (final cat in topExpenseCategories) {
+    double currentSpend = 0;
+    final pastMonthTotals = <int, double>{}; // month-offset (1..lookbackMonths) -> total
+    for (final t in tx) {
+      if (t.type != TxType.expense) continue;
+      if (t.categoryId == '_transfer_out_') continue;
+      if (topCategoryOf(t.categoryId)?.id != cat.id) continue;
+      if (t.date.year == now.year && t.date.month == now.month) {
+        currentSpend += t.amount;
+        continue;
+      }
+      for (var i = 1; i <= lookbackMonths; i++) {
+        var y = now.year;
+        var m = now.month - i;
+        while (m < 1) {
+          m += 12;
+          y--;
+        }
+        if (t.date.year == y && t.date.month == m) {
+          pastMonthTotals[i] = (pastMonthTotals[i] ?? 0) + t.amount;
+        }
+      }
+    }
+    if (pastMonthTotals.isEmpty) continue; // no history yet to compare against
+    final avg = pastMonthTotals.values.fold(0.0, (s, v) => s + v) / lookbackMonths;
+    // Ignore tiny categories (noise) and require a meaningfully higher pace.
+    if (avg < 10 || currentSpend < 20) continue;
+    if (currentSpend < avg * 1.5) continue;
+    final key = '${cat.id}_$monthKey';
+    if (notifyState.contains(key)) continue;
+    notifyState.add(key);
+    changed = true;
+    final name = categoryName(cat.id);
+    final pct = ((currentSpend / avg - 1) * 100).round();
+    await NotificationService.instance.showNow(
+      (cat.id.hashCode & 0xffff) ^ 0x4000, // distinct id range from budget-goal notifications
+      'هزینه‌ی «$name» این ماه غیرعادی بالاست',
+      'تا الان ${currentSpend.toStringAsFixed(0)} خرج شده، حدود $pct% بیشتر از میانگین ${lookbackMonths} ماه قبل (${avg.toStringAsFixed(0)}).',
+    );
+  }
+  if (changed) await Store.saveAnomalyNotifyState(notifyState);
+}
+
 // ============================== Storage ==============================
 
 class Store {
@@ -1269,6 +1374,20 @@ class Store {
   static Future<void> saveBudgetNotifyState(Map<String, String> state) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_budgetNotifyKey, jsonEncode(state));
+  }
+
+  static const _anomalyNotifyKey = 'spending_anomaly_notify_state';
+
+  /// Which "categoryId_yyyy-mm" spending-spike alerts have already been
+  /// sent, so the same one isn't repeated every time the check runs.
+  static Future<Set<String>> loadAnomalyNotifyState() async {
+    final sp = await SharedPreferences.getInstance();
+    return (sp.getStringList(_anomalyNotifyKey) ?? []).toSet();
+  }
+
+  static Future<void> saveAnomalyNotifyState(Set<String> state) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_anomalyNotifyKey, state.toList());
   }
 
 
@@ -1490,14 +1609,25 @@ class Store {
     await saveTransactions(list);
   }
 
-  static Future<void> deleteTransaction(String id) async {
+  /// Deletes a transaction (and its transfer pair, if it has one) and
+  /// returns everything that was removed, so the caller can offer an
+  /// "undo" that restores them exactly.
+  static Future<List<Transaction>> deleteTransaction(String id) async {
     final list = await loadTransactions();
+    final removed = <Transaction>[];
+    final target = list.where((x) => x.id == id).toList();
+    if (target.isNotEmpty) removed.add(target.first);
     list.removeWhere((x) => x.id == id);
     // Deleting one leg of a transfer without the other would leave a
     // one-sided "phantom" transaction behind - remove both together.
     final pairId = _transferPairId(id);
-    if (pairId != null) list.removeWhere((x) => x.id == pairId);
+    if (pairId != null) {
+      final pair = list.where((x) => x.id == pairId).toList();
+      if (pair.isNotEmpty) removed.add(pair.first);
+      list.removeWhere((x) => x.id == pairId);
+    }
     await saveTransactions(list);
+    return removed;
   }
 
   static Future<List<Category>> loadCategories() async {
@@ -1971,6 +2101,7 @@ class AppDrawer extends StatelessWidget {
             item(13, Icons.swap_horiz, 'انتقال بین حساب‌ها', () => const TransferScreen()),
             item(14, Icons.flag_outlined, 'اهداف هزینه', () => const BudgetGoalsScreen()),
             item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
+            item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
@@ -2771,6 +2902,78 @@ Future<Map<String, dynamic>?> geminiExtractReceipt(String apiKey, String imagePa
 Future<Map<String, dynamic>?> geminiExtractPayslip(String apiKey, String imagePath) =>
     _geminiRequest(apiKey, imagePath, _payslipPrompt);
 
+/// A text-only Gemini call (no image), used for the savings/investment
+/// suggestion feature - returns plain prose, not JSON.
+Future<String> geminiTextRequest(String apiKey, String prompt) async {
+  final body = jsonEncode({
+    'contents': [
+      {
+        'parts': [
+          {'text': prompt},
+        ],
+      },
+    ],
+  });
+
+  http.Response? resp;
+  Object? lastNetworkError;
+  final attemptedModels = <String>[];
+  for (final model in _geminiModels) {
+    attemptedModels.add(model);
+    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        resp = await http
+            .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+            .timeout(const Duration(seconds: 45));
+        lastNetworkError = null;
+      } catch (e) {
+        lastNetworkError = e;
+        resp = null;
+        if (attempt == 2) break;
+        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+        continue;
+      }
+      if (resp.statusCode == 200) break;
+      if ((resp.statusCode == 503 || resp.statusCode == 429) && attempt < 2) {
+        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+        continue;
+      }
+      break;
+    }
+    if (resp != null && resp.statusCode == 200) break;
+    if (resp != null && resp.statusCode != 404 && resp.statusCode != 429) break;
+  }
+  if (resp == null || resp.statusCode != 200) {
+    final code = resp?.statusCode;
+    final raw = resp != null
+        ? 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nHTTP ${resp.statusCode}\n${resp.body}'
+        : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
+    if (code == 503) {
+      throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.', raw);
+    }
+    if (code == 429) {
+      throw GeminiException('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.', raw);
+    }
+    throw GeminiException('خطای Gemini API (${code ?? '—'})', raw);
+  }
+  final rawBody = utf8.decode(resp.bodyBytes);
+  final decoded = jsonDecode(rawBody);
+  final candidates = decoded['candidates'];
+  if (candidates == null || candidates is! List || candidates.isEmpty) {
+    final blockReason = decoded['promptFeedback']?['blockReason'];
+    if (blockReason != null) {
+      throw GeminiException('Gemini این درخواست را پردازش نکرد (دلیل: $blockReason).', rawBody);
+    }
+    throw GeminiException('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).', rawBody);
+  }
+  final text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
+  if (text == null) {
+    throw GeminiException('پاسخ Gemini قابل خواندن نبود.', rawBody);
+  }
+  return text.trim();
+}
+
 // ============================== Money formatting ==============================
 
 String formatMoney(double amount, String currency) {
@@ -2838,6 +3041,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // are pending.
     unawaited(retryPendingCategoryIcons());
     unawaited(checkBudgetGoals());
+    unawaited(checkSpendingAnomalies());
   }
 
   String categoryName(String id) {
@@ -2956,7 +3160,8 @@ class _HomeScreenState extends State<HomeScreen> {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     if (result is DeleteTransactionSignal) {
-      await Store.deleteTransaction(result.id);
+      final removed = await Store.deleteTransaction(result.id);
+      _showUndoSnackbar(removed);
     } else if (result is Transaction) {
       await Store.upsertTransaction(result);
     } else {
@@ -2971,6 +3176,28 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() {});
   }
 
+  void _showUndoSnackbar(List<Transaction> removed) {
+    if (removed.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(removed.length > 1 ? 'تراکنش‌ها حذف شدند' : 'تراکنش حذف شد'),
+        action: SnackBarAction(
+          label: 'برگردون',
+          onPressed: () async {
+            for (final t in removed) {
+              await Store.upsertTransaction(t);
+            }
+            tx = await Store.loadTransactions();
+            tx.sort((a, b) => b.date.compareTo(a.date));
+            if (mounted) setState(() {});
+          },
+        ),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
   Future<void> _openDrafts() async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen()));
     await _load();
@@ -2978,10 +3205,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _delete(Transaction t) async {
     await NotificationService.instance.cancelForTransaction(t.id);
-    await Store.deleteTransaction(t.id);
+    final removed = await Store.deleteTransaction(t.id);
     tx = await Store.loadTransactions();
     tx.sort((a, b) => b.date.compareTo(a.date));
     if (mounted) setState(() {});
+    _showUndoSnackbar(removed);
   }
 
   @override
@@ -4347,6 +4575,260 @@ enum _TxSortMode { dateDesc, dateAsc, createdDesc, createdAsc, amountDesc, amoun
 
 // ============================== Budget goals ==============================
 
+// ============================== Savings/investment suggestion ==============================
+
+class SavingsSuggestionScreen extends StatefulWidget {
+  const SavingsSuggestionScreen({super.key});
+  @override
+  State<SavingsSuggestionScreen> createState() => _SavingsSuggestionScreenState();
+}
+
+class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
+  bool loading = true;
+  bool hasGeminiKey = false;
+  bool requesting = false;
+  String? aiSuggestion;
+  String? errorMessage;
+  List<Transaction> tx = [];
+  List<Account> accounts = [];
+  List<SavingsGoal> goals = [];
+  List<SavingsContribution> contributions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    tx = await Store.loadTransactions();
+    accounts = await Store.loadAccounts();
+    goals = await Store.loadSavingsGoals();
+    contributions = await Store.loadSavingsContributions();
+    final key = await Store.loadGeminiKey();
+    hasGeminiKey = key != null && key.trim().isNotEmpty;
+    setState(() => loading = false);
+  }
+
+  String get primaryCurrency {
+    if (accounts.isEmpty) return 'EUR';
+    final counts = <String, int>{};
+    for (final a in accounts) {
+      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+    }
+    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  /// Average monthly income/expense (in the primary currency, transfers
+  /// excluded since they're not real income/expense) over the last
+  /// [months] full months, not counting the current, still-in-progress
+  /// month.
+  ({double income, double expense}) _averages(int months) {
+    final now = DateTime.now();
+    double income = 0, expense = 0;
+    for (var i = 1; i <= months; i++) {
+      var y = now.year;
+      var m = now.month - i;
+      while (m < 1) {
+        m += 12;
+        y--;
+      }
+      for (final t in tx) {
+        if (currencyOf(t.accountId) != primaryCurrency) continue;
+        if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') continue;
+        if (t.date.year != y || t.date.month != m) continue;
+        if (t.type == TxType.income) {
+          income += t.amount;
+        } else {
+          expense += t.amount;
+        }
+      }
+    }
+    return (income: income / months, expense: expense / months);
+  }
+
+  Future<void> _requestAiSuggestion() async {
+    setState(() {
+      requesting = true;
+      errorMessage = null;
+    });
+    try {
+      final key = await Store.loadGeminiKey();
+      final avg = _averages(3);
+      final surplus = avg.income - avg.expense;
+      final goalLines = goals.map((g) {
+        final progress = contributions.where((c) => c.goalId == g.id).fold(0.0, (s, c) => s + c.amount);
+        return '- ${g.name}: ${progress.toStringAsFixed(0)}/${g.targetAmount.toStringAsFixed(0)} ${g.currency}';
+      }).join('\n');
+      final prompt =
+          'You are a friendly, general personal-finance educator (NOT a licensed financial advisor - never claim '
+          'to be one, never give confident predictions, never recommend specific stocks, funds, or ISINs). Given '
+          'this person\'s recent monthly averages (in $primaryCurrency): income ${avg.income.toStringAsFixed(0)}, '
+          'expenses ${avg.expense.toStringAsFixed(0)}, monthly surplus ${surplus.toStringAsFixed(0)}, and their '
+          'savings goals with current progress:\n$goalLines\n\n'
+          'Write a short (120-180 words), warm, practical note in Persian. Cover, at a general/educational level '
+          'only: (1) a rough split for the surplus between an emergency buffer, their stated goals, and general '
+          'long-term investing (e.g. broad index funds) - as a starting point to think about, not a directive; '
+          '(2) one habit suggestion (like automating a monthly transfer); (3) a closing reminder that this is '
+          'general educational information, not personalized financial advice, and that they should do their own '
+          'research or consult a licensed advisor for actual decisions. Do not mention specific companies, tickers, '
+          'or make return/performance predictions. Plain prose, no markdown, no headers.';
+      final result = await geminiTextRequest(key!.trim(), prompt);
+      setState(() => aiSuggestion = result);
+    } on GeminiException catch (e) {
+      setState(() => errorMessage = e.friendlyMessage);
+    } catch (e) {
+      setState(() => errorMessage = 'خطای غیرمنتظره: $e');
+    } finally {
+      if (mounted) setState(() => requesting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final avg = _averages(3);
+    final surplus = avg.income - avg.expense;
+    final currency = primaryCurrency;
+    return Scaffold(
+      appBar: AppBar(title: const Text('پیشنهاد پس‌انداز و سرمایه‌گذاری')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('میانگین ۳ ماه اخیر', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('میانگین درآمد'),
+                      Text(ltr(formatMoney(avg.income, currency)), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('میانگین هزینه'),
+                      Text(ltr(formatMoney(avg.expense, currency)), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('مازاد قابل پس‌انداز', style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text(
+                        ltr(formatMoney(surplus, currency)),
+                        style: TextStyle(fontWeight: FontWeight.bold, color: surplus >= 0 ? Colors.indigo : Colors.red),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (surplus > 0)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('یک نقطه‌ی شروع ساده', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 8),
+                    Text(
+                      'با مازاد ماهانه‌ی حدود ${ltr(formatMoney(surplus, currency))}، یک شروع رایج اینه: '
+                      'حدود نیمی رو برای اهداف نزدیک‌مدت (مثل چیزهایی که توی «اهداف پس‌انداز» تعریف کردی) '
+                      'کنار بذاری، و باقی رو به‌صورت ماهانه و خودکار وارد یه حساب سرمایه‌گذاری بلندمدت کنی. '
+                      'این فقط یه نقطه‌ی شروعه، نه یه قانون ثابت.',
+                      style: const TextStyle(fontSize: 13, height: 1.6),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'در ۳ ماه اخیر، میانگین هزینه‌هات از درآمدت بیشتر بوده. قبل از فکر به پس‌انداز/سرمایه‌گذاری، شاید بهتر باشه اول روی کم‌کردن هزینه‌ها یا افزایش درآمد تمرکز کنی.',
+                  style: TextStyle(fontSize: 13, height: 1.6),
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+          if (hasGeminiKey) ...[
+            FilledButton.icon(
+              onPressed: requesting ? null : _requestAiSuggestion,
+              icon: requesting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.auto_awesome),
+              label: Text(requesting ? 'در حال دریافت...' : 'پیشنهاد هوشمند‌تر (با هوش مصنوعی)'),
+            ),
+            if (errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+              ),
+            if (aiSuggestion != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Card(
+                  color: Colors.indigo.shade50,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(aiSuggestion!, style: const TextStyle(fontSize: 13, height: 1.7)),
+                  ),
+                ),
+              ),
+          ] else
+            InkWell(
+              onTap: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
+                final key = await Store.loadGeminiKey();
+                if (!mounted) return;
+                setState(() => hasGeminiKey = key != null && key.trim().isNotEmpty);
+              },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 16, color: Colors.grey),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'برای پیشنهاد هوشمندتر با هوش مصنوعی، یک کلید Gemini در «تنظیمات › هوش مصنوعی (Gemini)» وارد کنید.',
+                        style: TextStyle(color: Colors.grey, fontSize: 12, decoration: TextDecoration.underline),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Text(
+            'این صفحه اطلاعات آموزشی و کلی ارائه می‌دهد و جایگزین مشاوره‌ی مالی رسمی نیست.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class BudgetGoalsScreen extends StatefulWidget {
   const BudgetGoalsScreen({super.key});
   @override
@@ -5139,7 +5621,27 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     );
     if (result == null) return;
     if (result is DeleteTransactionSignal) {
-      await Store.deleteTransaction(result.id);
+      final removed = await Store.deleteTransaction(result.id);
+      await _load();
+      if (removed.isNotEmpty && mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(removed.length > 1 ? 'تراکنش\u200cها حذف شدند' : 'تراکنش حذف شد'),
+            action: SnackBarAction(
+              label: 'برگردون',
+              onPressed: () async {
+                for (final t in removed) {
+                  await Store.upsertTransaction(t);
+                }
+                await _load();
+              },
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+      return;
     } else if (result is Transaction) {
       await Store.upsertTransaction(result);
     }
@@ -5226,7 +5728,14 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
-                    ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
+                    ...categoriesInHierarchicalOrder(categories, TxType.expense).map((c) => DropdownMenuItem(
+                          value: c.id,
+                          child: Text(c.parentId == null ? c.name : '　　${c.name}'),
+                        )),
+                    ...categoriesInHierarchicalOrder(categories, TxType.income).map((c) => DropdownMenuItem(
+                          value: c.id,
+                          child: Text(c.parentId == null ? c.name : '　　${c.name}'),
+                        )),
                   ],
                   onChanged: (v) => setLocal(() => localCategory = v),
                 ),
@@ -5313,7 +5822,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     final q = query.trim().toLowerCase();
     var filtered = tx.where((t) {
       if (typeFilter != null && t.type != typeFilter) return false;
-      if (categoryFilter != null && t.categoryId != categoryFilter) return false;
+      if (categoryFilter != null && !categoryMatchesFilter(t.categoryId, categoryFilter!, categories)) return false;
       if (accountFilter != null && t.accountId != accountFilter) return false;
       if (recurringFilter != null && t.isRecurring != recurringFilter) return false;
       if (q.isNotEmpty) {
@@ -5726,7 +6235,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   bool _matchesFilters(Transaction t) {
-    if (categoryFilter != null && t.categoryId != categoryFilter) return false;
+    if (categoryFilter != null && !categoryMatchesFilter(t.categoryId, categoryFilter!, categories)) return false;
     if (accountFilter != null && t.accountId != accountFilter) return false;
     if (typeFilter != null && t.type != typeFilter) return false;
     return true;
@@ -6213,14 +6722,14 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   }
 
   Future<void> _showDayTransactions(DateTime date) async {
-    final dayTx = tx
-        .where((t) =>
-            t.date.year == date.year &&
-            t.date.month == date.month &&
-            t.date.day == date.day &&
-            (accountFilter == null || t.accountId == accountFilter))
+    final dayEntries = occurrencesWithRecurringProjections(tx, horizonDays: 400)
+        .where((e) =>
+            e.date.year == date.year &&
+            e.date.month == date.month &&
+            e.date.day == date.day &&
+            (accountFilter == null || e.t.accountId == accountFilter))
         .toList();
-    if (dayTx.isEmpty) return;
+    if (dayEntries.isEmpty) return;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -6237,28 +6746,38 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               Expanded(
                 child: ListView.builder(
                   controller: scrollController,
-                  itemCount: dayTx.length,
+                  itemCount: dayEntries.length,
                   itemBuilder: (context, i) {
-                    final t = dayTx[i];
-                    return Card(
-                      child: ListTile(
-                        title: Text(categoryName(t.categoryId)),
-                        subtitle: t.note.isNotEmpty ? Text(t.note, maxLines: 1, overflow: TextOverflow.ellipsis) : null,
-                        trailing: Text(
-                          ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                    final e = dayEntries[i];
+                    final t = e.t;
+                    return Opacity(
+                      opacity: e.isReal ? 1.0 : 0.6,
+                      child: Card(
+                        child: ListTile(
+                          title: Text(categoryName(t.categoryId)),
+                          subtitle: Text(
+                            e.isReal
+                                ? (t.note.isNotEmpty ? t.note : '')
+                                : 'سررسیدنشده${t.isRecurring ? ' • تکرارشونده' : ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
+                          trailing: Text(
+                            ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                            ),
+                          ),
+                          onTap: () async {
+                            Navigator.pop(ctx);
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+                            );
+                            await _load();
+                          },
                         ),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
-                          );
-                          await _load();
-                        },
                       ),
                     );
                   },
@@ -6440,6 +6959,8 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                   final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
                   final inc = (dayIncome[day] ?? 0) + (dayIncomeProjected[day] ?? 0);
                   final exp = (dayExpense[day] ?? 0) + (dayExpenseProjected[day] ?? 0);
+                  final todayBg = Theme.of(context).colorScheme.primaryContainer;
+                  final todayFg = Theme.of(context).colorScheme.onPrimaryContainer;
                   return InkWell(
                     borderRadius: BorderRadius.circular(6),
                     onTap: () => _showDayTransactions(date),
@@ -6447,8 +6968,8 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                     margin: const EdgeInsets.all(2),
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     decoration: BoxDecoration(
-                      color: isToday ? Colors.indigo.shade50 : null,
-                      border: Border.all(color: isToday ? Colors.indigo.shade200 : Colors.grey.shade200),
+                      color: isToday ? todayBg : null,
+                      border: Border.all(color: isToday ? todayFg.withValues(alpha: 0.4) : Colors.grey.shade200),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Column(
@@ -6459,7 +6980,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: future ? Colors.grey.shade400 : null,
+                            color: isToday ? todayFg : (future ? Colors.grey.shade400 : null),
                           ),
                         ),
                         if (exp > 0)
