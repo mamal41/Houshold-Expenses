@@ -2147,6 +2147,7 @@ class AppDrawer extends StatelessWidget {
             item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
             item(17, Icons.trending_up, 'روند ارزش خالص دارایی', () => const NetWorthScreen()),
             item(18, Icons.pie_chart_outline, 'بودجه‌بندی صفر-پایه', () => const ZeroBasedBudgetScreen()),
+            item(19, Icons.upload_file_outlined, 'درون‌ریزی صورتحساب بانکی', () => const CsvImportScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
@@ -5954,6 +5955,353 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 );
               },
             ),
+    );
+  }
+}
+
+// ============================== CSV / bank statement import ==============================
+
+List<List<String>> _parseCsv(String content, String delimiter) {
+  final lines = content.split(RegExp(r'\r\n|\r|\n')).where((l) => l.trim().isNotEmpty).toList();
+  return lines.map((line) => _parseCsvLine(line, delimiter)).toList();
+}
+
+List<String> _parseCsvLine(String line, String delimiter) {
+  final result = <String>[];
+  final buffer = StringBuffer();
+  var inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (ch == '"') {
+      if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+        buffer.write('"');
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch == delimiter && !inQuotes) {
+      result.add(buffer.toString().trim());
+      buffer.clear();
+    } else {
+      buffer.write(ch);
+    }
+  }
+  result.add(buffer.toString().trim());
+  return result;
+}
+
+String _detectDelimiter(String firstLine) {
+  final commaCount = ','.allMatches(firstLine).length;
+  final semiCount = ';'.allMatches(firstLine).length;
+  final tabCount = '\t'.allMatches(firstLine).length;
+  if (tabCount > commaCount && tabCount > semiCount) return '\t';
+  return semiCount > commaCount ? ';' : ',';
+}
+
+const _csvDateFormats = ['dd.MM.yyyy', 'yyyy-MM-dd', 'dd/MM/yyyy', 'MM/dd/yyyy', 'dd-MM-yyyy'];
+
+class CsvImportScreen extends StatefulWidget {
+  const CsvImportScreen({super.key});
+  @override
+  State<CsvImportScreen> createState() => _CsvImportScreenState();
+}
+
+class _CsvImportScreenState extends State<CsvImportScreen> {
+  bool loading = true;
+  List<Account> accounts = [];
+  List<Category> categories = [];
+  List<Transaction> existingTx = [];
+
+  List<List<String>>? rows; // includes header row at index 0
+  String delimiter = ',';
+  int? dateCol, amountCol, debitCol, creditCol, descCol;
+  bool useSeparateDebitCredit = false;
+  String dateFormat = 'dd.MM.yyyy';
+  Account? targetAccount;
+  Category? defaultExpenseCategory;
+  Category? defaultIncomeCategory;
+
+  List<({DateTime date, double amount, String desc})>? preview;
+  bool importing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    accounts = await Store.loadAccounts();
+    categories = await Store.loadCategories();
+    existingTx = await Store.loadTransactions();
+    if (accounts.isNotEmpty) targetAccount = accounts.first;
+    setState(() => loading = false);
+  }
+
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
+    if (result == null || result.files.single.path == null) return;
+    final content = await File(result.files.single.path!).readAsString();
+    final detectedDelimiter = _detectDelimiter(content.split('\n').first);
+    final parsed = _parseCsv(content, detectedDelimiter);
+    if (parsed.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فایل خالی یا نامعتبر است.')));
+      return;
+    }
+    setState(() {
+      rows = parsed;
+      delimiter = detectedDelimiter;
+      preview = null;
+      dateCol = null;
+      amountCol = null;
+      debitCol = null;
+      creditCol = null;
+      descCol = null;
+    });
+  }
+
+  void _buildPreview() {
+    if (rows == null || dateCol == null || descCol == null) return;
+    if (!useSeparateDebitCredit && amountCol == null) return;
+    if (useSeparateDebitCredit && (debitCol == null || creditCol == null)) return;
+    final format = DateFormat(dateFormat);
+    final result = <({DateTime date, double amount, String desc})>[];
+    for (var i = 1; i < rows!.length; i++) {
+      final row = rows![i];
+      if (row.length <= dateCol!) continue;
+      DateTime? date;
+      try {
+        date = format.parseStrict(row[dateCol!].trim());
+      } catch (_) {
+        continue;
+      }
+      double? amount;
+      if (useSeparateDebitCredit) {
+        final debitStr = debitCol! < row.length ? row[debitCol!].trim() : '';
+        final creditStr = creditCol! < row.length ? row[creditCol!].trim() : '';
+        final debit = double.tryParse(debitStr.replaceAll('.', '').replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.\-]'), ''));
+        final credit = double.tryParse(creditStr.replaceAll('.', '').replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.\-]'), ''));
+        if (credit != null && credit != 0) {
+          amount = credit.abs();
+        } else if (debit != null && debit != 0) {
+          amount = -debit.abs();
+        }
+      } else {
+        final raw = amountCol! < row.length ? row[amountCol!].trim() : '';
+        // Handle European-style "1.234,56" as well as plain "1234.56"
+        var cleaned = raw.replaceAll(RegExp(r'[^\d,.\-]'), '');
+        if (cleaned.contains(',') && cleaned.contains('.')) {
+          cleaned = cleaned.replaceAll('.', '').replaceAll(',', '.');
+        } else if (cleaned.contains(',')) {
+          cleaned = cleaned.replaceAll(',', '.');
+        }
+        amount = double.tryParse(cleaned);
+      }
+      if (amount == null || amount == 0) continue;
+      final desc = descCol! < row.length ? row[descCol!].trim() : '';
+      result.add((date: date, amount: amount, desc: desc));
+    }
+    setState(() => preview = result);
+  }
+
+  bool _isDuplicate(DateTime date, double amount, String accountId) {
+    return existingTx.any((t) =>
+        t.accountId == accountId &&
+        t.date.year == date.year &&
+        t.date.month == date.month &&
+        t.date.day == date.day &&
+        (t.amount - amount.abs()).abs() < 0.01);
+  }
+
+  Future<void> _import() async {
+    if (preview == null || targetAccount == null) return;
+    setState(() => importing = true);
+    var imported = 0, skipped = 0;
+    for (final p in preview!) {
+      if (_isDuplicate(p.date, p.amount, targetAccount!.id)) {
+        skipped++;
+        continue;
+      }
+      final type = p.amount >= 0 ? TxType.income : TxType.expense;
+      final cat = type == TxType.income ? defaultIncomeCategory : defaultExpenseCategory;
+      await Store.upsertTransaction(Transaction(
+        id: 'csv_${DateTime.now().microsecondsSinceEpoch}_$imported',
+        type: type,
+        amount: p.amount.abs(),
+        categoryId: cat?.id ?? (type == TxType.income ? 'i_misc' : 'e_misc'),
+        accountId: targetAccount!.id,
+        date: p.date,
+        note: p.desc,
+      ));
+      imported++;
+    }
+    if (!mounted) return;
+    setState(() => importing = false);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('نتیجه‌ی درون‌ریزی'),
+        content: Text('$imported تراکنش وارد شد.${skipped > 0 ? ' $skipped مورد چون تکراری به نظر می‌رسیدند رد شدند.' : ''}'),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('confirm')))],
+      ),
+    );
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final header = rows?.first ?? [];
+    return Scaffold(
+      appBar: AppBar(title: const Text('درون‌ریزی صورتحساب بانکی')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (rows == null)
+            Column(
+              children: [
+                const Text(
+                  'فایل CSV صادرشده از بانکت رو انتخاب کن. اکثر بانک‌ها امکان دانلود صورتحساب به‌صورت CSV دارن.',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(onPressed: _pickFile, icon: const Icon(Icons.upload_file), label: const Text('انتخاب فایل CSV')),
+              ],
+            )
+          else ...[
+            Text('${rows!.length - 1} ردیف پیدا شد. ستون‌های مربوطه رو مشخص کن:', style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<int>(
+              initialValue: dateCol,
+              decoration: const InputDecoration(labelText: 'ستون تاریخ', border: OutlineInputBorder(), isDense: true),
+              items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+              onChanged: (v) => setState(() {
+                dateCol = v;
+                preview = null;
+              }),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: dateFormat,
+              decoration: const InputDecoration(labelText: 'فرمت تاریخ', border: OutlineInputBorder(), isDense: true),
+              items: _csvDateFormats.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+              onChanged: (v) => setState(() {
+                dateFormat = v ?? dateFormat;
+                preview = null;
+              }),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<int>(
+              initialValue: descCol,
+              decoration: const InputDecoration(labelText: 'ستون توضیحات', border: OutlineInputBorder(), isDense: true),
+              items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+              onChanged: (v) => setState(() {
+                descCol = v;
+                preview = null;
+              }),
+            ),
+            const SizedBox(height: 10),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('بدهکار/بستانکار در دو ستون جدا هستند', style: TextStyle(fontSize: 13)),
+              value: useSeparateDebitCredit,
+              onChanged: (v) => setState(() {
+                useSeparateDebitCredit = v;
+                preview = null;
+              }),
+            ),
+            if (!useSeparateDebitCredit)
+              DropdownButtonFormField<int>(
+                initialValue: amountCol,
+                decoration: const InputDecoration(labelText: 'ستون مبلغ (منفی=هزینه، مثبت=درآمد)', border: OutlineInputBorder(), isDense: true),
+                items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+                onChanged: (v) => setState(() {
+                  amountCol = v;
+                  preview = null;
+                }),
+              )
+            else ...[
+              DropdownButtonFormField<int>(
+                initialValue: debitCol,
+                decoration: const InputDecoration(labelText: 'ستون بدهکار (خروج پول)', border: OutlineInputBorder(), isDense: true),
+                items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+                onChanged: (v) => setState(() {
+                  debitCol = v;
+                  preview = null;
+                }),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<int>(
+                initialValue: creditCol,
+                decoration: const InputDecoration(labelText: 'ستون بستانکار (ورود پول)', border: OutlineInputBorder(), isDense: true),
+                items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+                onChanged: (v) => setState(() {
+                  creditCol = v;
+                  preview = null;
+                }),
+              ),
+            ],
+            const SizedBox(height: 16),
+            OutlinedButton(onPressed: _buildPreview, child: const Text('پیش‌نمایش')),
+            if (preview != null) ...[
+              const SizedBox(height: 16),
+              Text('${preview!.length} تراکنش قابل‌درون‌ریزی پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<Account>(
+                initialValue: targetAccount,
+                decoration: const InputDecoration(labelText: 'حساب مقصد', border: OutlineInputBorder(), isDense: true),
+                items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+                onChanged: (v) => setState(() => targetAccount = v),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<Category>(
+                initialValue: defaultExpenseCategory,
+                decoration: const InputDecoration(labelText: 'دسته‌بندی پیش‌فرض هزینه‌ها', border: OutlineInputBorder(), isDense: true),
+                items: categoriesInHierarchicalOrder(categories, TxType.expense)
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c.parentId == null ? c.name : '　　${c.name}')))
+                    .toList(),
+                onChanged: (v) => setState(() => defaultExpenseCategory = v),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<Category>(
+                initialValue: defaultIncomeCategory,
+                decoration: const InputDecoration(labelText: 'دسته‌بندی پیش‌فرض درآمدها', border: OutlineInputBorder(), isDense: true),
+                items: categoriesInHierarchicalOrder(categories, TxType.income)
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c.parentId == null ? c.name : '　　${c.name}')))
+                    .toList(),
+                onChanged: (v) => setState(() => defaultIncomeCategory = v),
+              ),
+              const SizedBox(height: 8),
+              const Text('می‌تونی بعداً دسته‌بندی هرکدوم رو جدا اصلاح کنی.', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const SizedBox(height: 12),
+              ...preview!.take(5).map((p) => Card(
+                    child: ListTile(
+                      dense: true,
+                      title: Text(p.desc.isEmpty ? '(بدون توضیح)' : p.desc, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(formatDate(p.date)),
+                      trailing: Text(
+                        ltr(persianDigits(p.amount.toStringAsFixed(2))),
+                        style: TextStyle(color: p.amount >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  )),
+              if (preview!.length > 5)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('و ${preview!.length - 5} مورد دیگر...', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: (targetAccount == null || importing) ? null : _import,
+                icon: importing
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.download_done),
+                label: Text(importing ? 'در حال درون‌ریزی...' : 'درون‌ریزی ${preview!.length} تراکنش'),
+              ),
+            ],
+          ],
+        ],
+      ),
     );
   }
 }
