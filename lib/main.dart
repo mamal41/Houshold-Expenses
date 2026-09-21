@@ -1311,7 +1311,7 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
     await NotificationService.instance.showNow(
       (cat.id.hashCode & 0xffff) ^ 0x4000, // distinct id range from budget-goal notifications
       'هزینه‌ی «$name» این ماه غیرعادی بالاست',
-      'تا الان ${currentSpend.toStringAsFixed(0)} خرج شده، حدود $pct% بیشتر از میانگین ${lookbackMonths} ماه قبل (${avg.toStringAsFixed(0)}).',
+      'تا الان ${currentSpend.toStringAsFixed(0)} خرج شده، حدود $pct% بیشتر از میانگین $lookbackMonths ماه قبل (${avg.toStringAsFixed(0)}).',
     );
   }
   if (changed) await Store.saveAnomalyNotifyState(notifyState);
