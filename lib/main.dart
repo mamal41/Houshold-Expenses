@@ -1536,6 +1536,35 @@ class Store {
     await sp.setString(_calendarSystemKey, system.name);
   }
 
+  static const _baseCurrencyKey = 'net_worth_base_currency';
+  static const _exchangeRatesKey = 'net_worth_exchange_rates';
+
+  static Future<String?> loadBaseCurrency() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_baseCurrencyKey);
+  }
+
+  static Future<void> saveBaseCurrency(String currency) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_baseCurrencyKey, currency);
+  }
+
+  /// Manual exchange rates: units of the base currency per 1 unit of the
+  /// map's key currency (e.g. {'USD': 0.93} if base is EUR). Used only for
+  /// the net-worth trend chart, which otherwise couldn't combine
+  /// multi-currency accounts into one line.
+  static Future<Map<String, double>> loadExchangeRates() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_exchangeRatesKey);
+    if (raw == null) return {};
+    return (jsonDecode(raw) as Map<String, dynamic>).map((k, v) => MapEntry(k, (v as num).toDouble()));
+  }
+
+  static Future<void> saveExchangeRates(Map<String, double> rates) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_exchangeRatesKey, jsonEncode(rates));
+  }
+
   static Future<List<Transaction>> loadTransactions() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_txKey) ?? [];
@@ -2116,6 +2145,7 @@ class AppDrawer extends StatelessWidget {
             item(14, Icons.flag_outlined, 'اهداف هزینه', () => const BudgetGoalsScreen()),
             item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
             item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
+            item(17, Icons.trending_up, 'روند ارزش خالص دارایی', () => const NetWorthScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
@@ -3090,6 +3120,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return map;
   }
 
+  /// "Safe to spend" until the end of this month, per currency: current
+  /// balance minus every not-yet-due expense (real future-dated
+  /// transactions, plus projected recurring occurrences) still expected
+  /// before the month ends - a PocketGuard/Simplifi-style guardrail so a
+  /// healthy-looking balance doesn't hide bills that are already spoken for.
+  Map<String, double> get safeToSpendByCurrency {
+    final balances = Map<String, double>.from(totalBalanceByCurrency);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final endOfMonth = DateTime(now.year, now.month + 1, 0);
+    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 40)) {
+      if (e.t.type != TxType.expense) continue;
+      if (!e.date.isAfter(today) || e.date.isAfter(endOfMonth)) continue;
+      final cur = currencyOf(e.t.accountId);
+      balances[cur] = (balances[cur] ?? 0) - e.t.amount;
+    }
+    return balances;
+  }
+
   Map<String, Map<String, double>> get periodStatsByCurrency {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -3253,6 +3302,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final balances = totalBalanceByCurrency;
+    final safeToSpend = safeToSpendByCurrency;
     final period = periodStatsByCurrency;
     const periodLabel = 'این ماه';
     return PopScope(
@@ -3315,6 +3365,37 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         )),
+                    if (safeToSpend.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.shield_outlined, size: 14, color: Colors.grey.shade600),
+                                const SizedBox(width: 6),
+                                Text('امن برای خرج تا آخر ماه', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            ...safeToSpend.entries.map((e) => Text(
+                                  formatMoney(e.value, e.key),
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: e.value >= 0 ? Colors.indigo.shade700 : Colors.red.shade700,
+                                  ),
+                                )),
+                          ],
+                        ),
+                      ),
+                    ],
                     const Divider(height: 24),
                     Text(periodLabel, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     const SizedBox(height: 6),
@@ -4963,6 +5044,232 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
           Text(
             'این صفحه اطلاعات آموزشی و کلی ارائه می‌دهد و جایگزین مشاوره‌ی مالی رسمی نیست.',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================== Net worth trend ==============================
+
+class NetWorthScreen extends StatefulWidget {
+  const NetWorthScreen({super.key});
+  @override
+  State<NetWorthScreen> createState() => _NetWorthScreenState();
+}
+
+class _NetWorthScreenState extends State<NetWorthScreen> {
+  bool loading = true;
+  List<Account> accounts = [];
+  List<Transaction> tx = [];
+  String baseCurrency = 'EUR';
+  Map<String, double> rates = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    accounts = await Store.loadAccounts();
+    tx = await Store.loadTransactions();
+    final storedBase = await Store.loadBaseCurrency();
+    baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'EUR');
+    rates = await Store.loadExchangeRates();
+    setState(() => loading = false);
+  }
+
+  double _rateFor(String currency) => currency == baseCurrency ? 1.0 : (rates[currency] ?? 1.0);
+
+  double _netWorthAt(DateTime endOfMonth) {
+    var total = 0.0;
+    for (final a in accounts) {
+      var balance = a.initialBalance;
+      for (final t in tx) {
+        if (t.accountId != a.id) continue;
+        if (t.date.isAfter(endOfMonth)) continue;
+        balance += t.type == TxType.income ? t.amount : -t.amount;
+      }
+      total += balance * _rateFor(a.currency);
+    }
+    return total;
+  }
+
+  Set<String> get _nonBaseCurrencies => accounts.map((a) => a.currency).where((c) => c != baseCurrency).toSet();
+
+  Future<void> _editSettings() async {
+    String localBase = baseCurrency;
+    final ctrls = <String, TextEditingController>{
+      for (final c in accounts.map((a) => a.currency).toSet())
+        if (c != localBase) c: TextEditingController(text: rates[c]?.toString() ?? '1'),
+    };
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        // rebuild controllers if base currency changes inside the dialog
+        for (final c in accounts.map((a) => a.currency).toSet()) {
+          if (c != localBase && !ctrls.containsKey(c)) {
+            ctrls[c] = TextEditingController(text: rates[c]?.toString() ?? '1');
+          }
+        }
+        return AlertDialog(
+          title: const Text('ارز مرجع و نرخ تبدیل'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: localBase,
+                  decoration: const InputDecoration(labelText: 'ارز مرجع'),
+                  items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                  onChanged: (v) => setLocal(() => localBase = v ?? localBase),
+                ),
+                const SizedBox(height: 12),
+                if (ctrls.isEmpty)
+                  const Text('حساب دیگری با ارز متفاوت نداری.', style: TextStyle(fontSize: 12, color: Colors.grey))
+                else ...[
+                  const Text('نرخ تبدیل هر واحد به ارز مرجع:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 8),
+                  ...ctrls.entries
+                      .where((e) => e.key != localBase)
+                      .map((e) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: TextField(
+                              controller: e.value,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(labelText: '۱ ${e.key} = ? $localBase', isDense: true),
+                            ),
+                          )),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('save'))),
+          ],
+        );
+      }),
+    );
+    if (result != true) return;
+    final newRates = <String, double>{};
+    for (final entry in ctrls.entries) {
+      if (entry.key == localBase) continue;
+      final v = double.tryParse(entry.value.text.replaceAll(',', '.'));
+      if (v != null && v > 0) newRates[entry.key] = v;
+    }
+    baseCurrency = localBase;
+    rates = newRates;
+    await Store.saveBaseCurrency(baseCurrency);
+    await Store.saveExchangeRates(rates);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final now = DateTime.now();
+    final months = <({DateTime month, double value})>[];
+    for (var i = 11; i >= 0; i--) {
+      var y = now.year;
+      var m = now.month - i;
+      while (m < 1) {
+        m += 12;
+        y--;
+      }
+      final endOfMonth = DateTime(y, m + 1, 0);
+      months.add((month: DateTime(y, m), value: _netWorthAt(endOfMonth)));
+    }
+    final maxVal = months.fold(0.0, (mx, e) => e.value.abs() > mx ? e.value.abs() : mx);
+    final current = months.isEmpty ? 0.0 : months.last.value;
+    final missingRates = _nonBaseCurrencies.where((c) => !rates.containsKey(c)).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('روند ارزش خالص دارایی'),
+        actions: [IconButton(icon: const Icon(Icons.settings_outlined), onPressed: _editSettings)],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('ارزش خالص فعلی (تقریبی، بر اساس $baseCurrency)', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  const SizedBox(height: 4),
+                  Text(
+                    ltr(formatMoney(current, baseCurrency)),
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: current >= 0 ? Colors.green.shade700 : Colors.red.shade700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (missingRates.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: InkWell(
+                onTap: _editSettings,
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, size: 14, color: Colors.grey),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'برای ${missingRates.join('، ')} نرخ تبدیل تنظیم نشده (فعلاً ۱:۱ حساب شده). برای تنظیم بزن.',
+                        style: const TextStyle(fontSize: 11, color: Colors.grey, decoration: TextDecoration.underline),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: SizedBox(
+                height: 220,
+                child: maxVal <= 0
+                    ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          for (final m in months)
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    m.value.abs() >= 1 ? ltr(persianDigits(m.value.toStringAsFixed(0))) : '',
+                                    style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Container(
+                                    height: maxVal > 0 ? 140 * (m.value.abs() / maxVal).clamp(0.02, 1.0) : 2,
+                                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                                    decoration: BoxDecoration(
+                                      color: m.value >= 0 ? Colors.indigo.shade300 : Colors.red.shade300,
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(_gregorianMonthNames[m.month.month - 1].substring(0, 3), style: const TextStyle(fontSize: 8)),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+              ),
+            ),
           ),
         ],
       ),
