@@ -2146,6 +2146,7 @@ class AppDrawer extends StatelessWidget {
             item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
             item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
             item(17, Icons.trending_up, 'روند ارزش خالص دارایی', () => const NetWorthScreen()),
+            item(18, Icons.pie_chart_outline, 'بودجه‌بندی صفر-پایه', () => const ZeroBasedBudgetScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
@@ -5269,6 +5270,230 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                         ],
                       ),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================== Zero-based (YNAB-style) monthly budget ==============================
+
+class ZeroBasedBudgetScreen extends StatefulWidget {
+  const ZeroBasedBudgetScreen({super.key});
+  @override
+  State<ZeroBasedBudgetScreen> createState() => _ZeroBasedBudgetScreenState();
+}
+
+class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
+  bool loading = true;
+  List<Category> categories = [];
+  List<Transaction> tx = [];
+  List<BudgetGoal> goals = [];
+  List<Account> accounts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    categories = await Store.loadCategories();
+    tx = await Store.loadTransactions();
+    goals = await Store.loadBudgetGoals();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  String currencyOf(String accountId) {
+    final m = accounts.where((a) => a.id == accountId).toList();
+    return m.isEmpty ? 'EUR' : m.first.currency;
+  }
+
+  String get primaryCurrency {
+    if (accounts.isEmpty) return 'EUR';
+    final counts = <String, int>{};
+    for (final a in accounts) {
+      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
+    }
+    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+  }
+
+  /// This month's actual income so far; if nothing has come in yet this
+  /// month, falls back to the average of the last 3 months so the screen
+  /// still has something meaningful to allocate against early in the month.
+  double get _monthIncome {
+    final now = DateTime.now();
+    var income = 0.0;
+    for (final t in tx) {
+      if (t.type != TxType.income || t.categoryId == '_transfer_in_') continue;
+      if (currencyOf(t.accountId) != primaryCurrency) continue;
+      if (t.date.year == now.year && t.date.month == now.month) income += t.amount;
+    }
+    if (income > 0) return income;
+    var sum = 0.0;
+    for (var i = 1; i <= 3; i++) {
+      var y = now.year, m = now.month - i;
+      while (m < 1) {
+        m += 12;
+        y--;
+      }
+      for (final t in tx) {
+        if (t.type != TxType.income || t.categoryId == '_transfer_in_') continue;
+        if (currencyOf(t.accountId) != primaryCurrency) continue;
+        if (t.date.year == y && t.date.month == m) sum += t.amount;
+      }
+    }
+    return sum / 3;
+  }
+
+  double get _totalAllocated => goals.fold(0.0, (s, g) => s + g.monthlyAmount);
+
+  double _allocationFor(String categoryId) {
+    final m = goals.where((g) => g.categoryId == categoryId).toList();
+    return m.isEmpty ? 0 : m.first.monthlyAmount;
+  }
+
+  double _spendFor(String categoryId) {
+    final now = DateTime.now();
+    var spend = 0.0;
+    for (final t in tx) {
+      if (t.type != TxType.expense || t.categoryId == '_transfer_out_') continue;
+      if (t.date.year != now.year || t.date.month != now.month) continue;
+      var cat = categories.where((c) => c.id == t.categoryId).toList();
+      var current = cat.isEmpty ? null : cat.first;
+      while (current?.parentId != null) {
+        final pm = categories.where((c) => c.id == current!.parentId).toList();
+        if (pm.isEmpty) break;
+        current = pm.first;
+      }
+      if (current?.id == categoryId) spend += t.amount;
+    }
+    return spend;
+  }
+
+  Future<void> _editAllocation(Category c) async {
+    final ctrl = TextEditingController(text: _allocationFor(c.id) > 0 ? _allocationFor(c.id).toStringAsFixed(0) : '');
+    final result = await showDialog<double?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('تخصیص ${c.name}'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'مبلغ تخصیص‌یافته در ماه'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 0.0), child: const Text('صفر کن')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.'))), child: Text(tr('save'))),
+        ],
+      ),
+    );
+    if (result == null) return;
+    final updated = goals.where((g) => g.categoryId != c.id).toList();
+    if (result > 0) updated.add(BudgetGoal(categoryId: c.id, monthlyAmount: result));
+    await Store.saveBudgetGoals(updated);
+    setState(() => goals = updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null).toList()
+      ..sort((a, b) => persianCompare(a.name, b.name));
+    final income = _monthIncome;
+    final allocated = _totalAllocated;
+    final unallocated = income - allocated;
+    final unallocatedColor = unallocated.abs() < 0.01 ? Colors.green : (unallocated > 0 ? Colors.amber.shade800 : Colors.red);
+    return Scaffold(
+      appBar: AppBar(title: const Text('بودجه‌بندی صفر-پایه')),
+      body: Column(
+        children: [
+          Card(
+            margin: const EdgeInsets.all(16),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('درآمد این ماه'),
+                      Text(ltr(formatMoney(income, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('تخصیص‌یافته'),
+                      Text(ltr(formatMoney(allocated, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        unallocated.abs() < 0.01 ? 'همه‌چیز تخصیص یافته' : (unallocated > 0 ? 'هنوز تخصیص‌نیافته' : 'بیش از درآمد تخصیص یافته'),
+                        style: TextStyle(fontWeight: FontWeight.bold, color: unallocatedColor),
+                      ),
+                      Text(
+                        ltr(formatMoney(unallocated, primaryCurrency)),
+                        style: TextStyle(fontWeight: FontWeight.bold, color: unallocatedColor, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              itemCount: topCategories.length,
+              itemBuilder: (context, i) {
+                final c = topCategories[i];
+                final alloc = _allocationFor(c.id);
+                final spend = _spendFor(c.id);
+                final ratio = alloc > 0 ? (spend / alloc).clamp(0.0, 1.0) : 0.0;
+                return Card(
+                  child: ListTile(
+                    leading: Icon(iconForCategory(c, categories)),
+                    title: Text(c.name),
+                    subtitle: alloc > 0
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: ratio,
+                                    minHeight: 6,
+                                    backgroundColor: Colors.grey.withValues(alpha: 0.2),
+                                    color: ratio >= 1.0 ? Colors.red : Colors.indigo.shade300,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  '${spend.toStringAsFixed(0)} از ${alloc.toStringAsFixed(0)} خرج شده',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          )
+                        : const Text('تخصیصی داده نشده', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    trailing: const Icon(Icons.edit_outlined, size: 18),
+                    onTap: () => _editAllocation(c),
+                  ),
+                );
+              },
             ),
           ),
         ],
