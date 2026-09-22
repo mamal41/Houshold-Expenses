@@ -1196,9 +1196,20 @@ Future<void> checkBudgetGoals() async {
   final notifyState = await Store.loadBudgetNotifyState();
   var changed = false;
 
-  String categoryName(String id) {
-    final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? '' : m.first.name;
+  // Build lookup structures once (instead of scanning the full category
+  // list per transaction, which made this noticeably slow with many
+  // transactions/categories) - a map for O(1) lookup, and a cache of each
+  // category's resolved top-level ancestor id.
+  final categoryById = {for (final c in categories) c.id: c};
+  final topCache = <String, String?>{};
+  String? topIdOf(String id) {
+    return topCache.putIfAbsent(id, () {
+      var cat = categoryById[id];
+      while (cat?.parentId != null) {
+        cat = categoryById[cat!.parentId];
+      }
+      return cat?.id;
+    });
   }
 
   for (final goal in goals) {
@@ -1207,14 +1218,7 @@ Future<void> checkBudgetGoals() async {
     for (final t in tx) {
       if (t.type != TxType.expense) continue;
       if (t.date.year != now.year || t.date.month != now.month) continue;
-      final match = categories.where((c) => c.id == t.categoryId).toList();
-      var cat = match.isEmpty ? null : match.first;
-      while (cat?.parentId != null) {
-        final pm = categories.where((c) => c.id == cat!.parentId).toList();
-        if (pm.isEmpty) break;
-        cat = pm.first;
-      }
-      if (cat?.id == goal.categoryId) spend += t.amount;
+      if (topIdOf(t.categoryId) == goal.categoryId) spend += t.amount;
     }
     final ratio = spend / goal.monthlyAmount;
     String? level;
@@ -1232,7 +1236,7 @@ Future<void> checkBudgetGoals() async {
     if (already != null && severity[already]! >= severity[level]!) continue;
     notifyState[key] = level;
     changed = true;
-    final name = categoryName(goal.categoryId);
+    final name = categoryById[goal.categoryId]?.name ?? '';
     final title = switch (level) {
       'exceeded' => 'هدف هزینه‌ی «$name» رد شد',
       'met' => 'هدف هزینه‌ی «$name» به پایان رسید',
@@ -1257,47 +1261,49 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
   final notifyState = await Store.loadAnomalyNotifyState();
   var changed = false;
 
-  String categoryName(String id) {
-    final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? '' : m.first.name;
+  final categoryById = {for (final c in categories) c.id: c};
+  final topCache = <String, String?>{};
+  String? topIdOf(String id) {
+    return topCache.putIfAbsent(id, () {
+      var cat = categoryById[id];
+      while (cat?.parentId != null) {
+        cat = categoryById[cat!.parentId];
+      }
+      return cat?.id;
+    });
   }
 
-  Category? topCategoryOf(String id) {
-    final match = categories.where((c) => c.id == id).toList();
-    var cat = match.isEmpty ? null : match.first;
-    while (cat?.parentId != null) {
-      final pm = categories.where((c) => c.id == cat!.parentId).toList();
-      if (pm.isEmpty) break;
-      cat = pm.first;
+  // Bucket every relevant transaction by its top-level category ONCE,
+  // rather than re-scanning the whole transaction list per category.
+  final currentSpendByTop = <String, double>{};
+  final pastSpendByTop = <String, Map<int, double>>{};
+  for (final t in tx) {
+    if (t.type != TxType.expense || t.categoryId == '_transfer_out_') continue;
+    final topId = topIdOf(t.categoryId);
+    if (topId == null) continue;
+    if (t.date.year == now.year && t.date.month == now.month) {
+      currentSpendByTop[topId] = (currentSpendByTop[topId] ?? 0) + t.amount;
+      continue;
     }
-    return cat;
+    for (var i = 1; i <= lookbackMonths; i++) {
+      var y = now.year;
+      var m = now.month - i;
+      while (m < 1) {
+        m += 12;
+        y--;
+      }
+      if (t.date.year == y && t.date.month == m) {
+        final byMonth = pastSpendByTop.putIfAbsent(topId, () => {});
+        byMonth[i] = (byMonth[i] ?? 0) + t.amount;
+      }
+    }
   }
 
   final topExpenseCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null);
   for (final cat in topExpenseCategories) {
-    double currentSpend = 0;
-    final pastMonthTotals = <int, double>{}; // month-offset (1..lookbackMonths) -> total
-    for (final t in tx) {
-      if (t.type != TxType.expense) continue;
-      if (t.categoryId == '_transfer_out_') continue;
-      if (topCategoryOf(t.categoryId)?.id != cat.id) continue;
-      if (t.date.year == now.year && t.date.month == now.month) {
-        currentSpend += t.amount;
-        continue;
-      }
-      for (var i = 1; i <= lookbackMonths; i++) {
-        var y = now.year;
-        var m = now.month - i;
-        while (m < 1) {
-          m += 12;
-          y--;
-        }
-        if (t.date.year == y && t.date.month == m) {
-          pastMonthTotals[i] = (pastMonthTotals[i] ?? 0) + t.amount;
-        }
-      }
-    }
-    if (pastMonthTotals.isEmpty) continue; // no history yet to compare against
+    final currentSpend = currentSpendByTop[cat.id] ?? 0;
+    final pastMonthTotals = pastSpendByTop[cat.id];
+    if (pastMonthTotals == null || pastMonthTotals.isEmpty) continue; // no history yet to compare against
     final avg = pastMonthTotals.values.fold(0.0, (s, v) => s + v) / lookbackMonths;
     // Ignore tiny categories (noise) and require a meaningfully higher pace.
     if (avg < 10 || currentSpend < 20) continue;
@@ -1306,7 +1312,7 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
     if (notifyState.contains(key)) continue;
     notifyState.add(key);
     changed = true;
-    final name = categoryName(cat.id);
+    final name = cat.name;
     final pct = ((currentSpend / avg - 1) * 100).round();
     await NotificationService.instance.showNow(
       (cat.id.hashCode & 0xffff) ^ 0x4000, // distinct id range from budget-goal notifications
