@@ -2930,10 +2930,11 @@ const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the at
     '"keepReceipt" is true only if "keepReceiptItems" is non-empty (those categories commonly need the '
     'receipt for warranty or returns) and false otherwise (e.g. a purely grocery/food receipt, or a '
     'receipt whose only physical items are tools or toys). "keepReceiptReason" is one short sentence in '
-    "the receipt's language: when true, explicitly name the item(s) from \"keepReceiptItems\" as the "
-    'reason (e.g. "به‌خاطر [item names], بهتره فیش رو نگه داری"); when false, briefly say why not (e.g. '
-    'all items are food/consumables). Keep merchant name in the receipt\'s own language/script. Numbers '
-    'must be plain (no currency symbols). If a field is unreadable, use null.';
+    'Persian (Farsi), regardless of what language the receipt itself is in: when true, explicitly name the '
+    'item(s) from "keepReceiptItems" as the reason (e.g. "به‌خاطر [item names], بهتره فیش رو نگه داری"); '
+    'when false, briefly say why not in Persian (e.g. all items are food/consumables). Keep merchant name '
+    'in the receipt\'s own language/script. Numbers must be plain (no currency symbols). If a field is '
+    'unreadable, use null.';
 
 const _payslipPrompt = 'You are an expert German payslip (Lohnabrechnung) reading assistant. Read the '
     'attached payslip image and extract structured data. Respond ONLY with compact JSON, no markdown, '
@@ -3330,7 +3331,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ItemSearchScreen())),
           ),
           Padding(
-            padding: const EdgeInsets.only(left: 8),
+            padding: const EdgeInsets.only(left: 16),
             child: Badge(
               label: Text('$draftCount'),
               isLabelVisible: draftCount > 0,
@@ -3395,14 +3396,27 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                             const SizedBox(height: 4),
-                            ...safeToSpend.entries.map((e) => Text(
-                                  formatMoney(e.value, e.key),
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: e.value >= 0 ? Colors.indigo.shade700 : Colors.red.shade700,
-                                  ),
-                                )),
+                            ...safeToSpend.entries.map((e) => e.value >= 0
+                                ? Text(
+                                    formatMoney(e.value, e.key),
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.indigo),
+                                  )
+                                : Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(Icons.warning_amber_rounded, size: 15, color: Colors.red.shade700),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            'قبوض پیش‌رو ${ltr(formatMoney(-e.value, e.key))} بیشتر از موجودی فعلیته',
+                                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.red.shade700),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )),
                           ],
                         ),
                       ),
@@ -4385,6 +4399,26 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     }
   }
 
+  /// How far ahead recurring-occurrence projections need to reach to cover
+  /// the 6-month chart, which can be paged forward/back with
+  /// [chartMonthOffset] - without this, recurring transactions silently
+  /// stopped showing up once the chart was paged past a fixed horizon.
+  int _neededHorizonDays(DateTime today) {
+    var y = today.year;
+    var m = today.month + 5 + chartMonthOffset;
+    while (m > 12) {
+      m -= 12;
+      y++;
+    }
+    while (m < 1) {
+      m += 12;
+      y--;
+    }
+    final lastChartMonthEnd = DateTime(y, m + 1, 0);
+    final needed = lastChartMonthEnd.difference(today).inDays + 5;
+    return needed > 220 ? needed : 220;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -4393,7 +4427,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     final selectedRange = _rangeFor(range, today);
     final currency = primaryCurrency;
 
-    final allOccurrences = occurrencesWithRecurringProjections(tx, horizonDays: 220);
+    final allOccurrences = occurrencesWithRecurringProjections(tx, horizonDays: _neededHorizonDays(today));
     final entries = allOccurrences
         .where((e) =>
             !e.date.isAfter(selectedRange.end) &&
@@ -4621,6 +4655,18 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                               color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
                             ),
                           ),
+                          onTap: () async {
+                            final result = await Navigator.push<Object>(
+                              context,
+                              MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: e.t, categories: categories, accounts: accounts)),
+                            );
+                            if (result is DeleteTransactionSignal) {
+                              await Store.deleteTransaction(result.id);
+                            } else if (result is Transaction) {
+                              await Store.upsertTransaction(result);
+                            }
+                            await _load();
+                          },
                         ),
                       );
                     },
@@ -8348,6 +8394,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   bool geminiFailed = false;
   String? lastGeminiErrorDetail;
   bool hasGeminiKey = false;
+  bool dateConfirmed = false; // true once read successfully by AI or picked manually
   bool? keepReceipt;
   String? keepReceiptReason;
   late List<ReceiptItemEntry> items;
@@ -8388,7 +8435,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         if (result['total'] != null) totalCtrl.text = (result['total'] as num).toStringAsFixed(2);
         if (result['date'] != null) {
           final parsed = DateTime.tryParse(result['date']);
-          if (parsed != null) date = parsed;
+          if (parsed != null) {
+            date = parsed;
+            dateConfirmed = true;
+          }
         }
         if (result['items'] is List) {
           items = (result['items'] as List).whereType<Map>().map((e) {
@@ -8412,7 +8462,9 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       lastGeminiErrorDetail = e is GeminiException ? e.rawDetail : e.toString();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
+          content: Text(e is GeminiException
+              ? e.friendlyMessage
+              : 'خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
           duration: const Duration(seconds: 6),
           action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
         ));
@@ -8523,6 +8575,22 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     if (!draft && selectedAccount == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
       return;
+    }
+    if (!dateConfirmed) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تاریخ خوانده نشد'),
+          content: Text(
+            'هوش مصنوعی نتوانست تاریخ را از روی رسید بخواند، پس تاریخ فعلی (${formatDate(date)}) به‌صورت پیش‌فرض تنظیم شده. اگر تاریخ درستی نیست، انصراف بده و از دکمه‌ی تقویم اصلاحش کن.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تاریخ درست است، ثبت شود')),
+          ],
+        ),
+      );
+      if (proceed != true) return;
     }
     final duplicate = existingTx.any((t) =>
         t.type == TxType.expense &&
@@ -8664,7 +8732,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                 initialDate: date,
                 builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
               );
-              if (d != null) setState(() => date = d);
+              if (d != null) setState(() { date = d; dateConfirmed = true; });
             },
           ),
           const SizedBox(height: 12),
@@ -8838,6 +8906,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   bool geminiFailed = false;
   String? lastGeminiErrorDetail;
   bool hasGeminiKey = false;
+  bool dateConfirmed = false; // true once read successfully by AI or picked manually
   List<Transaction> existingTx = [];
 
   @override
@@ -8887,7 +8956,12 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         if (result['abrechnungsmonat'] != null) monatCtrl.text = result['abrechnungsmonat'].toString();
         if (result['date'] != null) {
           final parsed = DateTime.tryParse(result['date'].toString());
-          if (parsed != null) setState(() => date = parsed);
+          if (parsed != null) {
+            setState(() {
+              date = parsed;
+              dateConfirmed = true;
+            });
+          }
         }
       }
     } catch (e) {
@@ -8895,7 +8969,9 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       lastGeminiErrorDetail = e is GeminiException ? e.rawDetail : e.toString();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
+          content: Text(e is GeminiException
+              ? e.friendlyMessage
+              : 'خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
           duration: const Duration(seconds: 6),
           action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
         ));
@@ -8958,6 +9034,22 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     if (!draft && selectedAccount == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
       return;
+    }
+    if (!dateConfirmed) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تاریخ خوانده نشد'),
+          content: Text(
+            'هوش مصنوعی نتوانست تاریخ را از روی فیش بخواند، پس تاریخ فعلی (${formatDate(date)}) به‌صورت پیش‌فرض تنظیم شده. اگر تاریخ درستی نیست، انصراف بده و از دکمه‌ی تقویم اصلاحش کن.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تاریخ درست است، ثبت شود')),
+          ],
+        ),
+      );
+      if (proceed != true) return;
     }
     double? num_(String k) => double.tryParse(numCtrls[k]!.text.trim().replaceAll(',', '.'));
     final details = PayslipDetails(
@@ -9126,7 +9218,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                 initialDate: date,
                 builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
               );
-              if (d != null) setState(() => date = d);
+              if (d != null) setState(() { date = d; dateConfirmed = true; });
             },
           ),
           const SizedBox(height: 12),
