@@ -372,6 +372,50 @@ class SavingsGoal {
       );
 }
 
+class ShoppingListItem {
+  final String id;
+  final String name;
+  final double? quantity;
+  final double? estimatedPrice;
+  final bool checked;
+  const ShoppingListItem({required this.id, required this.name, this.quantity, this.estimatedPrice, this.checked = false});
+
+  ShoppingListItem copyWith({String? name, double? quantity, double? estimatedPrice, bool? checked, bool clearQuantity = false, bool clearPrice = false}) =>
+      ShoppingListItem(
+        id: id,
+        name: name ?? this.name,
+        quantity: clearQuantity ? null : (quantity ?? this.quantity),
+        estimatedPrice: clearPrice ? null : (estimatedPrice ?? this.estimatedPrice),
+        checked: checked ?? this.checked,
+      );
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'quantity': quantity, 'estimatedPrice': estimatedPrice, 'checked': checked};
+  factory ShoppingListItem.fromJson(Map<String, dynamic> j) => ShoppingListItem(
+        id: j['id'],
+        name: j['name'] ?? '',
+        quantity: (j['quantity'] as num?)?.toDouble(),
+        estimatedPrice: (j['estimatedPrice'] as num?)?.toDouble(),
+        checked: j['checked'] ?? false,
+      );
+}
+
+class ShoppingList {
+  final String id;
+  final String name;
+  final List<ShoppingListItem> items;
+  const ShoppingList({required this.id, required this.name, this.items = const []});
+
+  ShoppingList copyWith({String? name, List<ShoppingListItem>? items}) =>
+      ShoppingList(id: id, name: name ?? this.name, items: items ?? this.items);
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'items': items.map((i) => i.toJson()).toList()};
+  factory ShoppingList.fromJson(Map<String, dynamic> j) => ShoppingList(
+        id: j['id'],
+        name: j['name'] ?? '',
+        items: (j['items'] as List? ?? []).map((e) => ShoppingListItem.fromJson(e)).toList(),
+      );
+}
+
 class SavingsContribution {
   final String id;
   final String goalId;
@@ -1356,6 +1400,19 @@ class Store {
     await sp.setStringList(_savingsContribKey, list.map((c) => jsonEncode(c.toJson())).toList());
   }
 
+  static const _shoppingListsKey = 'shopping_lists';
+
+  static Future<List<ShoppingList>> loadShoppingLists() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getStringList(_shoppingListsKey) ?? [];
+    return raw.map((s) => ShoppingList.fromJson(jsonDecode(s))).toList();
+  }
+
+  static Future<void> saveShoppingLists(List<ShoppingList> list) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_shoppingListsKey, list.map((l) => jsonEncode(l.toJson())).toList());
+  }
+
   static Future<List<BudgetGoal>> loadBudgetGoals() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_budgetKey) ?? [];
@@ -2144,28 +2201,33 @@ class AppDrawer extends StatelessWidget {
             ),
             item(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
             const Divider(height: 1),
-            sectionLabel('دسته‌بندی‌ها و حساب‌ها'),
+            sectionLabel('حساب‌ها و دسته‌بندی‌ها'),
             item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
             item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
             item(13, Icons.swap_horiz, 'انتقال بین حساب‌ها', () => const TransferScreen()),
-            item(14, Icons.flag_outlined, 'اهداف هزینه', () => const BudgetGoalsScreen()),
-            item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
-            item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
-            item(17, Icons.trending_up, 'روند ارزش خالص دارایی', () => const NetWorthScreen()),
-            item(18, Icons.pie_chart_outline, 'بودجه‌بندی صفر-پایه', () => const ZeroBasedBudgetScreen()),
-            item(19, Icons.upload_file_outlined, 'درون‌ریزی صورتحساب بانکی', () => const CsvImportScreen()),
             const Divider(height: 1),
             sectionLabel('تراکنش‌ها'),
             item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
+            item(19, Icons.upload_file_outlined, 'درون‌ریزی صورتحساب بانکی', () => const CsvImportScreen()),
+            item(11, Icons.search, 'جستجوی کالا', () => const ItemSearchScreen()),
+            item(20, Icons.shopping_cart_outlined, 'لیست خرید', () => const ShoppingListsScreen()),
             const Divider(height: 1),
-            sectionLabel('داده'),
+            sectionLabel('بودجه و اهداف'),
+            item(14, Icons.flag_outlined, 'اهداف هزینه', () => const BudgetGoalsScreen()),
+            item(18, Icons.pie_chart_outline, 'بودجه‌بندی صفر-پایه', () => const ZeroBasedBudgetScreen()),
+            item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
+            item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
+            const Divider(height: 1),
+            sectionLabel('گزارش‌ها و تحلیل'),
             item(8, Icons.upcoming_outlined, 'پرداخت‌های پیش‌رو', () => const UpcomingPaymentsScreen()),
-            item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
             item(7, Icons.bar_chart_outlined, 'گزارش‌گیری کامل', () => const ReportsScreen()),
             item(9, Icons.trending_up, 'پیش‌بینی هزینه', () => const ForecastScreen()),
             item(10, Icons.calendar_month_outlined, 'خلاصه ماه در یک نگاه', () => const MonthCalendarScreen()),
-            item(11, Icons.search, 'جستجوی کالا', () => const ItemSearchScreen()),
+            item(17, Icons.show_chart, 'روند ارزش خالص دارایی', () => const NetWorthScreen()),
+            const Divider(height: 1),
+            sectionLabel('داده'),
+            item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
             const Divider(height: 1),
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
@@ -2348,6 +2410,102 @@ class CalendarSettingsScreen extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Shows a short dialog explaining that this AI feature needs a Gemini API
+/// key, with a way to open the step-by-step guide - used everywhere an AI
+/// action is attempted without a key configured yet.
+Future<void> promptForGeminiKey(BuildContext context) async {
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('نیاز به کلید هوش مصنوعی'),
+      content: const Text(
+        'برای استفاده از قابلیت‌های هوش مصنوعی (مثل خواندن خودکار رسید/فیش یا پیشنهاد پس‌انداز)، ابتدا باید یک کلید API رایگان از Gemini بگیری و در تنظیمات برنامه وارد کنی.',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+        FilledButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiKeyGuideScreen()));
+          },
+          child: const Text('راهنما'),
+        ),
+      ],
+    ),
+  );
+}
+
+class GeminiKeyGuideScreen extends StatelessWidget {
+  const GeminiKeyGuideScreen({super.key});
+  static const _keyUrl = 'https://aistudio.google.com/app/apikey';
+
+  Widget _step(BuildContext context, int n, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 13,
+            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+            child: Text(ltr(persianDigits('$n')), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 14, height: 1.6))),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('راهنمای دریافت کلید هوش مصنوعی')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const Text(
+            'کلید Gemini رایگانه و فقط چند دقیقه طول می‌کشه. این کلید فقط روی گوشی خودت ذخیره می‌شه و به جایی فرستاده نمی‌شه.',
+            style: TextStyle(fontSize: 13, color: Colors.grey),
+          ),
+          const SizedBox(height: 20),
+          _step(context, 1, 'روی دکمه‌ی زیر بزن تا لینک صفحه‌ی دریافت کلید کپی بشه، و اون رو توی مرورگر گوشیت باز کن.'),
+          Padding(
+            padding: const EdgeInsets.only(right: 36, bottom: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(_keyUrl, style: const TextStyle(fontSize: 12, color: Colors.blue)),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(const ClipboardData(text: _keyUrl));
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لینک کپی شد.')));
+                    }
+                  },
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('کپی لینک'),
+                ),
+              ],
+            ),
+          ),
+          _step(context, 2, 'با حساب گوگلت وارد شو (همون حسابی که جیمیل داری).'),
+          _step(context, 3, 'روی دکمه‌ی «Create API key» بزن.'),
+          _step(context, 4, 'کلیدی که ساخته می‌شه رو کپی کن (یه رشته‌ی طولانی که با AIza شروع می‌شه).'),
+          _step(context, 5, 'برگرد به این برنامه، از منو برو به «تنظیمات › هوش مصنوعی (Gemini)»، کلید رو توی همون‌جا بچسبون و ذخیره کن.'),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('رفتن به تنظیمات هوش مصنوعی'),
+          ),
+        ],
       ),
     );
   }
@@ -5049,51 +5207,26 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
               ),
             ),
           const SizedBox(height: 16),
-          if (hasGeminiKey) ...[
-            FilledButton.icon(
-              onPressed: requesting ? null : _requestAiSuggestion,
-              icon: requesting
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.auto_awesome),
-              label: Text(requesting ? 'در حال دریافت...' : 'پیشنهاد هوشمند‌تر (با هوش مصنوعی)'),
+          FilledButton.icon(
+            onPressed: requesting ? null : () => hasGeminiKey ? _requestAiSuggestion() : promptForGeminiKey(context),
+            icon: requesting
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.auto_awesome),
+            label: Text(requesting ? 'در حال دریافت...' : 'پیشنهاد هوشمند‌تر (با هوش مصنوعی)'),
+          ),
+          if (errorMessage != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
             ),
-            if (errorMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-              ),
-            if (aiSuggestion != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Card(
-                  color: Colors.indigo.shade50,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(aiSuggestion!, style: const TextStyle(fontSize: 13, height: 1.7)),
-                  ),
-                ),
-              ),
-          ] else
-            InkWell(
-              onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
-                final key = await Store.loadGeminiKey();
-                if (!mounted) return;
-                setState(() => hasGeminiKey = key != null && key.trim().isNotEmpty);
-              },
-              child: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, size: 16, color: Colors.grey),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'برای پیشنهاد هوشمندتر با هوش مصنوعی، یک کلید Gemini در «تنظیمات › هوش مصنوعی (Gemini)» وارد کنید.',
-                        style: TextStyle(color: Colors.grey, fontSize: 12, decoration: TextDecoration.underline),
-                      ),
-                    ),
-                  ],
+          if (aiSuggestion != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Card(
+                color: Colors.indigo.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(aiSuggestion!, style: const TextStyle(fontSize: 13, height: 1.7)),
                 ),
               ),
             ),
@@ -6363,6 +6496,295 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               ),
             ],
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ============================== Shopping lists ==============================
+
+class ShoppingListsScreen extends StatefulWidget {
+  const ShoppingListsScreen({super.key});
+  @override
+  State<ShoppingListsScreen> createState() => _ShoppingListsScreenState();
+}
+
+class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
+  bool loading = true;
+  List<ShoppingList> lists = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    lists = await Store.loadShoppingLists();
+    setState(() => loading = false);
+  }
+
+  Future<void> _addList() async {
+    final ctrl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('لیست خرید جدید'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام لیست (مثلاً خرید هفتگی)'), autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+    final list = ShoppingList(id: 'sl_${DateTime.now().microsecondsSinceEpoch}', name: name);
+    lists = [...lists, list];
+    await Store.saveShoppingLists(lists);
+    setState(() {});
+  }
+
+  Future<void> _deleteList(ShoppingList l) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف لیست'),
+        content: Text('لیست «${l.name}» حذف شود؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    lists = lists.where((x) => x.id != l.id).toList();
+    await Store.saveShoppingLists(lists);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('لیست‌های خرید')),
+      floatingActionButton: FloatingActionButton.extended(onPressed: _addList, icon: const Icon(Icons.add), label: const Text('لیست جدید')),
+      body: lists.isEmpty
+          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز لیست خریدی نساختی.')))
+          : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              itemCount: lists.length,
+              itemBuilder: (context, i) {
+                final l = lists[i];
+                final done = l.items.where((it) => it.checked).length;
+                return Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.shopping_cart_outlined),
+                    title: Text(l.name),
+                    subtitle: Text('${done}/${l.items.length} خریداری‌شده'),
+                    trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deleteList(l)),
+                    onTap: () async {
+                      await Navigator.push(context, MaterialPageRoute(builder: (_) => ShoppingListDetailScreen(listId: l.id)));
+                      await _load();
+                    },
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class ShoppingListDetailScreen extends StatefulWidget {
+  final String listId;
+  const ShoppingListDetailScreen({required this.listId, super.key});
+  @override
+  State<ShoppingListDetailScreen> createState() => _ShoppingListDetailScreenState();
+}
+
+class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
+  bool loading = true;
+  List<ShoppingList> allLists = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+  ShoppingList get list => allLists.firstWhere((l) => l.id == widget.listId);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    allLists = await Store.loadShoppingLists();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    setState(() => loading = false);
+  }
+
+  Future<void> _persist() async {
+    await Store.saveShoppingLists(allLists);
+    setState(() {});
+  }
+
+  void _updateList(ShoppingList updated) {
+    allLists = allLists.map((l) => l.id == updated.id ? updated : l).toList();
+  }
+
+  Future<void> _addOrEditItem({ShoppingListItem? existing}) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '');
+    final priceCtrl = TextEditingController(text: existing?.estimatedPrice?.toString() ?? '');
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(existing == null ? 'افزودن کالا' : 'ویرایش کالا'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
+            const SizedBox(height: 8),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: '${tr('quantity')} (اختیاری)')),
+            const SizedBox(height: 8),
+            TextField(
+              controller: priceCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'قیمت تقریبی (اختیاری)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(existing == null ? tr('add') : tr('save'))),
+        ],
+      ),
+    );
+    if (added != true || nameCtrl.text.trim().isEmpty) return;
+    final item = ShoppingListItem(
+      id: existing?.id ?? 'sli_${DateTime.now().microsecondsSinceEpoch}',
+      name: nameCtrl.text.trim(),
+      quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+      estimatedPrice: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      checked: existing?.checked ?? false,
+    );
+    final items = [...list.items.where((i) => i.id != item.id), item];
+    _updateList(list.copyWith(items: items));
+    await _persist();
+  }
+
+  Future<void> _toggleItem(ShoppingListItem item) async {
+    final items = list.items.map((i) => i.id == item.id ? i.copyWith(checked: !i.checked) : i).toList();
+    _updateList(list.copyWith(items: items));
+    await _persist();
+  }
+
+  Future<void> _deleteItem(ShoppingListItem item) async {
+    final items = list.items.where((i) => i.id != item.id).toList();
+    _updateList(list.copyWith(items: items));
+    await _persist();
+  }
+
+  Future<void> _convertCheckedToTransaction() async {
+    final checked = list.items.where((i) => i.checked).toList();
+    if (checked.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اول کالاهایی که خریدی رو تیک بزن.')));
+      return;
+    }
+    final receiptItems = checked.map((i) => ReceiptItemEntry(name: i.name, quantity: i.quantity, price: i.estimatedPrice)).toList();
+    final total = checked.fold(0.0, (s, i) => s + (i.estimatedPrice ?? 0));
+    final draftTx = Transaction(
+      id: 'shoplist_${DateTime.now().microsecondsSinceEpoch}',
+      type: TxType.expense,
+      amount: total > 0 ? total : 0.01,
+      categoryId: '_uncategorized_',
+      accountId: accounts.isNotEmpty ? accounts.first.id : 'default',
+      date: DateTime.now(),
+      note: 'از لیست خرید «${list.name}»',
+      items: receiptItems,
+      draft: true,
+    );
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: draftTx)),
+    );
+    if (result is Transaction) {
+      await Store.upsertTransaction(result);
+      // Remove the checked items from the list now that they're logged.
+      final remaining = list.items.where((i) => !i.checked).toList();
+      _updateList(list.copyWith(items: remaining));
+      await _persist();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تراکنش ثبت شد.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final currentList = list;
+    final estimatedTotal = currentList.items.fold(0.0, (s, i) => s + (i.estimatedPrice ?? 0));
+    final checkedCount = currentList.items.where((i) => i.checked).length;
+    return Scaffold(
+      appBar: AppBar(title: Text(currentList.name)),
+      floatingActionButton: FloatingActionButton(onPressed: () => _addOrEditItem(), child: const Icon(Icons.add)),
+      body: Column(
+        children: [
+          if (currentList.items.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('$checkedCount از ${currentList.items.length} خریداری‌شده'),
+                          if (estimatedTotal > 0) Text('جمع تقریبی: ${estimatedTotal.toStringAsFixed(0)}'),
+                        ],
+                      ),
+                      if (checkedCount > 0) ...[
+                        const SizedBox(height: 8),
+                        FilledButton.icon(
+                          onPressed: _convertCheckedToTransaction,
+                          icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                          label: const Text('ثبت خریداری‌شده‌ها به‌عنوان تراکنش'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          Expanded(
+            child: currentList.items.isEmpty
+                ? const Center(child: Text('این لیست خالیه. با دکمه‌ی + کالا اضافه کن.'))
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 88),
+                    itemCount: currentList.items.length,
+                    itemBuilder: (context, i) {
+                      final item = currentList.items[i];
+                      return Card(
+                        child: ListTile(
+                          leading: Checkbox(value: item.checked, onChanged: (_) => _toggleItem(item)),
+                          title: Text(
+                            item.name,
+                            style: item.checked ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null,
+                          ),
+                          subtitle: (item.quantity != null || item.estimatedPrice != null)
+                              ? Text(
+                                  '${item.quantity != null ? 'تعداد: ${item.quantity!.toStringAsFixed(item.quantity! % 1 == 0 ? 0 : 2)}' : ''}'
+                                  '${item.quantity != null && item.estimatedPrice != null ? ' • ' : ''}'
+                                  '${item.estimatedPrice != null ? '~${item.estimatedPrice!.toStringAsFixed(2)}' : ''}',
+                                )
+                              : null,
+                          trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deleteItem(item)),
+                          onTap: () => _addOrEditItem(existing: item),
+                        ),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
     );
@@ -8661,38 +9083,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          if (hasGeminiKey)
-            OutlinedButton.icon(
-              onPressed: improving ? null : _improveWithGemini,
-              icon: improving
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
-              label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
-            )
-          else
-            InkWell(
-              onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
-                final key = await Store.loadGeminiKey();
-                if (!mounted) return;
-                setState(() => hasGeminiKey = key != null && key.trim().isNotEmpty);
-              },
-              child: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, size: 16, color: Colors.grey),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'برای بهبود دقت با هوش مصنوعی، یک کلید Gemini در «تنظیمات › هوش مصنوعی (Gemini)» وارد کنید.',
-                        style: TextStyle(color: Colors.grey, fontSize: 12, decoration: TextDecoration.underline),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          OutlinedButton.icon(
+            onPressed: improving ? null : () => hasGeminiKey ? _improveWithGemini() : promptForGeminiKey(context),
+            icon: improving
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
+            label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
+          ),
           if (geminiFailed)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -9141,38 +9538,13 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          if (hasGeminiKey)
-            OutlinedButton.icon(
-              onPressed: improving ? null : _improveWithGemini,
-              icon: improving
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
-              label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
-            )
-          else
-            InkWell(
-              onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
-                final key = await Store.loadGeminiKey();
-                if (!mounted) return;
-                setState(() => hasGeminiKey = key != null && key.trim().isNotEmpty);
-              },
-              child: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, size: 16, color: Colors.grey),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'برای بهبود دقت با هوش مصنوعی، یک کلید Gemini در «تنظیمات › هوش مصنوعی (Gemini)» وارد کنید.',
-                        style: TextStyle(color: Colors.grey, fontSize: 12, decoration: TextDecoration.underline),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          OutlinedButton.icon(
+            onPressed: improving ? null : () => hasGeminiKey ? _improveWithGemini() : promptForGeminiKey(context),
+            icon: improving
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
+            label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
+          ),
           if (geminiFailed)
             Padding(
               padding: const EdgeInsets.only(top: 6),
