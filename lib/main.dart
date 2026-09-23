@@ -2480,7 +2480,7 @@ class GeminiKeyGuideScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SelectableText(_keyUrl, style: const TextStyle(fontSize: 12, color: Colors.blue)),
+                const SelectableText(_keyUrl, style: TextStyle(fontSize: 12, color: Colors.blue)),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: () async {
@@ -6581,7 +6581,7 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.shopping_cart_outlined),
                     title: Text(l.name),
-                    subtitle: Text('${done}/${l.items.length} خریداری‌شده'),
+                    subtitle: Text('$done/${l.items.length} خریداری‌شده'),
                     trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deleteList(l)),
                     onTap: () async {
                       await Navigator.push(context, MaterialPageRoute(builder: (_) => ShoppingListDetailScreen(listId: l.id)));
