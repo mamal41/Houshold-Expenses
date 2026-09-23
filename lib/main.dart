@@ -222,6 +222,17 @@ extension AccountTypeLabel on AccountType {
 
 const kCurrencies = ['EUR', 'USD', 'GBP', 'IRR', 'TRY', 'AED', 'CHF'];
 
+// App identity/version shown in the "درباره‌ی برنامه" screen and used for
+// store listings. Keep this in sync with pubspec.yaml's `version:` field
+// whenever you bump the version for a new release.
+const kAppVersion = '1.0.0';
+const kAppBuildNumber = 1;
+// TODO: replace with your real support email and developer/company name
+// before publishing (shown in the About screen and often required by app
+// stores like Bazaar/Google Play).
+const kSupportEmail = 'your-email@example.com';
+const kDeveloperName = 'MM41';
+
 // ============================== Date helpers ==============================
 
 int daysInMonth(int year, int month) {
@@ -2301,6 +2312,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppLockSettingsScreen())),
           ),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('درباره‌ی برنامه'),
+            subtitle: Text(ltr('نسخه‌ی ${persianDigits(kAppVersion)} • حریم خصوصی و شرایط استفاده')),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutScreen())),
+          ),
         ],
       ),
     );
@@ -2511,6 +2529,73 @@ class GeminiKeyGuideScreen extends StatelessWidget {
   }
 }
 
+class AboutScreen extends StatelessWidget {
+  const AboutScreen({super.key});
+
+  Widget _sectionTitle(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.only(top: 20, bottom: 8),
+        child: Text(text, style: Theme.of(context).textTheme.titleMedium),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('درباره‌ی برنامه')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Center(
+            child: Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Image.asset('assets/icon/icon.png', width: 84, height: 84, errorBuilder: (_, __, ___) => const Icon(Icons.savings, size: 84)),
+                ),
+                const SizedBox(height: 12),
+                const Text('مدیریت مالی شخصی', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text(ltr('نسخه‌ی ${persianDigits(kAppVersion)}'), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                const SizedBox(height: 2),
+                Text('توسعه‌دهنده: $kDeveloperName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+              ],
+            ),
+          ),
+          _sectionTitle(context, 'درباره'),
+          const Text(
+            'این برنامه برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، اهداف پس‌انداز و بودجه‌بندی شخصی طراحی شده. '
+            'همه‌ی اطلاعات مالی فقط روی همین گوشی ذخیره می‌شوند و به هیچ سروری فرستاده نمی‌شوند.',
+            style: TextStyle(fontSize: 13, height: 1.7),
+          ),
+          _sectionTitle(context, 'حریم خصوصی'),
+          const Text(
+            '• تمام تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها و تصاویر رسید/فیش فقط به‌صورت محلی روی گوشی شما ذخیره می‌شوند؛ '
+            'این برنامه هیچ سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n'
+            '• قابلیت خواندن هوشمند رسید/فیش (اختیاری) با استفاده از سرویس Gemini گوگل و با کلید API شخصیِ خودتان انجام می‌شود؛ '
+            'در این حالت فقط تصویر همان رسید/فیش برای پردازش به سرویس Gemini ارسال می‌شود، طبق قوانین حریم خصوصی گوگل.\n\n'
+            '• قفل برنامه (اثر انگشت/پین) به‌صورت محلی و رمزنگاری‌شده روی گوشی ذخیره می‌شود.\n\n'
+            '• پشتیبان‌گیری فقط با اقدام شخص کاربر و به‌صورت فایل روی گوشی/فضای ابری شخصی او انجام می‌شود.\n\n'
+            '• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به اشخاص ثالث جمع‌آوری نمی‌کند.',
+            style: TextStyle(fontSize: 13, height: 1.8),
+          ),
+          _sectionTitle(context, 'شرایط استفاده'),
+          const Text(
+            '• این برنامه یک ابزار شخصی برای ثبت و پیگیری اطلاعات مالی است و جایگزین مشاوره‌ی مالی، حسابداری یا حقوقی رسمی نیست.\n\n'
+            '• پیشنهادهای بخش «پیشنهاد پس‌انداز و سرمایه‌گذاری» جنبه‌ی آموزشی و کلی دارند و توصیه‌ی مالی شخصی‌سازی‌شده محسوب نمی‌شوند.\n\n'
+            '• صحت اطلاعات خوانده‌شده توسط هوش مصنوعی (از روی تصویر رسید/فیش) باید توسط کاربر بررسی و تأیید شود.\n\n'
+            '• مسئولیت نگهداری از نسخه‌ی پشتیبان اطلاعات بر عهده‌ی کاربر است.',
+            style: TextStyle(fontSize: 13, height: 1.8),
+          ),
+          _sectionTitle(context, 'پشتیبانی'),
+          const Text('برای گزارش مشکل یا پیشنهاد، می‌توانید از راه زیر با ما در ارتباط باشید:', style: TextStyle(fontSize: 13)),
+          const SizedBox(height: 6),
+          SelectableText(ltr(kSupportEmail), style: const TextStyle(fontSize: 13, color: Colors.blue)),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+}
+
 class GeminiSettingsScreen extends StatefulWidget {
   const GeminiSettingsScreen({super.key});
   @override
@@ -2560,9 +2645,25 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
             decoration: InputDecoration(
               labelText: 'Gemini API Key',
               border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
-                onPressed: () => setState(() => obscure = !obscure),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.copy_outlined),
+                    tooltip: 'کپی کلید',
+                    onPressed: () async {
+                      if (ctrl.text.trim().isEmpty) return;
+                      await Clipboard.setData(ClipboardData(text: ctrl.text.trim()));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('کلید کپی شد.')));
+                      }
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setState(() => obscure = !obscure),
+                  ),
+                ],
               ),
             ),
           ),
