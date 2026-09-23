@@ -3329,10 +3329,13 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'جستجوی کالا (گارانتی/مرجوعی)',
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ItemSearchScreen())),
           ),
-          Badge(
-            label: Text('$draftCount'),
-            isLabelVisible: draftCount > 0,
-            child: IconButton(icon: const Icon(Icons.drafts_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: Badge(
+              label: Text('$draftCount'),
+              isLabelVisible: draftCount > 0,
+              child: IconButton(icon: const Icon(Icons.edit_note_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
+            ),
           ),
         ],
       ),
@@ -4500,7 +4503,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           IconButton(
-                            icon: const Icon(Icons.chevron_right, size: 20),
+                            icon: const Icon(Icons.chevron_left, size: 20),
                             tooltip: 'یک ماه بعد',
                             onPressed: () => setState(() => chartMonthOffset++),
                             visualDensity: VisualDensity.compact,
@@ -4513,7 +4516,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                             ),
                           ),
                           IconButton(
-                            icon: const Icon(Icons.chevron_left, size: 20),
+                            icon: const Icon(Icons.chevron_right, size: 20),
                             tooltip: 'یک ماه قبل',
                             onPressed: () => setState(() => chartMonthOffset--),
                             visualDensity: VisualDensity.compact,
@@ -4551,7 +4554,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                                           ),
                                           const SizedBox(height: 4),
                                           Text(
-                                            _gregorianMonthNames[chartMonths[i].month.month - 1].substring(0, 3),
+                                            () { final n = _gregorianMonthNames[chartMonths[i].month.month - 1]; return n.length > 3 ? n.substring(0, 3) : n; }(),
                                             style: const TextStyle(fontSize: 10),
                                           ),
                                           Text(
@@ -5270,7 +5273,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 4),
-                                  Text(_gregorianMonthNames[m.month.month - 1].substring(0, 3), style: const TextStyle(fontSize: 8)),
+                                  Text(() { final n = _gregorianMonthNames[m.month.month - 1]; return n.length > 3 ? n.substring(0, 3) : n; }(), style: const TextStyle(fontSize: 8)),
                                 ],
                               ),
                             ),
@@ -6130,6 +6133,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       }
       final type = p.amount >= 0 ? TxType.income : TxType.expense;
       final cat = type == TxType.income ? defaultIncomeCategory : defaultExpenseCategory;
+      final bankNote = 'از صورتحساب بانکی خوانده شده است.${p.desc.isNotEmpty ? ' ${p.desc}' : ''}';
       await Store.upsertTransaction(Transaction(
         id: 'csv_${DateTime.now().microsecondsSinceEpoch}_$imported',
         type: type,
@@ -6137,7 +6141,11 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
         categoryId: cat?.id ?? (type == TxType.income ? 'i_misc' : 'e_misc'),
         accountId: targetAccount!.id,
         date: p.date,
-        note: p.desc,
+        note: bankNote,
+        // Bank-statement rows aren't registered directly - they land in
+        // drafts so the person can review/categorize each one before it
+        // counts toward any totals.
+        draft: true,
       ));
       imported++;
     }
@@ -6147,7 +6155,10 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('نتیجه‌ی درون‌ریزی'),
-        content: Text('$imported تراکنش وارد شد.${skipped > 0 ? ' $skipped مورد چون تکراری به نظر می‌رسیدند رد شدند.' : ''}'),
+        content: Text(
+          '$imported تراکنش به‌صورت پیش‌نویس ذخیره شد (برای بررسی نهایی به «پیش‌نویس‌ها» سر بزن).'
+          '${skipped > 0 ? ' $skipped مورد چون تکراری به نظر می‌رسیدند رد شدند.' : ''}',
+        ),
         actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('confirm')))],
       ),
     );
@@ -6302,7 +6313,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 icon: importing
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.download_done),
-                label: Text(importing ? 'در حال درون‌ریزی...' : 'درون‌ریزی ${preview!.length} تراکنش'),
+                label: Text(importing ? 'در حال ذخیره...' : 'ذخیره ${preview!.length} تراکنش به‌صورت پیش‌نویس'),
               ),
             ],
           ],
