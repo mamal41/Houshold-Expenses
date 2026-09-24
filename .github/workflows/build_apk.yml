@@ -21,6 +21,11 @@ jobs:
           cache: true
       - name: Generate Android project
         run: flutter create --platforms=android --org com.personalfinance .
+      - name: Set Persian app display name
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i 's/android:label="[^"]*"/android:label="مدیریت مالی شخصی"/' "$MANIFEST"
+          echo "--- AndroidManifest.xml (label) ---"; grep -n 'android:label' "$MANIFEST"
       - name: Configure Android for local_auth (biometric/PIN app lock)
         run: |
           # local_auth requires a FragmentActivity, the USE_BIOMETRIC
