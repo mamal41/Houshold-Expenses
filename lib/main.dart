@@ -220,7 +220,7 @@ extension AccountTypeLabel on AccountType {
   }
 }
 
-const kCurrencies = ['EUR', 'USD', 'GBP', 'IRR', 'TRY', 'AED', 'CHF'];
+const kCurrencies = ['IRR', 'EUR', 'USD', 'GBP', 'TRY', 'AED', 'CHF'];
 
 // App identity/version shown in the "درباره‌ی برنامه" screen and used for
 // store listings. Keep this in sync with pubspec.yaml's `version:` field
@@ -230,7 +230,7 @@ const kAppBuildNumber = 1;
 // TODO: replace with your real support email and developer/company name
 // before publishing (shown in the About screen and often required by app
 // stores like Bazaar/Google Play).
-const kSupportEmail = 'your-email@example.com';
+const kSupportEmail = 'mm41.d@proton.me';
 const kDeveloperName = 'MM41';
 
 // ============================== Date helpers ==============================
@@ -1913,6 +1913,13 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'full_reporting': {AppLanguage.fa: 'گزارش‌گیری کامل', AppLanguage.en: 'Full reporting', AppLanguage.de: 'Vollständiger Bericht'},
   'expense_forecast': {AppLanguage.fa: 'پیش‌بینی هزینه', AppLanguage.en: 'Expense forecast', AppLanguage.de: 'Ausgabenprognose'},
   'month_calendar': {AppLanguage.fa: 'خلاصه ماه در یک نگاه', AppLanguage.en: 'Month at a glance', AppLanguage.de: 'Monat im Überblick'},
+  'item_search_title': {AppLanguage.fa: 'جستجوی کالا', AppLanguage.en: 'Search items', AppLanguage.de: 'Artikel suchen'},
+  'net_worth_title': {AppLanguage.fa: 'روند ارزش خالص دارایی', AppLanguage.en: 'Net worth trend', AppLanguage.de: 'Vermögensentwicklung'},
+  'section_accounts_categories': {AppLanguage.fa: 'حساب‌ها و دسته‌بندی‌ها', AppLanguage.en: 'Accounts & categories', AppLanguage.de: 'Konten & Kategorien'},
+  'section_transactions': {AppLanguage.fa: 'تراکنش‌ها', AppLanguage.en: 'Transactions', AppLanguage.de: 'Buchungen'},
+  'section_budget_goals': {AppLanguage.fa: 'بودجه و اهداف', AppLanguage.en: 'Budget & goals', AppLanguage.de: 'Budget & Ziele'},
+  'section_reports': {AppLanguage.fa: 'گزارش‌ها و تحلیل', AppLanguage.en: 'Reports & analysis', AppLanguage.de: 'Berichte & Analyse'},
+  'section_data': {AppLanguage.fa: 'داده', AppLanguage.en: 'Data', AppLanguage.de: 'Daten'},
   'search': {AppLanguage.fa: 'جستجو', AppLanguage.en: 'Search', AppLanguage.de: 'Suche'},
   'filter': {AppLanguage.fa: 'فیلتر', AppLanguage.en: 'Filter', AppLanguage.de: 'Filter'},
   'sort': {AppLanguage.fa: 'مرتب‌سازی', AppLanguage.en: 'Sort', AppLanguage.de: 'Sortieren'},
@@ -1942,6 +1949,19 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   },
   'app_lock_title': {AppLanguage.fa: 'قفل برنامه', AppLanguage.en: 'App lock', AppLanguage.de: 'App-Sperre'},
   'backup_restore_title': {AppLanguage.fa: 'پشتیبان‌گیری و بازیابی', AppLanguage.en: 'Backup & restore', AppLanguage.de: 'Sicherung & Wiederherstellung'},
+  'appearance_title': {AppLanguage.fa: 'ظاهر برنامه', AppLanguage.en: 'Appearance', AppLanguage.de: 'Erscheinungsbild'},
+  'calendar_title': {AppLanguage.fa: 'تقویم', AppLanguage.en: 'Calendar', AppLanguage.de: 'Kalender'},
+  'gemini_key_guide_title': {AppLanguage.fa: 'راهنمای دریافت کلید هوش مصنوعی', AppLanguage.en: 'AI key setup guide', AppLanguage.de: 'Anleitung für den KI-Schlüssel'},
+  'about_title': {AppLanguage.fa: 'درباره‌ی برنامه', AppLanguage.en: 'About', AppLanguage.de: 'Über die App'},
+  'gemini_settings_title': {AppLanguage.fa: 'هوش مصنوعی (Gemini)', AppLanguage.en: 'AI (Gemini)', AppLanguage.de: 'KI (Gemini)'},
+  'savings_suggestion_title': {
+    AppLanguage.fa: 'پیشنهاد پس‌انداز و سرمایه‌گذاری',
+    AppLanguage.en: 'Savings & investment suggestion',
+    AppLanguage.de: 'Spar- und Anlagevorschlag',
+  },
+  'zero_based_budget_title': {AppLanguage.fa: 'بودجه‌بندی صفر-پایه', AppLanguage.en: 'Zero-based budget', AppLanguage.de: 'Zero-Based-Budget'},
+  'csv_import_title': {AppLanguage.fa: 'درون‌ریزی صورتحساب بانکی', AppLanguage.en: 'Import bank statement', AppLanguage.de: 'Kontoauszug importieren'},
+  'shopping_lists_title': {AppLanguage.fa: 'لیست‌های خرید', AppLanguage.en: 'Shopping lists', AppLanguage.de: 'Einkaufslisten'},
   'scan_title': {AppLanguage.fa: 'اسکن رسید یا فیش حقوقی', AppLanguage.en: 'Scan receipt or payslip', AppLanguage.de: 'Beleg oder Lohnabrechnung scannen'},
   'review_receipt': {AppLanguage.fa: 'بررسی رسید', AppLanguage.en: 'Review receipt', AppLanguage.de: 'Beleg prüfen'},
   'review_payslip': {AppLanguage.fa: 'بررسی فیش حقوقی', AppLanguage.en: 'Review payslip', AppLanguage.de: 'Lohnabrechnung prüfen'},
@@ -2212,33 +2232,33 @@ class AppDrawer extends StatelessWidget {
             ),
             item(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
             const Divider(height: 1),
-            sectionLabel('حساب‌ها و دسته‌بندی‌ها'),
+            sectionLabel(tr('section_accounts_categories')),
             item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
             item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
-            item(13, Icons.swap_horiz, 'انتقال بین حساب‌ها', () => const TransferScreen()),
+            item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
             const Divider(height: 1),
-            sectionLabel('تراکنش‌ها'),
-            item(12, Icons.list_alt, 'همه‌ی تراکنش‌ها', () => const AllTransactionsScreen()),
+            sectionLabel(tr('section_transactions')),
+            item(12, Icons.list_alt, tr('all_transactions'), () => const AllTransactionsScreen()),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
-            item(19, Icons.upload_file_outlined, 'درون‌ریزی صورتحساب بانکی', () => const CsvImportScreen()),
-            item(11, Icons.search, 'جستجوی کالا', () => const ItemSearchScreen()),
-            item(20, Icons.shopping_cart_outlined, 'لیست خرید', () => const ShoppingListsScreen()),
+            item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
+            item(11, Icons.search, tr('item_search_title'), () => const ItemSearchScreen()),
+            item(20, Icons.shopping_cart_outlined, tr('shopping_lists_title'), () => const ShoppingListsScreen()),
             const Divider(height: 1),
-            sectionLabel('بودجه و اهداف'),
-            item(14, Icons.flag_outlined, 'اهداف هزینه', () => const BudgetGoalsScreen()),
-            item(18, Icons.pie_chart_outline, 'بودجه‌بندی صفر-پایه', () => const ZeroBasedBudgetScreen()),
-            item(15, Icons.savings_outlined, 'اهداف پس‌انداز', () => const SavingsGoalsScreen()),
-            item(16, Icons.lightbulb_outline, 'پیشنهاد پس‌انداز و سرمایه‌گذاری', () => const SavingsSuggestionScreen()),
+            sectionLabel(tr('section_budget_goals')),
+            item(14, Icons.flag_outlined, tr('budget_goals'), () => const BudgetGoalsScreen()),
+            item(18, Icons.pie_chart_outline, tr('zero_based_budget_title'), () => const ZeroBasedBudgetScreen()),
+            item(15, Icons.savings_outlined, tr('savings_goals'), () => const SavingsGoalsScreen()),
+            item(16, Icons.lightbulb_outline, tr('savings_suggestion_title'), () => const SavingsSuggestionScreen()),
             const Divider(height: 1),
-            sectionLabel('گزارش‌ها و تحلیل'),
-            item(8, Icons.upcoming_outlined, 'پرداخت‌های پیش‌رو', () => const UpcomingPaymentsScreen()),
-            item(7, Icons.bar_chart_outlined, 'گزارش‌گیری کامل', () => const ReportsScreen()),
-            item(9, Icons.trending_up, 'پیش‌بینی هزینه', () => const ForecastScreen()),
-            item(10, Icons.calendar_month_outlined, 'خلاصه ماه در یک نگاه', () => const MonthCalendarScreen()),
-            item(17, Icons.show_chart, 'روند ارزش خالص دارایی', () => const NetWorthScreen()),
+            sectionLabel(tr('section_reports')),
+            item(8, Icons.upcoming_outlined, tr('upcoming_payments'), () => const UpcomingPaymentsScreen()),
+            item(7, Icons.bar_chart_outlined, tr('full_reporting'), () => const ReportsScreen()),
+            item(9, Icons.trending_up, tr('expense_forecast'), () => const ForecastScreen()),
+            item(10, Icons.calendar_month_outlined, tr('month_calendar'), () => const MonthCalendarScreen()),
+            item(17, Icons.show_chart, tr('net_worth_title'), () => const NetWorthScreen()),
             const Divider(height: 1),
-            sectionLabel('داده'),
-            item(6, Icons.backup_outlined, 'پشتیبان‌گیری و بازیابی', () => const BackupRestoreScreen()),
+            sectionLabel(tr('section_data')),
+            item(6, Icons.backup_outlined, tr('backup_restore_title'), () => const BackupRestoreScreen()),
             const Divider(height: 1),
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
@@ -2365,7 +2385,7 @@ class AppearanceSettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('ظاهر برنامه')),
+      appBar: AppBar(title: Text(tr('appearance_title'))),
       body: ValueListenableBuilder<ThemeMode>(
         valueListenable: currentThemeMode,
         builder: (context, mode, _) => RadioGroup<ThemeMode>(
@@ -2403,7 +2423,7 @@ class CalendarSettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('تقویم')),
+      appBar: AppBar(title: Text(tr('calendar_title'))),
       body: ValueListenableBuilder<CalendarSystem>(
         valueListenable: currentCalendarSystem,
         builder: (context, system, _) => RadioGroup<CalendarSystem>(
@@ -2483,7 +2503,7 @@ class GeminiKeyGuideScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('راهنمای دریافت کلید هوش مصنوعی')),
+      appBar: AppBar(title: Text(tr('gemini_key_guide_title'))),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -2540,7 +2560,7 @@ class AboutScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('درباره‌ی برنامه')),
+      appBar: AppBar(title: Text(tr('about_title'))),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -2628,7 +2648,7 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('هوش مصنوعی (Gemini)')),
+      appBar: AppBar(title: Text(tr('gemini_settings_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -5234,7 +5254,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
     final surplus = avg.income - avg.expense;
     final currency = primaryCurrency;
     return Scaffold(
-      appBar: AppBar(title: const Text('پیشنهاد پس‌انداز و سرمایه‌گذاری')),
+      appBar: AppBar(title: Text(tr('savings_suggestion_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -5700,7 +5720,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
     final unallocated = income - allocated;
     final unallocatedColor = unallocated.abs() < 0.01 ? Colors.green : (unallocated > 0 ? Colors.amber.shade800 : Colors.red);
     return Scaffold(
-      appBar: AppBar(title: const Text('بودجه‌بندی صفر-پایه')),
+      appBar: AppBar(title: Text(tr('zero_based_budget_title'))),
       body: Column(
         children: [
           Card(
@@ -6450,7 +6470,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final header = rows?.first ?? [];
     return Scaffold(
-      appBar: AppBar(title: const Text('درون‌ریزی صورتحساب بانکی')),
+      appBar: AppBar(title: Text(tr('csv_import_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -6668,7 +6688,7 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: const Text('لیست‌های خرید')),
+      appBar: AppBar(title: Text(tr('shopping_lists_title'))),
       floatingActionButton: FloatingActionButton.extended(onPressed: _addList, icon: const Icon(Icons.add), label: const Text('لیست جدید')),
       body: lists.isEmpty
           ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز لیست خریدی نساختی.')))
