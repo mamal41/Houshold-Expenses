@@ -508,13 +508,20 @@ class ReceiptItemEntry {
       );
 }
 
+class PayslipCustomField {
+  final String label;
+  final double value;
+  const PayslipCustomField({required this.label, required this.value});
+  Map<String, dynamic> toJson() => {'label': label, 'value': value};
+  factory PayslipCustomField.fromJson(Map<String, dynamic> j) => PayslipCustomField(label: j['label'] ?? '', value: (j['value'] as num? ?? 0).toDouble());
+}
+
 class PayslipDetails {
   final double? brutto;
   final double? netto;
   final double? depositedAmount; // مبلغ واریز شده به حساب - can differ from netto (advances, deductions via payroll, etc.)
   final double? lohnsteuer;
   final double? solidaritaetszuschlag;
-  final double? kirchensteuer;
   final double? krankenversicherung;
   final double? pflegeversicherung;
   final double? rentenversicherung;
@@ -526,6 +533,11 @@ class PayslipDetails {
   final String? steuerklasse;
   final String? arbeitgeber;
   final String? abrechnungsmonat;
+  // Free-form fields the user adds themselves - lets a payslip from any
+  // country/format (e.g. Iranian payslip items like حق مسکن، حق اولاد،
+  // بیمه‌ی تأمین اجتماعی) be recorded without needing a hardcoded field
+  // for every country's terminology.
+  final List<PayslipCustomField> customFields;
 
   const PayslipDetails({
     this.brutto,
@@ -533,7 +545,6 @@ class PayslipDetails {
     this.depositedAmount,
     this.lohnsteuer,
     this.solidaritaetszuschlag,
-    this.kirchensteuer,
     this.krankenversicherung,
     this.pflegeversicherung,
     this.rentenversicherung,
@@ -545,6 +556,7 @@ class PayslipDetails {
     this.steuerklasse,
     this.arbeitgeber,
     this.abrechnungsmonat,
+    this.customFields = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -553,7 +565,6 @@ class PayslipDetails {
         'depositedAmount': depositedAmount,
         'lohnsteuer': lohnsteuer,
         'solidaritaetszuschlag': solidaritaetszuschlag,
-        'kirchensteuer': kirchensteuer,
         'krankenversicherung': krankenversicherung,
         'pflegeversicherung': pflegeversicherung,
         'rentenversicherung': rentenversicherung,
@@ -565,6 +576,7 @@ class PayslipDetails {
         'steuerklasse': steuerklasse,
         'arbeitgeber': arbeitgeber,
         'abrechnungsmonat': abrechnungsmonat,
+        'customFields': customFields.map((f) => f.toJson()).toList(),
       };
 
   factory PayslipDetails.fromJson(Map<String, dynamic> j) => PayslipDetails(
@@ -573,7 +585,6 @@ class PayslipDetails {
         depositedAmount: (j['depositedAmount'] as num?)?.toDouble(),
         lohnsteuer: (j['lohnsteuer'] as num?)?.toDouble(),
         solidaritaetszuschlag: (j['solidaritaetszuschlag'] as num?)?.toDouble(),
-        kirchensteuer: (j['kirchensteuer'] as num?)?.toDouble(),
         krankenversicherung: (j['krankenversicherung'] as num?)?.toDouble(),
         pflegeversicherung: (j['pflegeversicherung'] as num?)?.toDouble(),
         rentenversicherung: (j['rentenversicherung'] as num?)?.toDouble(),
@@ -585,6 +596,7 @@ class PayslipDetails {
         steuerklasse: j['steuerklasse'],
         arbeitgeber: j['arbeitgeber'],
         abrechnungsmonat: j['abrechnungsmonat'],
+        customFields: (j['customFields'] as List? ?? []).map((e) => PayslipCustomField.fromJson(e)).toList(),
       );
 }
 
@@ -1702,16 +1714,28 @@ class Store {
       list.add(t);
     }
     // A transfer is really one event told from two accounts' sides -
-    // editing the amount/date/recurrence on one leg should keep the other
-    // leg (kept in its own type/category/account/note) in sync, so the
-    // pair doesn't silently drift apart.
+    // editing the date/recurrence on one leg should keep the other leg
+    // (kept in its own type/category/account/note) in sync, so the pair
+    // doesn't silently drift apart.
     if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') {
       final pairId = _transferPairId(t.id);
       if (pairId != null) {
         final pairIdx = list.indexWhere((x) => x.id == pairId);
         if (pairIdx >= 0) {
+          // The amount is only kept identical between the two legs when
+          // their accounts share the same currency - for a cross-currency
+          // transfer the legs are meant to differ (by the exchange rate
+          // applied when the transfer was made), so overwriting one side's
+          // amount here would silently corrupt that conversion.
+          final accounts = await loadAccounts();
+          String currencyOf(String accountId) {
+            final m = accounts.where((a) => a.id == accountId).toList();
+            return m.isEmpty ? '' : m.first.currency;
+          }
+
+          final sameCurrency = currencyOf(t.accountId) == currencyOf(list[pairIdx].accountId);
           list[pairIdx] = list[pairIdx].copyWith(
-            amount: t.amount,
+            amount: sameCurrency ? t.amount : null,
             date: t.date,
             recurrence: t.recurrence,
             recurrenceDay: t.recurrenceDay,
@@ -3014,7 +3038,6 @@ const _payslipFieldKeywords = <String, List<String>>{
   'netto': ['netto', 'auszahlungsbetrag'],
   'lohnsteuer': ['lohnsteuer'],
   'solidaritaetszuschlag': ['solidaritätszuschlag', 'soli'],
-  'kirchensteuer': ['kirchensteuer'],
   'krankenversicherung': ['krankenversicherung', 'kv'],
   'pflegeversicherung': ['pflegeversicherung', 'pv'],
   'rentenversicherung': ['rentenversicherung', 'rv'],
@@ -3215,23 +3238,30 @@ const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the at
     'in the receipt\'s own language/script. Numbers must be plain (no currency symbols). If a field is '
     'unreadable, use null.';
 
-const _payslipPrompt = 'You are an expert German payslip (Lohnabrechnung) reading assistant. Read the '
-    'attached payslip image and extract structured data. Respond ONLY with compact JSON, no markdown, '
-    'no explanation, in exactly this shape: {"brutto": number or null, "netto": number or null, '
-    '"depositedAmount": number or null, "lohnsteuer": number or null, "solidaritaetszuschlag": number or null, '
-    '"kirchensteuer": number or null, "krankenversicherung": number or null, "pflegeversicherung": number or '
-    'null, "rentenversicherung": number or null, "arbeitslosenversicherung": number or null, '
-    '"vermoegenswirksameLeistungen": number or null, "betrieblicheAltersvorsorge": number or null, '
-    '"vorschuss": number or null, "sonstigeAbzuege": number or null, "steuerklasse": '
-    'string or null, "arbeitgeber": string or null, "abrechnungsmonat": string or null, "date": '
-    '"YYYY-MM-DD" or null}. "depositedAmount" is the actual amount transferred/paid out to the bank '
-    'account (Auszahlungsbetrag) if shown separately from "netto" (they can differ due to advances or '
-    'other payroll deductions). "vermoegenswirksameLeistungen" is VL/capital-formation benefits, '
-    '"betrieblicheAltersvorsorge" is employer-sponsored supplementary pension deductions, "vorschuss" is '
-    'any advance payment deducted, "sonstigeAbzuege" is any other deduction not covered by the other '
-    'fields. "date" is the actual payment/value date (Auszahlungsdatum or Valuta date) '
-    'printed on the payslip - not just the month name. Numbers must be plain (no currency symbols). If '
-    'a field is unreadable, use null.';
+const _payslipPrompt = 'You are an expert payslip-reading assistant that understands payslips from any '
+    'country (German Lohnabrechnung, Iranian فیش حقوقی, and others). Read the attached payslip image and '
+    'extract structured data. Respond ONLY with compact JSON, no markdown, no explanation, in exactly this '
+    'shape: {"brutto": number or null, "netto": number or null, "depositedAmount": number or null, '
+    '"lohnsteuer": number or null, "solidaritaetszuschlag": number or null, "krankenversicherung": number '
+    'or null, "pflegeversicherung": number or null, "rentenversicherung": number or null, '
+    '"arbeitslosenversicherung": number or null, "vermoegenswirksameLeistungen": number or null, '
+    '"betrieblicheAltersvorsorge": number or null, "vorschuss": number or null, "sonstigeAbzuege": number '
+    'or null, "steuerklasse": string or null, "arbeitgeber": string or null, "abrechnungsmonat": string or '
+    'null, "date": "YYYY-MM-DD" or null, "customFields": [{"label": string, "value": number}]}. The named '
+    'fields above (brutto/netto/lohnsteuer/etc.) are German payroll terms - fill them ONLY when the '
+    "payslip actually uses those German concepts. For a payslip in any other format (e.g. an Iranian "
+    'فیش حقوقی with items like حقوق پایه، حق مسکن، حق اولاد، حق خواربار، بیمه‌ی تأمین اجتماعی، مالیات '
+    'حقوق، اضافه‌کاری، پاداش، عیدی، کسورات), leave the German fields null and instead put EVERY line item '
+    "printed on the payslip (its label exactly as printed, in the payslip's own language, and its amount) "
+    'into "customFields" - this applies regardless of country, so nothing printed on the payslip is lost. '
+    '"depositedAmount" is the actual amount transferred/paid out to the bank account if shown separately '
+    'from "netto" (they can differ due to advances or other payroll deductions) - for a non-German '
+    'payslip this is usually the final net/take-home amount. "vermoegenswirksameLeistungen" is '
+    'VL/capital-formation benefits, "betrieblicheAltersvorsorge" is employer-sponsored supplementary '
+    'pension deductions, "vorschuss" is any advance payment deducted, "sonstigeAbzuege" is any other '
+    'German-payslip deduction not covered by the other fields. "date" is the actual payment/value date '
+    'printed on the payslip - not just the month name. Numbers must be plain (no currency symbols). If a '
+    'field is unreadable, use null.';
 
 Future<Map<String, dynamic>?> geminiExtractReceipt(String apiKey, String imagePath) =>
     _geminiRequest(apiKey, imagePath, _receiptPrompt);
@@ -6934,6 +6964,7 @@ class _TransferScreenState extends State<TransferScreen> {
   final installmentsCtrl = TextEditingController();
   DateTime? endDate;
   String endMode = 'unlimited'; // 'unlimited' | 'installments' | 'date'
+  final exchangeRateCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -6977,11 +7008,16 @@ class _TransferScreenState extends State<TransferScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حساب مبدأ و مقصد نمی‌توانند یکسان باشند.')));
       return;
     }
+    var convertedAmount = amount;
     if (fromAccount!.currency != toAccount!.currency) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('انتقال بین حساب‌های با ارز متفاوت پشتیبانی نمی‌شود (نرخ تبدیل لازم است).'),
-      ));
-      return;
+      final rate = double.tryParse(exchangeRateCtrl.text.replaceAll(',', '.'));
+      if (rate == null || rate <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('برای انتقال بین ${fromAccount!.currency} و ${toAccount!.currency}، نرخ تبدیل را وارد کنید.'),
+        ));
+        return;
+      }
+      convertedAmount = amount * rate;
     }
     int? recDay;
     int? recWeekday;
@@ -7041,7 +7077,7 @@ class _TransferScreenState extends State<TransferScreen> {
     final inTx = Transaction(
       id: '${baseId}_in',
       type: TxType.income,
-      amount: amount,
+      amount: convertedAmount,
       categoryId: '_transfer_in_',
       accountId: toAccount!.id,
       date: date,
@@ -7094,7 +7130,33 @@ class _TransferScreenState extends State<TransferScreen> {
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 100.00', border: const OutlineInputBorder()),
+            onChanged: (_) => setState(() {}),
           ),
+          if (fromAccount != null && toAccount != null && fromAccount!.currency != toAccount!.currency) ...[
+            const SizedBox(height: 16),
+            TextField(
+              controller: exchangeRateCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: '۱ ${fromAccount!.currency} = ? ${toAccount!.currency}',
+                hintText: 'نرخ تبدیل',
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            Builder(builder: (context) {
+              final amt = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+              final rate = double.tryParse(exchangeRateCtrl.text.replaceAll(',', '.'));
+              if (amt == null || rate == null || rate <= 0) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'معادل: ${ltr(formatMoney(amt * rate, toAccount!.currency))}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: 16),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -9390,7 +9452,6 @@ const _payslipLabels = <String, String>{
   'depositedAmount': 'مبلغ واریز شده به حساب',
   'lohnsteuer': 'مالیات بر درآمد',
   'solidaritaetszuschlag': 'مالیات همبستگی',
-  'kirchensteuer': 'مالیات کلیسا',
   'krankenversicherung': 'بیمه درمانی',
   'pflegeversicherung': 'بیمه مراقبت',
   'rentenversicherung': 'بیمه بازنشستگی',
@@ -9426,6 +9487,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   bool hasGeminiKey = false;
   bool dateConfirmed = false; // true once read successfully by AI or picked manually
   List<Transaction> existingTx = [];
+  List<PayslipCustomField> customFields = [];
 
   @override
   void initState() {
@@ -9439,6 +9501,13 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     if (widget.initial['date'] != null) {
       final parsed = DateTime.tryParse(widget.initial['date'].toString());
       if (parsed != null) date = parsed;
+    }
+    if (widget.initial['customFields'] is List) {
+      customFields = (widget.initial['customFields'] as List)
+          .whereType<Map>()
+          .map((e) => PayslipCustomField(label: (e['label'] ?? '').toString(), value: (e['value'] as num? ?? 0).toDouble()))
+          .where((f) => f.label.trim().isNotEmpty)
+          .toList();
     }
     _load();
   }
@@ -9480,6 +9549,14 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               dateConfirmed = true;
             });
           }
+        }
+        if (result['customFields'] is List) {
+          final parsed = (result['customFields'] as List)
+              .whereType<Map>()
+              .map((e) => PayslipCustomField(label: (e['label'] ?? '').toString(), value: (e['value'] as num? ?? 0).toDouble()))
+              .where((f) => f.label.trim().isNotEmpty)
+              .toList();
+          if (parsed.isNotEmpty) setState(() => customFields = parsed);
         }
       }
     } catch (e) {
@@ -9576,7 +9653,6 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       depositedAmount: num_('depositedAmount'),
       lohnsteuer: num_('lohnsteuer'),
       solidaritaetszuschlag: num_('solidaritaetszuschlag'),
-      kirchensteuer: num_('kirchensteuer'),
       krankenversicherung: num_('krankenversicherung'),
       pflegeversicherung: num_('pflegeversicherung'),
       rentenversicherung: num_('rentenversicherung'),
@@ -9588,6 +9664,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       steuerklasse: steuerklasseCtrl.text.trim().isEmpty ? null : steuerklasseCtrl.text.trim(),
       arbeitgeber: arbeitgeberCtrl.text.trim().isEmpty ? null : arbeitgeberCtrl.text.trim(),
       abrechnungsmonat: monatCtrl.text.trim().isEmpty ? null : monatCtrl.text.trim(),
+      customFields: customFields,
     );
     final duplicate = existingTx.any((t) =>
         t.type == TxType.income &&
@@ -9699,6 +9776,60 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                   decoration: InputDecoration(labelText: _payslipLabels[k], border: const OutlineInputBorder()),
                 ),
               ))),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('فیلدهای دیگر (مثلاً حق مسکن، حق اولاد و...)', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              TextButton.icon(
+                onPressed: () async {
+                  final labelCtrl = TextEditingController();
+                  final valueCtrl = TextEditingController();
+                  final added = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('افزودن فیلد'),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'عنوان (مثلاً حق مسکن)'), autofocus: true),
+                          const SizedBox(height: 8),
+                          TextField(controller: valueCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'مبلغ')),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('add'))),
+                      ],
+                    ),
+                  );
+                  if (added != true) return;
+                  final v = double.tryParse(valueCtrl.text.replaceAll(',', '.'));
+                  if (labelCtrl.text.trim().isEmpty || v == null) return;
+                  setState(() => customFields = [...customFields, PayslipCustomField(label: labelCtrl.text.trim(), value: v)]);
+                },
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('افزودن فیلد'),
+              ),
+            ],
+          ),
+          ...customFields.asMap().entries.map((e) => Card(
+                child: ListTile(
+                  dense: true,
+                  title: Text(e.value.label),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(e.value.value.toStringAsFixed(2)),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        onPressed: () => setState(() => customFields = [...customFields]..removeAt(e.key)),
+                      ),
+                    ],
+                  ),
+                ),
+              )),
+          const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
             title: Text('تاریخ: ${formatDate(date)}'),
@@ -9914,6 +10045,12 @@ class TransactionDetailScreen extends StatelessWidget {
                       const Divider(height: 1),
                       _row(context, 'Netto', ltr(formatMoney(t.payslipDetails!.netto!, _currency))),
                     ],
+                    ...t.payslipDetails!.customFields.map((f) => Column(
+                          children: [
+                            const Divider(height: 1),
+                            _row(context, f.label, ltr(formatMoney(f.value, _currency))),
+                          ],
+                        )),
                   ],
                 ),
               ),
@@ -9999,7 +10136,6 @@ class _TransactionEditorState extends State<TransactionEditor> {
           'depositedAmount': pd.depositedAmount,
           'lohnsteuer': pd.lohnsteuer,
           'solidaritaetszuschlag': pd.solidaritaetszuschlag,
-          'kirchensteuer': pd.kirchensteuer,
           'krankenversicherung': pd.krankenversicherung,
           'pflegeversicherung': pd.pflegeversicherung,
           'rentenversicherung': pd.rentenversicherung,
@@ -10140,8 +10276,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           depositedAmount: num_('depositedAmount'),
           lohnsteuer: num_('lohnsteuer'),
           solidaritaetszuschlag: num_('solidaritaetszuschlag'),
-          kirchensteuer: num_('kirchensteuer'),
-          krankenversicherung: num_('krankenversicherung'),
+              krankenversicherung: num_('krankenversicherung'),
           pflegeversicherung: num_('pflegeversicherung'),
           rentenversicherung: num_('rentenversicherung'),
           arbeitslosenversicherung: num_('arbeitslosenversicherung'),
