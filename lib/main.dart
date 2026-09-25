@@ -6696,6 +6696,25 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
     setState(() {});
   }
 
+  Future<void> _renameList(ShoppingList l) async {
+    final ctrl = TextEditingController(text: l.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('ویرایش نام لیست'),
+        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام لیست'), autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || name == l.name) return;
+    lists = lists.map((x) => x.id == l.id ? x.copyWith(name: name) : x).toList();
+    await Store.saveShoppingLists(lists);
+    setState(() {});
+  }
+
   Future<void> _deleteList(ShoppingList l) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -6733,7 +6752,13 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
                     leading: const Icon(Icons.shopping_cart_outlined),
                     title: Text(l.name),
                     subtitle: Text('$done/${l.items.length} خریداری‌شده'),
-                    trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deleteList(l)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () => _renameList(l)),
+                        IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deleteList(l)),
+                      ],
+                    ),
                     onTap: () async {
                       await Navigator.push(context, MaterialPageRoute(builder: (_) => ShoppingListDetailScreen(listId: l.id)));
                       await _load();
@@ -6875,7 +6900,32 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
     final estimatedTotal = currentList.items.fold(0.0, (s, i) => s + (i.estimatedPrice ?? 0));
     final checkedCount = currentList.items.where((i) => i.checked).length;
     return Scaffold(
-      appBar: AppBar(title: Text(currentList.name)),
+      appBar: AppBar(
+        title: Text(currentList.name),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'ویرایش نام لیست',
+            onPressed: () async {
+              final ctrl = TextEditingController(text: currentList.name);
+              final name = await showDialog<String>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('ویرایش نام لیست'),
+                  content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام لیست'), autofocus: true),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
+                  ],
+                ),
+              );
+              if (name == null || name.isEmpty || name == currentList.name) return;
+              _updateList(currentList.copyWith(name: name));
+              await _persist();
+            },
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(onPressed: () => _addOrEditItem(), child: const Icon(Icons.add)),
       body: Column(
         children: [
