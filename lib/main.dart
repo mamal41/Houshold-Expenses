@@ -7328,6 +7328,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
   String? categoryFilter;
   String? accountFilter;
   bool? recurringFilter; // null = all, true = recurring only, false = non-recurring only
+  String draftFilter = 'exclude'; // 'exclude' (default) | 'only' | 'all'
   _TxSortMode sort = _TxSortMode.createdDesc;
 
   @override
@@ -7400,13 +7401,15 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
       (typeFilter != null ? 1 : 0) +
       (categoryFilter != null ? 1 : 0) +
       (accountFilter != null ? 1 : 0) +
-      (recurringFilter != null ? 1 : 0);
+      (recurringFilter != null ? 1 : 0) +
+      (draftFilter != 'exclude' ? 1 : 0);
 
   Future<void> _openFilterSheet() async {
     TxType? localType = typeFilter;
     String? localCategory = categoryFilter;
     String? localAccount = accountFilter;
     bool? localRecurring = recurringFilter;
+    String localDraft = draftFilter;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -7428,6 +7431,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                         localCategory = null;
                         localAccount = null;
                         localRecurring = null;
+                        localDraft = 'exclude';
                       }),
                       child: const Text('پاک‌کردن همه'),
                     ),
@@ -7458,6 +7462,19 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     DropdownMenuItem(value: false, child: Text('فقط غیرتکرارشونده')),
                   ],
                   onChanged: (v) => setLocal(() => localRecurring = v),
+                ),
+                const SizedBox(height: 16),
+                Text('پیش‌نویس‌ها', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  initialValue: localDraft,
+                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                  items: const [
+                    DropdownMenuItem(value: 'exclude', child: Text('بدون پیش‌نویس (پیش‌فرض)')),
+                    DropdownMenuItem(value: 'only', child: Text('فقط پیش‌نویس‌ها')),
+                    DropdownMenuItem(value: 'all', child: Text('همه (شامل پیش‌نویس)')),
+                  ],
+                  onChanged: (v) => setLocal(() => localDraft = v ?? localDraft),
                 ),
                 const SizedBox(height: 16),
                 Text('دسته‌بندی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
@@ -7499,6 +7516,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                       categoryFilter = localCategory;
                       accountFilter = localAccount;
                       recurringFilter = localRecurring;
+                      draftFilter = localDraft;
                     });
                     Navigator.pop(ctx);
                   },
@@ -7564,6 +7582,8 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
       if (categoryFilter != null && !categoryMatchesFilter(t.categoryId, categoryFilter!, categories)) return false;
       if (accountFilter != null && t.accountId != accountFilter) return false;
       if (recurringFilter != null && t.isRecurring != recurringFilter) return false;
+      if (draftFilter == 'exclude' && t.draft) return false;
+      if (draftFilter == 'only' && !t.draft) return false;
       if (q.isNotEmpty) {
         final hay = [
           categoryName(t.categoryId),
@@ -7664,6 +7684,11 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     _appliedFilterChip(
                       recurringFilter! ? 'فقط تکرارشونده' : 'فقط غیرتکرارشونده',
                       () => setState(() => recurringFilter = null),
+                    ),
+                  if (draftFilter != 'exclude')
+                    _appliedFilterChip(
+                      draftFilter == 'only' ? 'فقط پیش‌نویس‌ها' : 'شامل پیش‌نویس',
+                      () => setState(() => draftFilter = 'exclude'),
                     ),
                   if (categoryFilter != null)
                     _appliedFilterChip(
