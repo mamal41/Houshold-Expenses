@@ -370,7 +370,7 @@ class SavingsGoal {
   final double targetAmount;
   final DateTime? targetDate;
   final String currency;
-  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, this.currency = 'EUR'});
+  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, this.currency = 'IRR'});
 
   Map<String, dynamic> toJson() =>
       {'id': id, 'name': name, 'targetAmount': targetAmount, 'targetDate': targetDate?.toIso8601String(), 'currency': currency};
@@ -379,7 +379,7 @@ class SavingsGoal {
         name: j['name'],
         targetAmount: (j['targetAmount'] as num).toDouble(),
         targetDate: j['targetDate'] != null ? DateTime.tryParse(j['targetDate']) : null,
-        currency: j['currency'] ?? 'EUR',
+        currency: j['currency'] ?? 'IRR',
       );
 }
 
@@ -467,7 +467,7 @@ class Account {
         id: j['id'],
         name: j['name'],
         type: AccountType.values.byName(j['type'] ?? 'bank'),
-        currency: j['currency'] ?? 'EUR',
+        currency: j['currency'] ?? 'IRR',
         initialBalance: (j['initialBalance'] as num?)?.toDouble() ?? 0,
       );
 }
@@ -1067,7 +1067,7 @@ const defaultCategories = <Category>[
   Category(id: '_transfer_in_', name: 'انتقال بین حساب‌ها', type: TxType.income),
 ];
 
-const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'EUR');
+const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'IRR');
 
 const kCategoryIcons = <String, IconData>{
   'e_food': Icons.restaurant_outlined,
@@ -3343,6 +3343,14 @@ Future<String> geminiTextRequest(String apiKey, String prompt) async {
 
 // ============================== Money formatting ==============================
 
+/// Human-friendly currency name for display: the Iranian Rial is shown as
+/// "ریال" (instead of the ISO code IRR) when the app language is Persian;
+/// every other currency keeps its code.
+String currencyLabel(String code) {
+  if (code == 'IRR' && currentLanguage.value == AppLanguage.fa) return 'ریال';
+  return code;
+}
+
 String formatMoney(double amount, String currency) {
   final n = persianDigits(amount.toStringAsFixed(2));
   switch (currency) {
@@ -3419,7 +3427,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'EUR' : a.first.currency;
+    return a.isEmpty ? 'IRR' : a.first.currency;
   }
 
   int get draftCount => tx.where((t) => t.draft).length;
@@ -3479,7 +3487,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String get primaryCurrency {
     if (dashboardAccountFilter != null) return currencyOf(dashboardAccountFilter!);
-    if (accounts.isEmpty) return 'EUR';
+    if (accounts.isEmpty) return 'IRR';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -3759,7 +3767,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
                     items: [
                       DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
-                      ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
+                      ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
                     ],
                     onChanged: (v) => setState(() => dashboardAccountFilter = v),
                   ),
@@ -4365,7 +4373,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'EUR' : a.first.currency;
+    return a.isEmpty ? 'IRR' : a.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -4486,7 +4494,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'EUR' : a.first.currency;
+    return a.isEmpty ? 'IRR' : a.first.currency;
   }
 
   String _recurrenceLabel(Transaction t) {
@@ -4637,12 +4645,12 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   String get primaryCurrency {
     if (accountFilter != null) return currencyOf(accountFilter!);
-    if (accounts.isEmpty) return 'EUR';
+    if (accounts.isEmpty) return 'IRR';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -4828,7 +4836,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
               decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
               items: [
                 DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
-                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
+                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
               ],
               onChanged: (v) => setState(() => accountFilter = v),
             ),
@@ -5024,7 +5032,7 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'EUR' : a.first.currency;
+    return a.isEmpty ? 'IRR' : a.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -5199,7 +5207,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
   }
 
   String get primaryCurrency {
-    if (accounts.isEmpty) return 'EUR';
+    if (accounts.isEmpty) return 'IRR';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -5209,7 +5217,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   /// Average monthly income/expense (in the primary currency, transfers
@@ -5404,7 +5412,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
   bool loading = true;
   List<Account> accounts = [];
   List<Transaction> tx = [];
-  String baseCurrency = 'EUR';
+  String baseCurrency = 'IRR';
   Map<String, double> rates = {};
 
   @override
@@ -5417,7 +5425,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
     accounts = await Store.loadAccounts();
     tx = await Store.loadTransactions();
     final storedBase = await Store.loadBaseCurrency();
-    baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'EUR');
+    baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'IRR');
     rates = await Store.loadExchangeRates();
     setState(() => loading = false);
   }
@@ -5465,7 +5473,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                 DropdownButtonFormField<String>(
                   initialValue: localBase,
                   decoration: const InputDecoration(labelText: 'ارز مرجع'),
-                  items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                  items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(currencyLabel(c)))).toList(),
                   onChanged: (v) => setLocal(() => localBase = v ?? localBase),
                 ),
                 const SizedBox(height: 12),
@@ -5481,7 +5489,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                             child: TextField(
                               controller: e.value,
                               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              decoration: InputDecoration(labelText: '۱ ${e.key} = ? $localBase', isDense: true),
+                              decoration: InputDecoration(labelText: '۱ ${currencyLabel(e.key)} = ? ${currencyLabel(localBase)}', isDense: true),
                             ),
                           )),
                 ],
@@ -5542,7 +5550,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('ارزش خالص فعلی (تقریبی، بر اساس $baseCurrency)', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  Text('ارزش خالص فعلی (تقریبی، بر اساس ${currencyLabel(baseCurrency)})', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                   const SizedBox(height: 4),
                   Text(
                     ltr(formatMoney(current, baseCurrency)),
@@ -5649,11 +5657,11 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   String get primaryCurrency {
-    if (accounts.isEmpty) return 'EUR';
+    if (accounts.isEmpty) return 'IRR';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -6017,7 +6025,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   Future<void> _addOrEditGoal({SavingsGoal? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final amountCtrl = TextEditingController(text: existing?.targetAmount.toStringAsFixed(0) ?? '');
-    String currency = existing?.currency ?? 'EUR';
+    String currency = existing?.currency ?? 'IRR';
     DateTime? targetDate = existing?.targetDate;
     final result = await showDialog<bool>(
       context: context,
@@ -6045,7 +6053,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                       child: DropdownButtonFormField<String>(
                         initialValue: currency,
                         decoration: const InputDecoration(labelText: 'واحد پول'),
-                        items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                        items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(currencyLabel(c)))).toList(),
                         onChanged: (v) => setLocal(() => currency = v ?? currency),
                       ),
                     ),
@@ -6116,7 +6124,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
               TextField(
                 controller: amountCtrl,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(labelText: 'مبلغ واریزی (${g.currency})'),
+                decoration: InputDecoration(labelText: 'مبلغ واریزی (${currencyLabel(g.currency)})'),
                 autofocus: true,
               ),
               const SizedBox(height: 12),
@@ -6597,7 +6605,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               DropdownButtonFormField<Account>(
                 initialValue: targetAccount,
                 decoration: const InputDecoration(labelText: 'حساب مقصد', border: OutlineInputBorder(), isDense: true),
-                items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+                items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
                 onChanged: (v) => setState(() => targetAccount = v),
               ),
               const SizedBox(height: 10),
@@ -7063,7 +7071,7 @@ class _TransferScreenState extends State<TransferScreen> {
       final rate = double.tryParse(exchangeRateCtrl.text.replaceAll(',', '.'));
       if (rate == null || rate <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('برای انتقال بین ${fromAccount!.currency} و ${toAccount!.currency}، نرخ تبدیل را وارد کنید.'),
+          content: Text('برای انتقال بین ${currencyLabel(fromAccount!.currency)} و ${currencyLabel(toAccount!.currency)}، نرخ تبدیل را وارد کنید.'),
         ));
         return;
       }
@@ -7163,7 +7171,7 @@ class _TransferScreenState extends State<TransferScreen> {
           DropdownButtonFormField<Account>(
             initialValue: fromAccount,
             decoration: InputDecoration(labelText: tr('from_account'), border: const OutlineInputBorder()),
-            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
             onChanged: (v) => setState(() => fromAccount = v),
           ),
           const SizedBox(height: 12),
@@ -7172,7 +7180,7 @@ class _TransferScreenState extends State<TransferScreen> {
           DropdownButtonFormField<Account>(
             initialValue: toAccount,
             decoration: InputDecoration(labelText: tr('to_account'), border: const OutlineInputBorder()),
-            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
             onChanged: (v) => setState(() => toAccount = v),
           ),
           const SizedBox(height: 16),
@@ -7188,7 +7196,7 @@ class _TransferScreenState extends State<TransferScreen> {
               controller: exchangeRateCtrl,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
-                labelText: '۱ ${fromAccount!.currency} = ? ${toAccount!.currency}',
+                labelText: '۱ ${currencyLabel(fromAccount!.currency)} = ? ${currencyLabel(toAccount!.currency)}',
                 hintText: 'نرخ تبدیل',
                 border: const OutlineInputBorder(),
               ),
@@ -7351,7 +7359,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -7803,7 +7811,7 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -8020,7 +8028,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   Map<Category, double> _expenseByTopCategory(List<Transaction> list, String currency) {
@@ -8073,7 +8081,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       for (final a in accounts) {
         counts[a.currency] = (counts[a.currency] ?? 0) + 1;
       }
-      primaryCurrency = counts.isEmpty ? 'EUR' : (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+      primaryCurrency = counts.isEmpty ? 'IRR' : (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
     }
 
     double sumFor(List<Transaction> list, TxType type) => list
@@ -8276,11 +8284,11 @@ class _ForecastScreenState extends State<ForecastScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   String get primaryCurrency {
-    if (accounts.isEmpty) return 'EUR';
+    if (accounts.isEmpty) return 'IRR';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -8477,7 +8485,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   String categoryName(String id) {
@@ -8556,7 +8564,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
 
   String get primaryCurrency {
     if (accountFilter != null) return currencyOf(accountFilter!);
-    if (accounts.isEmpty) return 'EUR';
+    if (accounts.isEmpty) return 'IRR';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -8648,7 +8656,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
               items: [
                 DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
-                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.currency})'))),
+                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
               ],
               onChanged: (v) => setState(() => accountFilter = v),
             ),
@@ -9401,7 +9409,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
             decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
-            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
           const SizedBox(height: 16),
@@ -9931,7 +9939,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           DropdownButtonFormField<Account>(
             initialValue: selectedAccount,
             decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
-            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})'))).toList(),
+            items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
           const SizedBox(height: 24),
@@ -9976,7 +9984,7 @@ class TransactionDetailScreen extends StatelessWidget {
 
   String get _currency {
     final m = accounts.where((a) => a.id == t.accountId).toList();
-    return m.isEmpty ? 'EUR' : m.first.currency;
+    return m.isEmpty ? 'IRR' : m.first.currency;
   }
 
   Widget _row(BuildContext context, String label, String value) {
@@ -10782,7 +10790,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             initialValue: selectedAccount,
             decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
             items: widget.accounts
-                .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${a.currency})')))
+                .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})')))
                 .toList(),
             onChanged: (v) => setState(() {
               selectedAccount = v;
@@ -11319,7 +11327,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
         ? existing.initialBalance.toStringAsFixed(2)
         : '');
     AccountType type = existing?.type ?? AccountType.bank;
-    String currency = existing?.currency ?? 'EUR';
+    String currency = existing?.currency ?? 'IRR';
     final result = await showDialog<Account>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
@@ -11341,7 +11349,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                 DropdownButtonFormField<String>(
                   initialValue: currency,
                   decoration: const InputDecoration(labelText: 'واحد پول'),
-                  items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                  items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(currencyLabel(c)))).toList(),
                   onChanged: (v) => setLocal(() => currency = v ?? currency),
                 ),
                 const SizedBox(height: 12),
@@ -11443,7 +11451,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                     subtitle: Text(
                       a.initialBalance != 0
                           ? '${a.type.label} • ${a.currency} • موجودی اولیه: ${ltr(formatMoney(a.initialBalance, a.currency))}'
-                          : '${a.type.label} • ${a.currency}',
+                          : '${a.type.label} • ${currencyLabel(a.currency)}',
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
