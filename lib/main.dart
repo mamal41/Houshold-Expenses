@@ -1302,7 +1302,7 @@ Future<void> retryPendingCategoryIcons() async {
 Future<void> checkBudgetGoals() async {
   final goals = await Store.loadBudgetGoals();
   if (goals.isEmpty) return;
-  final tx = await Store.loadTransactions();
+  final tx = await Store.loadConfirmedTransactions();
   final categories = await Store.loadCategories();
   final now = DateTime.now();
   final monthKey = '${now.year}-${now.month}';
@@ -1367,7 +1367,7 @@ Future<void> checkBudgetGoals() async {
 /// notification when the current pace is unusually high - a spike worth
 /// noticing even if no budget goal was ever set for that category.
 Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
-  final tx = await Store.loadTransactions();
+  final tx = await Store.loadConfirmedTransactions();
   final categories = await Store.loadCategories();
   final now = DateTime.now();
   final monthKey = '${now.year}-${now.month}';
@@ -1695,6 +1695,13 @@ class Store {
   static Future<void> saveExchangeRates(Map<String, double> rates) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_exchangeRatesKey, jsonEncode(rates));
+  }
+
+  /// Transactions that count in balances, totals, budgets, charts and
+  /// reports. Drafts are excluded until they are confirmed.
+  static Future<List<Transaction>> loadConfirmedTransactions() async {
+    final all = await loadTransactions();
+    return all.where((t) => !t.draft).toList();
   }
 
   static Future<List<Transaction>> loadTransactions() async {
@@ -3472,10 +3479,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadTransactions();
+    await _reloadTx();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
-    tx.sort((a, b) => b.date.compareTo(a.date));
     shoppingPending = await _loadShoppingPending();
     setState(() => loading = false);
     // Best-effort background retry for categories that only got a generic
@@ -3501,7 +3507,17 @@ class _HomeScreenState extends State<HomeScreen> {
     return lists.fold<int>(0, (sum, l) => sum + l.items.where((i) => !i.checked).length);
   }
 
-  int get draftCount => tx.where((t) => t.draft).length;
+  int _draftCount = 0;
+  int get draftCount => _draftCount;
+
+  /// Loads transactions for the home screen: [tx] holds only confirmed ones
+  /// (drafts must not affect any balance, total, chart or list here); the
+  /// number of drafts is kept separately for the badge.
+  Future<void> _reloadTx() async {
+    final all = await Store.loadTransactions();
+    _draftCount = all.where((t) => t.draft).length;
+    tx = all.where((t) => !t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+  }
 
   Map<String, double> get totalBalanceByCurrency {
     final map = <String, double>{};
@@ -3654,8 +3670,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // screen's own (possibly stale) in-memory list - upsertTransaction /
     // deleteTransaction already operate on the freshest persisted data, so
     // this keeps the UI in sync with what was actually saved.
-    tx = await Store.loadTransactions();
-    tx.sort((a, b) => b.date.compareTo(a.date));
+    await _reloadTx();
     if (mounted) setState(() {});
   }
 
@@ -3671,8 +3686,7 @@ class _HomeScreenState extends State<HomeScreen> {
             for (final t in removed) {
               await Store.upsertTransaction(t);
             }
-            tx = await Store.loadTransactions();
-            tx.sort((a, b) => b.date.compareTo(a.date));
+            await _reloadTx();
             if (mounted) setState(() {});
           },
         ),
@@ -3689,8 +3703,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _delete(Transaction t) async {
     await NotificationService.instance.cancelForTransaction(t.id);
     final removed = await Store.deleteTransaction(t.id);
-    tx = await Store.loadTransactions();
-    tx.sort((a, b) => b.date.compareTo(a.date));
+    await _reloadTx();
     if (mounted) setState(() {});
     _showUndoSnackbar(removed);
   }
@@ -4570,7 +4583,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
   }
 
   Future<void> _load() async {
-    final all = await Store.loadTransactions();
+    final all = await Store.loadConfirmedTransactions();
     tx = all.where((t) => t.isRecurring).toList()..sort((a, b) => b.date.compareTo(a.date));
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
@@ -4722,7 +4735,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     setState(() => loading = false);
@@ -5288,7 +5301,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     accounts = await Store.loadAccounts();
     goals = await Store.loadSavingsGoals();
     contributions = await Store.loadSavingsContributions();
@@ -5514,7 +5527,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
 
   Future<void> _load() async {
     accounts = await Store.loadAccounts();
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     final storedBase = await Store.loadBaseCurrency();
     baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'IRR');
     rates = await Store.loadExchangeRates();
@@ -5740,7 +5753,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
 
   Future<void> _load() async {
     categories = await Store.loadCategories();
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     goals = await Store.loadBudgetGoals();
     accounts = await Store.loadAccounts();
     setState(() => loading = false);
@@ -5961,7 +5974,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
 
   Future<void> _load() async {
     categories = await Store.loadCategories();
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     goals = await Store.loadBudgetGoals();
     setState(() => loading = false);
   }
@@ -8027,7 +8040,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     setState(() => loading = false);
@@ -8367,7 +8380,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     setState(() => loading = false);
@@ -8568,7 +8581,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadTransactions();
+    tx = await Store.loadConfirmedTransactions();
     accounts = await Store.loadAccounts();
     categories = await Store.loadCategories();
     setState(() => loading = false);
@@ -10491,7 +10504,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     );
     // Scheduling/cancelling reminders doesn't need to block the save flow -
     // let it run in the background so the screen closes immediately.
-    if (notifyEnabled) {
+    if (notifyEnabled && !result.draft) {
       unawaited(NotificationService.instance.scheduleForTransaction(result, selectedCategory!.name));
     } else {
       unawaited(NotificationService.instance.cancelForTransaction(result.id));
