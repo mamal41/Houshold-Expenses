@@ -3367,7 +3367,9 @@ String formatMoney(double amount, String currency) {
     case 'AED':
       return '${ltr(n)} د.إ';
     case 'IRR':
-      return '${ltr(n)} ریال';
+      final whole = amount.round().abs().toString();
+      final grouped = whole.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
+      return '${ltr(persianDigits('${amount < 0 ? '-' : ''}$grouped'))} ریال';
     default:
       return ltr('$n $currency');
   }
@@ -9120,7 +9122,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       final result = await geminiExtractReceipt(key.trim(), widget.imagePath);
       if (result != null) {
         if (result['merchant'] != null) merchantCtrl.text = result['merchant'];
-        if (result['total'] != null) totalCtrl.text = (result['total'] as num).toStringAsFixed(2);
+        if (result['total'] != null) {
+          final t = (result['total'] as num).toDouble();
+          totalCtrl.text = t == t.roundToDouble() ? t.toStringAsFixed(0) : t.toStringAsFixed(2);
+        }
         if (result['date'] != null) {
           final parsed = DateTime.tryParse(result['date']);
           if (parsed != null) {
@@ -9418,16 +9423,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: keepReceipt! ? Colors.amber.shade50 : Colors.green.shade50,
+                color: (keepReceipt! ? Colors.amber : Colors.green).withValues(alpha: Theme.of(context).brightness == Brightness.dark ? 0.14 : 0.12),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: keepReceipt! ? Colors.amber.shade200 : Colors.green.shade200),
+                border: Border.all(color: (keepReceipt! ? Colors.amber : Colors.green).withValues(alpha: 0.45)),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
                     keepReceipt! ? Icons.receipt_long : Icons.check_circle_outline,
-                    color: keepReceipt! ? Colors.amber.shade800 : Colors.green.shade800,
+                    color: keepReceipt! ? (Theme.of(context).brightness == Brightness.dark ? Colors.amber.shade300 : Colors.amber.shade800) : (Theme.of(context).brightness == Brightness.dark ? Colors.green.shade300 : Colors.green.shade800),
                     size: 20,
                   ),
                   const SizedBox(width: 8),
@@ -9439,7 +9444,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           keepReceipt! ? 'بهتر است فیش را نگه دارید' : 'نیازی به نگه‌داشتن فیش نیست',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: keepReceipt! ? Colors.amber.shade900 : Colors.green.shade900,
+                            color: keepReceipt! ? (Theme.of(context).brightness == Brightness.dark ? Colors.amber.shade200 : Colors.amber.shade900) : (Theme.of(context).brightness == Brightness.dark ? Colors.green.shade200 : Colors.green.shade900),
                           ),
                         ),
                         if (keepReceiptReason != null) ...[
@@ -9472,9 +9477,9 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                      '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                       '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                      '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                      '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRR') : ''}',
                     ),
                     if (it.hasWarrantyInfo) ...[
                       const SizedBox(height: 4),
@@ -10854,9 +10859,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${it.quantity != null ? 'تعداد: ${ltr(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2))}' : ''}'
+                        '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                         '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                        '${it.price != null ? ltr('€${it.price!.toStringAsFixed(2)}') : ''}',
+                        '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRR') : ''}',
                       ),
                       if (it.hasWarrantyInfo) ...[
                         const SizedBox(height: 4),
