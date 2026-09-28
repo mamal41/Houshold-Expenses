@@ -10000,11 +10000,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  const Row(
                     children: [
-                      const Icon(Icons.schedule_outlined, size: 20),
-                      const SizedBox(width: 10),
-                      const Expanded(child: Text('پشتیبان‌گیری خودکار', style: TextStyle(fontWeight: FontWeight.w600))),
+                      Icon(Icons.schedule_outlined, size: 20),
+                      SizedBox(width: 10),
+                      Expanded(child: Text('پشتیبان‌گیری خودکار', style: TextStyle(fontWeight: FontWeight.w600))),
                     ],
                   ),
                   const SizedBox(height: 6),
