@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Text;
+import 'package:flutter/material.dart' as material show Text;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
     show SystemNavigator, SystemChrome, SystemUiMode, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
@@ -125,6 +126,49 @@ const _persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '�
 /// Converts ASCII digits to Persian numerals when the app language is
 /// Persian; passes other characters (and other languages' text) through
 /// unchanged.
+/// Drop-in replacement for Flutter's [material.Text]: when the app language
+/// is Persian every digit is shown as a Persian digit, so numbers look the
+/// same on every screen without touching each string one by one.
+class Text extends StatelessWidget {
+  final String data;
+  final TextStyle? style;
+  final StrutStyle? strutStyle;
+  final TextAlign? textAlign;
+  final TextDirection? textDirection;
+  final bool? softWrap;
+  final TextOverflow? overflow;
+  final TextScaler? textScaler;
+  final int? maxLines;
+  final String? semanticsLabel;
+  const Text(
+    this.data, {
+    super.key,
+    this.style,
+    this.strutStyle,
+    this.textAlign,
+    this.textDirection,
+    this.softWrap,
+    this.overflow,
+    this.textScaler,
+    this.maxLines,
+    this.semanticsLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) => material.Text(
+        persianDigits(data),
+        style: style,
+        strutStyle: strutStyle,
+        textAlign: textAlign,
+        textDirection: textDirection,
+        softWrap: softWrap,
+        overflow: overflow,
+        textScaler: textScaler,
+        maxLines: maxLines,
+        semanticsLabel: semanticsLabel,
+      );
+}
+
 String persianDigits(String input) {
   if (currentLanguage.value != AppLanguage.fa) return input;
   final buffer = StringBuffer();
@@ -362,7 +406,7 @@ class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'ماه قبل', onPressed: () => _shiftMonth(-1)),
+                  IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'ماه بعد', onPressed: () => _shiftMonth(1)),
                   Expanded(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -383,7 +427,7 @@ class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
                       ],
                     ),
                   ),
-                  IconButton(icon: const Icon(Icons.chevron_left), tooltip: 'ماه بعد', onPressed: () => _shiftMonth(1)),
+                  IconButton(icon: const Icon(Icons.chevron_left), tooltip: 'ماه قبل', onPressed: () => _shiftMonth(-1)),
                 ],
               ),
               Row(
@@ -762,6 +806,15 @@ class ReceiptItemEntry {
     this.warrantyNote,
   });
 
+  ReceiptItemEntry scaled(double f) => ReceiptItemEntry(
+        name: name,
+        quantity: quantity,
+        price: price == null ? null : roundMoney(price! * f),
+        warrantyUntil: warrantyUntil,
+        returnUntil: returnUntil,
+        warrantyNote: warrantyNote,
+      );
+
   bool get hasWarrantyInfo => warrantyUntil != null || returnUntil != null || (warrantyNote?.isNotEmpty ?? false);
 
   Map<String, dynamic> toJson() => {
@@ -833,6 +886,29 @@ class PayslipDetails {
     this.customFields = const [],
   });
 
+  PayslipDetails scaled(double f) {
+    double? m(double? v) => v == null ? null : roundMoney(v * f);
+    return PayslipDetails(
+      brutto: m(brutto),
+      netto: m(netto),
+      depositedAmount: m(depositedAmount),
+      lohnsteuer: m(lohnsteuer),
+      solidaritaetszuschlag: m(solidaritaetszuschlag),
+      krankenversicherung: m(krankenversicherung),
+      pflegeversicherung: m(pflegeversicherung),
+      rentenversicherung: m(rentenversicherung),
+      arbeitslosenversicherung: m(arbeitslosenversicherung),
+      vermoegenswirksameLeistungen: m(vermoegenswirksameLeistungen),
+      betrieblicheAltersvorsorge: m(betrieblicheAltersvorsorge),
+      vorschuss: m(vorschuss),
+      sonstigeAbzuege: m(sonstigeAbzuege),
+      steuerklasse: steuerklasse,
+      arbeitgeber: arbeitgeber,
+      abrechnungsmonat: abrechnungsmonat,
+      customFields: customFields.map((c) => PayslipCustomField(label: c.label, value: roundMoney(c.value * f))).toList(),
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'brutto': brutto,
         'netto': netto,
@@ -896,6 +972,7 @@ class Transaction {
   final int? notifyDaysBeforeEach; // also remind this many days before EVERY installment's due date
   final PayslipDetails? payslipDetails; // structured fields extracted from a scanned payslip
   final String? imagePath; // persisted copy of the scanned receipt/payslip image (drafts only)
+  final String merchant; // shop / store name (expenses); shown first in lists when filled
 
   const Transaction({
     required this.id,
@@ -919,6 +996,7 @@ class Transaction {
     this.notifyDaysBeforeEach,
     this.payslipDetails,
     this.imagePath,
+    this.merchant = '',
   });
 
   bool get isRecurring => recurrence != RecurrenceFrequency.none;
@@ -946,6 +1024,7 @@ class Transaction {
     PayslipDetails? payslipDetails,
     bool clearPayslipDetails = false,
     String? imagePath,
+    String? merchant,
     bool clearImagePath = false,
     bool clearRecurrenceDay = false,
     bool clearRecurrenceWeekday = false,
@@ -975,6 +1054,15 @@ class Transaction {
         notifyDaysBeforeEach: clearNotifyDaysBeforeEach ? null : (notifyDaysBeforeEach ?? this.notifyDaysBeforeEach),
         payslipDetails: clearPayslipDetails ? null : (payslipDetails ?? this.payslipDetails),
         imagePath: clearImagePath ? null : (imagePath ?? this.imagePath),
+        merchant: merchant ?? this.merchant,
+      );
+
+  /// Same transaction with every money amount multiplied by [f] (used when an
+  /// account's currency unit changes, e.g. Rial -> Toman is f = 0.1).
+  Transaction scaled(double f) => copyWith(
+        amount: roundMoney(amount * f),
+        items: items.map((e) => e.scaled(f)).toList(),
+        payslipDetails: payslipDetails?.scaled(f),
       );
 
   Map<String, dynamic> toJson() => {
@@ -999,6 +1087,7 @@ class Transaction {
         'notifyDaysBeforeEach': notifyDaysBeforeEach,
         'payslipDetails': payslipDetails?.toJson(),
         'imagePath': imagePath,
+        'merchant': merchant,
       };
 
   factory Transaction.fromJson(Map<String, dynamic> j) {
@@ -1033,9 +1122,17 @@ class Transaction {
       notifyDaysBeforeEach: j['notifyDaysBeforeEach'],
       payslipDetails: j['payslipDetails'] != null ? PayslipDetails.fromJson(j['payslipDetails']) : null,
       imagePath: j['imagePath'],
+      merchant: j['merchant'] ?? '',
     );
   }
 }
+
+/// The app's main currency: the currency of the first ("main") account.
+String mainCurrencyOf(List<Account> accounts) => accounts.isEmpty ? 'IRT' : accounts.first.currency;
+
+/// Rounds a converted amount so repeated x10 / x0.1 conversions don't leave
+/// floating-point noise (12345.600000001).
+double roundMoney(double v) => (v * 10000).round() / 10000;
 
 DateTime? nextOccurrencePreview(Transaction t) {
   final now = DateTime.now();
@@ -1530,7 +1627,10 @@ Future<void> retryPendingCategoryIcons() async {
 Future<void> checkBudgetGoals() async {
   final goals = await Store.loadBudgetGoals();
   if (goals.isEmpty) return;
-  final tx = await Store.loadConfirmedTransactions();
+  final accountList = await Store.loadAccounts();
+  final mainCur = mainCurrencyOf(accountList);
+  final curById = {for (final a in accountList) a.id: a.currency};
+  final tx = (await Store.loadConfirmedTransactions()).where((t) => (curById[t.accountId] ?? mainCur) == mainCur).toList();
   final categories = await Store.loadCategories();
   final now = DateTime.now();
   final monthKey = '${now.year}-${now.month}';
@@ -1583,7 +1683,7 @@ Future<void> checkBudgetGoals() async {
       'met' => 'هدف هزینه‌ی «$name» به پایان رسید',
       _ => 'نزدیک شدن به هدف هزینه‌ی «$name»',
     };
-    final body = '${(ratio * 100).round()}% از هدف این ماه (${spend.toStringAsFixed(0)} از ${goal.monthlyAmount.toStringAsFixed(0)}) خرج شده.';
+    final body = persianDigits('${(ratio * 100).round()}%') + ' از هدف این ماه (${formatAmountInput(spend)} از ${formatAmountInput(goal.monthlyAmount)}) خرج شده.';
     await NotificationService.instance.showNow(goal.categoryId.hashCode & 0xffff, title, body);
   }
   if (changed) await Store.saveBudgetNotifyState(notifyState);
@@ -1595,7 +1695,10 @@ Future<void> checkBudgetGoals() async {
 /// notification when the current pace is unusually high - a spike worth
 /// noticing even if no budget goal was ever set for that category.
 Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
-  final tx = await Store.loadConfirmedTransactions();
+  final accountList = await Store.loadAccounts();
+  final mainCur = mainCurrencyOf(accountList);
+  final curById = {for (final a in accountList) a.id: a.currency};
+  final tx = (await Store.loadConfirmedTransactions()).where((t) => (curById[t.accountId] ?? mainCur) == mainCur).toList();
   final categories = await Store.loadCategories();
   final now = DateTime.now();
   final monthKey = '${now.year}-${now.month}';
@@ -1658,7 +1761,7 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
     await NotificationService.instance.showNow(
       (cat.id.hashCode & 0xffff) ^ 0x4000, // distinct id range from budget-goal notifications
       'هزینه‌ی «$name» این ماه غیرعادی بالاست',
-      'تا الان ${currentSpend.toStringAsFixed(0)} خرج شده، حدود $pct% بیشتر از میانگین $lookbackMonths ماه قبل (${avg.toStringAsFixed(0)}).',
+      'تا الان ${formatAmountInput(currentSpend)} خرج شده، حدود ${persianDigits('$pct%')} بیشتر از میانگین ${persianDigits('$lookbackMonths')} ماه قبل (${formatAmountInput(avg)}).',
     );
   }
   if (changed) await Store.saveAnomalyNotifyState(notifyState);
@@ -1888,7 +1991,16 @@ class Store {
   static Future<CalendarSystem> loadCalendarSystem() async {
     final sp = await SharedPreferences.getInstance();
     final code = sp.getString(_calendarSystemKey);
-    return CalendarSystem.values.firstWhere((c) => c.name == code, orElse: () => CalendarSystem.jalali);
+    for (final c in CalendarSystem.values) {
+      if (c.name == code) return c;
+    }
+    // Nothing chosen yet. A brand-new install starts on the Jalali calendar,
+    // but someone who already used the app before this option existed keeps
+    // the Gregorian calendar they were seeing - an update must not switch it.
+    final hadData = sp.containsKey(_txKey) || sp.containsKey(_accKey) || sp.containsKey(_catKey);
+    final chosen = hadData ? CalendarSystem.gregorian : CalendarSystem.jalali;
+    await sp.setString(_calendarSystemKey, chosen.name);
+    return chosen;
   }
 
   static Future<void> saveCalendarSystem(CalendarSystem system) async {
@@ -1932,7 +2044,15 @@ class Store {
     return all.where((t) => !t.draft).toList();
   }
 
+  // In-memory copy of the transactions: decoding + migrating the whole list
+  // on every screen and every save was the main cost behind slow saves and
+  // refreshes. Transaction objects are immutable, so a shallow list copy is
+  // enough to keep callers from disturbing the cache.
+  static List<Transaction>? _txCache;
+
   static Future<List<Transaction>> loadTransactions() async {
+    final cached = _txCache;
+    if (cached != null) return List.of(cached);
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_txKey) ?? [];
     var list = raw.map((s) => Transaction.fromJson(jsonDecode(s))).toList();
@@ -1963,10 +2083,12 @@ class Store {
       return t;
     }).toList();
     if (changed) await saveTransactions(list);
+    _txCache = List.of(list);
     return list;
   }
 
   static Future<void> saveTransactions(List<Transaction> list) async {
+    _txCache = List.of(list);
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_txKey, list.map((t) => jsonEncode(t.toJson())).toList());
   }
@@ -2137,6 +2259,55 @@ class Store {
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_accKey, list.map((a) => jsonEncode(a.toJson())).toList());
   }
+
+  /// The app's main currency = the currency of the first ("main") account.
+  /// Amounts that belong to no account (budget limits, savings goals) are in
+  /// this currency, and totals that can't mix currencies count only accounts
+  /// that use it.
+  static Future<String> loadMainCurrency() async {
+    final accounts = await loadAccounts();
+    return accounts.isEmpty ? 'IRT' : accounts.first.currency;
+  }
+
+  /// Changes the currency of [accountIds] to [newCurrency] and multiplies
+  /// every amount that belongs to those accounts by [factor] (initial
+  /// balance, transactions, item prices, payslip lines). When the main
+  /// account is among them, the budget limits and savings goals - which live
+  /// in the main currency - are scaled by the same factor.
+  static Future<void> convertAccountsCurrency({
+    required Set<String> accountIds,
+    required String newCurrency,
+    required double factor,
+  }) async {
+    final accounts = await loadAccounts();
+    final mainId = accounts.isEmpty ? null : accounts.first.id;
+    final mainConverted = mainId != null && accountIds.contains(mainId);
+
+    await saveAccounts([
+      for (final a in accounts)
+        accountIds.contains(a.id)
+            ? a.copyWith(currency: newCurrency, initialBalance: roundMoney(a.initialBalance * factor))
+            : a,
+    ]);
+
+    final tx = await loadTransactions();
+    await saveTransactions([for (final t in tx) accountIds.contains(t.accountId) ? t.scaled(factor) : t]);
+
+    if (mainConverted) {
+      final budgets = await loadBudgetGoals();
+      await saveBudgetGoals([for (final b in budgets) BudgetGoal(categoryId: b.categoryId, monthlyAmount: roundMoney(b.monthlyAmount * factor))]);
+      final goals = await loadSavingsGoals();
+      await saveSavingsGoals([
+        for (final g in goals)
+          SavingsGoal(id: g.id, name: g.name, targetAmount: roundMoney(g.targetAmount * factor), targetDate: g.targetDate, currency: newCurrency),
+      ]);
+      final contributions = await loadSavingsContributions();
+      await saveSavingsContributions([
+        for (final c in contributions)
+          SavingsContribution(id: c.id, goalId: c.goalId, amount: roundMoney(c.amount * factor), date: c.date, note: c.note),
+      ]);
+    }
+  }
 }
 
 // ============================== App shell ==============================
@@ -2265,7 +2436,7 @@ const Map<String, Map<AppLanguage, String>> _translations = {
     AppLanguage.de: 'Spar- und Anlagevorschlag',
   },
   'zero_based_budget_title': {AppLanguage.fa: 'بودجه‌بندی صفر-پایه', AppLanguage.en: 'Zero-based budget', AppLanguage.de: 'Zero-Based-Budget'},
-  'csv_import_title': {AppLanguage.fa: 'درون‌ریزی صورتحساب بانکی', AppLanguage.en: 'Import bank statement', AppLanguage.de: 'Kontoauszug importieren'},
+  'csv_import_title': {AppLanguage.fa: 'بارگذاری صورتحساب بانکی', AppLanguage.en: 'Import bank statement', AppLanguage.de: 'Kontoauszug importieren'},
   'shopping_lists_title': {AppLanguage.fa: 'لیست‌های خرید', AppLanguage.en: 'Shopping lists', AppLanguage.de: 'Einkaufslisten'},
   'scan_title': {AppLanguage.fa: 'اسکن رسید یا فیش حقوقی', AppLanguage.en: 'Scan receipt or payslip', AppLanguage.de: 'Beleg oder Lohnabrechnung scannen'},
   'review_receipt': {AppLanguage.fa: 'بررسی رسید', AppLanguage.en: 'Review receipt', AppLanguage.de: 'Beleg prüfen'},
@@ -3690,6 +3861,35 @@ String formatMoneyCompact(double amount, String currency) {
 
 // ---------------------------------------------------------------- amount input
 
+/// Whole numbers typed by the person (day of month, number of installments...)
+/// are shown with Persian digits while typing; [parseInt] reads them back.
+class DigitsInputFormatter extends TextInputFormatter {
+  const DigitsInputFormatter();
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final ascii = StringBuffer();
+    for (final ch in newValue.text.split('')) {
+      final p = '۰۱۲۳۴۵۶۷۸۹'.indexOf(ch);
+      final a = '٠١٢٣٤٥٦٧٨٩'.indexOf(ch);
+      if (p >= 0) {
+        ascii.write(p);
+      } else if (a >= 0) {
+        ascii.write(a);
+      } else if (ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57) {
+        ascii.write(ch);
+      } else if (ch == '.' || ch == '٫') {
+        ascii.write('.');
+      }
+    }
+    final text = persianDigits(ascii.toString());
+    final cursor = newValue.selection.baseOffset.clamp(0, text.length);
+    return TextEditingValue(text: text, selection: TextSelection.collapsed(offset: cursor));
+  }
+}
+
+int? parseInt(String input) => parseAmount(input)?.toInt();
+
+
 /// Reads an amount typed into an [AmountInputFormatter] field (or pasted):
 /// Persian/Arabic digits are accepted, "," / space / "٬" are thousands
 /// separators and "." or "٫" is the decimal point.
@@ -3820,10 +4020,25 @@ class AmountInputFormatter extends TextInputFormatter {
 /// transaction's own note if there are no items but a note was entered,
 /// and the category name as a last resort so the line is never blank.
 String txMainTitle(Transaction t, String categoryName) {
+  if (t.merchant.trim().isNotEmpty) return t.merchant.trim();
+  return txDetailTitle(t) ?? categoryName;
+}
+
+/// What the row title used to be before a shop name existed: the item name /
+/// "first item +N", else the note. Null when there is neither.
+String? txDetailTitle(Transaction t) {
   if (t.items.length == 1) return t.items.first.name;
   if (t.items.length > 1) return '${t.items.first.name} +${t.items.length - 1} قلم دیگر';
   if (t.note.trim().isNotEmpty) return t.note.trim();
-  return categoryName;
+  return null;
+}
+
+/// When a shop name takes the title's place, the item / note summary moves to
+/// the small line above it so nothing that was shown before disappears.
+String txExtraDetail(Transaction t) {
+  if (t.merchant.trim().isEmpty) return '';
+  final d = txDetailTitle(t);
+  return d == null ? '' : ' • $d';
 }
 
 // ============================== Home screen ==============================
@@ -3881,6 +4096,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       await _reloadTx();
       categories = await Store.loadCategories();
       accounts = await Store.loadAccounts();
+      _memo.clear();
       shoppingPending = await _loadShoppingPending();
       if (mounted) setState(() {});
     } finally {
@@ -3893,6 +4109,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     await _reloadTx();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
+    _memo.clear();
     shoppingPending = await _loadShoppingPending();
     setState(() => loading = false);
     // Best-effort background retry for categories that only got a generic
@@ -3924,6 +4141,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// Loads transactions for the home screen: [tx] holds only confirmed ones
   /// (drafts must not affect any balance, total, chart or list here); the
   /// number of drafts is kept separately for the badge.
+  // Results of the heavy per-build calculations (balances, period totals,
+  // recurring projections), reused until the data or the day changes. Without
+  // this every rebuild - e.g. expanding a month - recomputed them all.
+  final Map<String, Object> _memo = {};
+  T _memoized<T extends Object>(String key, T Function() compute) => (_memo[key] ??= compute()) as T;
+  String get _dayKey {
+    final n = DateTime.now();
+    return '${n.year}-${n.month}-${n.day}';
+  }
+
   int _reloadSeq = 0;
   Future<void> _reloadTx() async {
     final seq = ++_reloadSeq;
@@ -3931,10 +4158,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (seq != _reloadSeq) return; // a newer reload is already in flight; let it win
     _draftCount = all.where((t) => t.draft).length;
     tx = all.where((t) => !t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+    _memo.clear();
     _lastRefresh = DateTime.now();
   }
 
-  Map<String, double> get totalBalanceByCurrency {
+  Map<String, double> get totalBalanceByCurrency => _memoized('balances', _computeTotalBalance);
+  Map<String, double> _computeTotalBalance() {
     final map = <String, double>{};
     for (final a in accounts) {
       if (a.initialBalance != 0) {
@@ -3953,7 +4182,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// transactions, plus projected recurring occurrences) still expected
   /// before the month ends - a PocketGuard/Simplifi-style guardrail so a
   /// healthy-looking balance doesn't hide bills that are already spoken for.
-  Map<String, double> get safeToSpendByCurrency {
+  Map<String, double> get safeToSpendByCurrency => _memoized('safe|$_dayKey', _computeSafeToSpend);
+  Map<String, double> _computeSafeToSpend() {
     final balances = Map<String, double>.from(totalBalanceByCurrency);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -3967,7 +4197,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return balances;
   }
 
-  Map<String, Map<String, double>> get periodStatsByCurrency {
+  Map<String, Map<String, double>> get periodStatsByCurrency =>
+      _memoized('period|$dashboardAccountFilter|$_dayKey', _computePeriodStats);
+  Map<String, Map<String, double>> _computePeriodStats() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final map = <String, Map<String, double>>{};
@@ -3987,15 +4219,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return map;
   }
 
-  String get primaryCurrency {
-    if (dashboardAccountFilter != null) return currencyOf(dashboardAccountFilter!);
-    if (accounts.isEmpty) return 'IRT';
-    final counts = <String, int>{};
-    for (final a in accounts) {
-      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-    }
-    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
-  }
+  String get primaryCurrency =>
+      dashboardAccountFilter != null ? currencyOf(dashboardAccountFilter!) : mainCurrencyOf(accounts);
 
   /// Top-level category (parent rolled up) expense totals for the current
   /// period (same period as [periodStatsByCurrency]), in [primaryCurrency].
@@ -4254,18 +4479,52 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
             ),
             const SizedBox(height: 12),
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: ActionChip(
-                avatar: const Icon(Icons.shopping_cart_outlined, size: 18),
-                label: Text(
-                  shoppingPending > 0 ? '${tr('shopping_lists_title')} (${persianDigits('$shoppingPending')})' : tr('shopping_lists_title'),
-                ),
-                onPressed: () async {
+            Material(
+              color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(16),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () async {
                   await Navigator.push(context, MaterialPageRoute(builder: (_) => const ShoppingListsScreen()));
                   final pending = await _loadShoppingPending();
                   if (mounted) setState(() => shoppingPending = pending);
                 },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: Theme.of(context).colorScheme.secondary.withValues(alpha: 0.18),
+                        child: Icon(Icons.shopping_cart_outlined, color: Theme.of(context).colorScheme.secondary),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(tr('shopping_lists_title'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                            Text(
+                              shoppingPending > 0 ? '$shoppingPending کالا هنوز خریداری نشده' : 'لیست خرید بساز و کالاها را تیک بزن',
+                              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (shoppingPending > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(color: Theme.of(context).colorScheme.secondary, borderRadius: BorderRadius.circular(12)),
+                          child: Text(
+                            '$shoppingPending',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSecondary),
+                          ),
+                        ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.chevron_left, color: Colors.grey.shade600),
+                    ],
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -4323,15 +4582,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 // that truly belong to that month (a current-month item
                 // due later this month no longer gets mislabeled as
                 // belonging to next month).
-                final futureByMonth = <String, List<TxOccurrence>>{};
-                for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 60)) {
-                  if (!e.date.isAfter(todayMidnight)) continue;
-                  final key = '${e.date.year}-${e.date.month}';
-                  (futureByMonth[key] ??= []).add(e);
-                }
-                for (final list in futureByMonth.values) {
-                  list.sort((a, b) => a.date.compareTo(b.date));
-                }
+                final futureByMonth = _memoized<Map<String, List<TxOccurrence>>>('future|$_dayKey', () {
+                  final map = <String, List<TxOccurrence>>{};
+                  for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 60)) {
+                    if (!e.date.isAfter(todayMidnight)) continue;
+                    final key = '${e.date.year}-${e.date.month}';
+                    (map[key] ??= []).add(e);
+                  }
+                  for (final list in map.values) {
+                    list.sort((a, b) => a.date.compareTo(b.date));
+                  }
+                  return map;
+                });
 
                 // Group already-due transactions by month, most recent first
                 // (tx is already sorted by date descending), keeping only
@@ -4481,7 +4743,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${categoryName(t.categoryId)} • ${formatDate(displayDate ?? t.date)}'
+              '${categoryName(t.categoryId)} • ${formatDate(displayDate ?? t.date)}${txExtraDetail(t)}'
               '${projected ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
               '${t.draft ? ' • پیش‌نویس' : ''}',
               style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
@@ -4606,6 +4868,18 @@ class _DashboardChartsState extends State<DashboardCharts> {
     Colors.brown,
   ];
 
+  @override
+  void didUpdateWidget(covariant DashboardCharts oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Categories can be renamed or deleted while this chart is on screen's
+    // route stack; refresh the drilled-into category from the new list.
+    final d = drilldown;
+    if (d != null) {
+      final match = widget.categories.where((c) => c.id == d.id).toList();
+      drilldown = match.isEmpty ? null : match.first;
+    }
+  }
+
   bool _hasChildren(Category c) => widget.categories.any((x) => x.parentId == c.id);
 
   /// Aggregates [widget.expenseTransactions] by the direct child of [parent]
@@ -4694,7 +4968,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
           const SizedBox(height: 8),
           if (total > 0)
             SizedBox(
-              height: 170,
+              height: 200,
               child: Row(
                 children: [
                   SizedBox(
@@ -4702,31 +4976,32 @@ class _DashboardChartsState extends State<DashboardCharts> {
                     child: PieChart(
                       PieChartData(
                         sectionsSpace: 2,
-                        centerSpaceRadius: 30,
+                        centerSpaceRadius: 24,
                         sections: [
                           for (var i = 0; i < top.length; i++)
                             PieChartSectionData(
                               value: top[i].value,
                               color: _palette[i % _palette.length],
-                              title: '${(top[i].value / total * 100).round()}%',
-                              radius: 46,
-                              titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                              title: persianDigits('${(top[i].value / total * 100).round()}%'),
+                              radius: 52,
+                              titleStyle: const TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w800, shadows: [Shadow(color: Colors.black54, blurRadius: 3)]),
                             ),
                           if (otherSum > 0)
                             PieChartSectionData(
                               value: otherSum,
                               color: Colors.grey,
-                              title: '${(otherSum / total * 100).round()}%',
-                              radius: 46,
-                              titleStyle: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                              title: persianDigits('${(otherSum / total * 100).round()}%'),
+                              radius: 52,
+                              titleStyle: const TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w800, shadows: [Shadow(color: Colors.black54, blurRadius: 3)]),
                             ),
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
                   Expanded(
                     child: ListView(
+                      padding: EdgeInsets.zero,
                       children: [
                         for (var i = 0; i < top.length; i++) _legendRow(_palette[i % _palette.length], top[i].key, top[i].value),
                         if (otherSum > 0)
@@ -4805,21 +5080,24 @@ class _DashboardChartsState extends State<DashboardCharts> {
     return InkWell(
       onTap: canDrill ? () => setState(() => drilldown = category) : null,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 5),
         child: Row(
           children: [
-            Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-            const SizedBox(width: 6),
+            Container(width: 14, height: 14, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
                 category.name,
-                style: TextStyle(fontSize: 12, decoration: canDrill ? TextDecoration.underline : null),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, decoration: canDrill ? TextDecoration.underline : null),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
             const SizedBox(width: 4),
-            Text(ltr(formatMoneyCompact(amount, widget.currency)), style: const TextStyle(fontSize: 11, color: Colors.grey)),
-            if (canDrill) const Icon(Icons.chevron_left, size: 16, color: Colors.grey),
+            Text(
+              ltr(formatMoneyCompact(amount, widget.currency)),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            if (canDrill) const Icon(Icons.chevron_left, size: 18, color: Colors.grey),
           ],
         ),
       ),
@@ -5160,15 +5438,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
-  String get primaryCurrency {
-    if (accountFilter != null) return currencyOf(accountFilter!);
-    if (accounts.isEmpty) return 'IRT';
-    final counts = <String, int>{};
-    for (final a in accounts) {
-      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-    }
-    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
-  }
+  String get primaryCurrency => accountFilter != null ? currencyOf(accountFilter!) : mainCurrencyOf(accounts);
 
   Future<void> _pickCustomMonth() async {
     final isJalali = currentCalendarSystem.value == CalendarSystem.jalali;
@@ -5719,14 +5989,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
     setState(() => loading = false);
   }
 
-  String get primaryCurrency {
-    if (accounts.isEmpty) return 'IRT';
-    final counts = <String, int>{};
-    for (final a in accounts) {
-      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-    }
-    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
-  }
+  String get primaryCurrency => mainCurrencyOf(accounts);
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
@@ -5772,7 +6035,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
       final surplus = avg.income - avg.expense;
       final goalLines = goals.map((g) {
         final progress = contributions.where((c) => c.goalId == g.id).fold(0.0, (s, c) => s + c.amount);
-        return '- ${g.name}: ${progress.toStringAsFixed(0)}/${g.targetAmount.toStringAsFixed(0)} ${g.currency}';
+        return '- ${g.name}: ${progress.toStringAsFixed(0)}/${g.targetAmount.toStringAsFixed(0)} $primaryCurrency';
       }).join('\n');
       final prompt =
           'You are a friendly, general personal-finance educator (NOT a licensed financial advisor - never claim '
@@ -6181,14 +6444,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
     return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
-  String get primaryCurrency {
-    if (accounts.isEmpty) return 'IRT';
-    final counts = <String, int>{};
-    for (final a in accounts) {
-      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-    }
-    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
-  }
+  String get primaryCurrency => mainCurrencyOf(accounts);
 
   /// This month's actual income so far; if nothing has come in yet this
   /// month, falls back to the average of the last 3 months so the screen
@@ -6230,6 +6486,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
     var spend = 0.0;
     for (final t in tx) {
       if (t.type != TxType.expense || t.categoryId == '_transfer_out_') continue;
+      if (currencyOf(t.accountId) != primaryCurrency) continue;
       if (t.date.year != now.year || t.date.month != now.month) continue;
       var cat = categories.where((c) => c.id == t.categoryId).toList();
       var current = cat.isEmpty ? null : cat.first;
@@ -6252,7 +6509,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
         content: TextField(
           controller: ctrl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-          decoration: const InputDecoration(labelText: 'مبلغ تخصیص‌یافته در ماه'),
+          decoration: InputDecoration(labelText: 'مبلغ تخصیص‌یافته در ماه (${currencyLabel(primaryCurrency)})'),
           autofocus: true,
         ),
         actions: [
@@ -6351,7 +6608,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
                                 ),
                                 const SizedBox(height: 3),
                                 Text(
-                                  '${spend.toStringAsFixed(0)} از ${alloc.toStringAsFixed(0)} خرج شده',
+                                  '${formatMoney(spend, primaryCurrency)} از ${formatMoney(alloc, primaryCurrency)} خرج شده',
                                   style: const TextStyle(fontSize: 11),
                                 ),
                               ],
@@ -6382,6 +6639,10 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
   List<Category> categories = [];
   List<Transaction> tx = [];
   List<BudgetGoal> goals = [];
+  List<Account> accounts = [];
+
+  String get mainCurrency => mainCurrencyOf(accounts);
+  bool get hasOtherCurrencies => accounts.any((a) => a.currency != mainCurrency);
 
   @override
   void initState() {
@@ -6393,14 +6654,17 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
     categories = await Store.loadCategories();
     tx = await Store.loadConfirmedTransactions();
     goals = await Store.loadBudgetGoals();
+    accounts = await Store.loadAccounts();
     setState(() => loading = false);
   }
 
   double _spendFor(String categoryId) {
     final now = DateTime.now();
     var spend = 0.0;
+    final curById = {for (final a in accounts) a.id: a.currency};
     for (final t in tx) {
       if (t.type != TxType.expense) continue;
+      if ((curById[t.accountId] ?? mainCurrency) != mainCurrency) continue; // other units can't be added up
       if (t.date.year != now.year || t.date.month != now.month) continue;
       var cat = categories.where((c) => c.id == t.categoryId).toList();
       var current = cat.isEmpty ? null : cat.first;
@@ -6424,7 +6688,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
         content: TextField(
           controller: ctrl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-          decoration: const InputDecoration(labelText: 'مبلغ هدف در ماه', hintText: 'مثلاً 200'),
+          decoration: InputDecoration(labelText: 'مبلغ هدف در ماه (${currencyLabel(mainCurrency)})', hintText: 'مثلاً ۲۰۰,۰۰۰'),
           autofocus: true,
         ),
         actions: [
@@ -6457,9 +6721,18 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
       appBar: AppBar(title: Text(tr('budget_goals'))),
       body: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: topCategories.length,
+        itemCount: topCategories.length + (hasOtherCurrencies ? 1 : 0),
         itemBuilder: (context, i) {
-          final c = topCategories[i];
+          if (hasOtherCurrencies && i == 0) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                'هدف‌ها به واحد حساب اصلی (${currencyLabel(mainCurrency)}) هستند؛ تراکنش‌های حساب‌هایی با واحد دیگر در این محاسبه نمی‌آیند.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
+            );
+          }
+          final c = topCategories[hasOtherCurrencies ? i - 1 : i];
           final goalMatch = goals.where((g) => g.categoryId == c.id).toList();
           final goal = goalMatch.isEmpty ? null : goalMatch.first;
           final spend = goal == null ? 0.0 : _spendFor(c.id);
@@ -6487,8 +6760,8 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${spend.toStringAsFixed(0)} از ${goal.monthlyAmount.toStringAsFixed(0)} (${(ratio * 100).round()}%)',
-                            style: TextStyle(fontSize: 11, color: color),
+                            '${formatMoney(spend, mainCurrency)} از ${formatMoney(goal.monthlyAmount, mainCurrency)} (${ltr('${(ratio * 100).round()}%')})',
+                            style: TextStyle(fontSize: 12, color: color),
                           ),
                         ],
                       ),
@@ -6515,6 +6788,11 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   bool loading = true;
   List<SavingsGoal> goals = [];
   List<SavingsContribution> contributions = [];
+  List<Account> accounts = [];
+
+  /// Savings goals have no account of their own: they are always in the
+  /// currency of the main account.
+  String get mainCurrency => mainCurrencyOf(accounts);
 
   @override
   void initState() {
@@ -6525,6 +6803,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   Future<void> _load() async {
     goals = await Store.loadSavingsGoals();
     contributions = await Store.loadSavingsContributions();
+    accounts = await Store.loadAccounts();
     setState(() => loading = false);
   }
 
@@ -6546,7 +6825,6 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   Future<void> _addOrEditGoal({SavingsGoal? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final amountCtrl = TextEditingController(text: (existing == null ? '' : formatAmountInput(existing.targetAmount)));
-    String currency = existing?.currency ?? 'IRT';
     DateTime? targetDate = existing?.targetDate;
     final result = await showDialog<bool>(
       context: context,
@@ -6559,26 +6837,11 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
               children: [
                 TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام هدف (مثلاً خرید ماشین)'), autofocus: true),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: TextField(
-                        controller: amountCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-                        decoration: const InputDecoration(labelText: 'مبلغ هدف'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: currency,
-                        decoration: const InputDecoration(labelText: 'واحد پول'),
-                        items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(currencyLabel(c)))).toList(),
-                        onChanged: (v) => setLocal(() => currency = v ?? currency),
-                      ),
-                    ),
-                  ],
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: const [AmountInputFormatter()],
+                  decoration: InputDecoration(labelText: 'مبلغ هدف (${currencyLabel(mainCurrency)})'),
                 ),
                 const SizedBox(height: 12),
                 ListTile(
@@ -6624,7 +6887,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
       name: nameCtrl.text.trim(),
       targetAmount: amount,
       targetDate: targetDate,
-      currency: currency,
+      currency: mainCurrency,
     );
     goals = [...goals.where((g) => g.id != goal.id), goal];
     await Store.saveSavingsGoals(goals);
@@ -6645,7 +6908,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
               TextField(
                 controller: amountCtrl,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-                decoration: InputDecoration(labelText: 'مبلغ واریزی (${currencyLabel(g.currency)})'),
+                decoration: InputDecoration(labelText: 'مبلغ واریزی (${currencyLabel(mainCurrency)})'),
                 autofocus: true,
               ),
               const SizedBox(height: 12),
@@ -6712,7 +6975,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         itemBuilder: (context, i) {
                           final c = list[i];
                           return ListTile(
-                            title: Text(ltr(formatMoney(c.amount, g.currency))),
+                            title: Text(ltr(formatMoney(c.amount, mainCurrency))),
                             subtitle: Text(formatDate(c.date)),
                             trailing: IconButton(
                               icon: const Icon(Icons.delete_outline, size: 20),
@@ -6789,7 +7052,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${ltr(formatMoney(current, g.currency))} از ${ltr(formatMoney(g.targetAmount, g.currency))} (${(ratio * 100).round()}%)',
+                          '${ltr(formatMoney(current, mainCurrency))} از ${ltr(formatMoney(g.targetAmount, mainCurrency))} (${(ratio * 100).round()}%)',
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         ),
                         if (g.targetDate != null)
@@ -7013,7 +7276,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('نتیجه‌ی درون‌ریزی'),
+        title: const Text('نتیجه‌ی بارگذاری'),
         content: Text(
           '$imported تراکنش به‌صورت پیش‌نویس ذخیره شد (برای بررسی نهایی به «پیش‌نویس‌ها» سر بزن).'
           '${skipped > 0 ? ' $skipped مورد چون تکراری به نظر می‌رسیدند رد شدند.' : ''}',
@@ -7121,7 +7384,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             OutlinedButton(onPressed: _buildPreview, child: const Text('پیش‌نمایش')),
             if (preview != null) ...[
               const SizedBox(height: 16),
-              Text('${preview!.length} تراکنش قابل‌درون‌ریزی پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text('${preview!.length} تراکنش قابل‌بارگذاری پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
               DropdownButtonFormField<Account>(
                 initialValue: targetAccount,
@@ -7338,7 +7601,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
 
   Future<void> _addOrEditItem({ShoppingListItem? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '');
+    final qtyCtrl = TextEditingController(text: persianDigits(existing?.quantity?.toString() ?? ''));
     final priceCtrl = TextEditingController(text: existing?.estimatedPrice == null ? '' : formatAmountInput(existing!.estimatedPrice!));
     final added = await showDialog<bool>(
       context: context,
@@ -7349,7 +7612,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
           children: [
             TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
             const SizedBox(height: 8),
-            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: '${tr('quantity')} (اختیاری)')),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()], decoration: InputDecoration(labelText: '${tr('quantity')} (اختیاری)')),
             const SizedBox(height: 8),
             TextField(
               controller: priceCtrl,
@@ -7368,7 +7631,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
     final item = ShoppingListItem(
       id: existing?.id ?? 'sli_${DateTime.now().microsecondsSinceEpoch}',
       name: nameCtrl.text.trim(),
-      quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+      quantity: parseAmount(qtyCtrl.text),
       estimatedPrice: parseAmount(priceCtrl.text),
       checked: existing?.checked ?? false,
     );
@@ -7470,7 +7733,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('$checkedCount از ${currentList.items.length} خریداری‌شده'),
-                          if (estimatedTotal > 0) Text('جمع تقریبی: ${estimatedTotal.toStringAsFixed(0)}'),
+                          if (estimatedTotal > 0) Text('جمع تقریبی: ${formatAmountInput(estimatedTotal)}'),
                         ],
                       ),
                       if (checkedCount > 0) ...[
@@ -7539,7 +7802,7 @@ class _TransferScreenState extends State<TransferScreen> {
   RecurrenceFrequency recurrence = RecurrenceFrequency.none;
   final dayCtrl = TextEditingController();
   int weekday = 1;
-  final intervalCtrl = TextEditingController(text: '30');
+  final intervalCtrl = TextEditingController(text: persianDigits('30'));
   final installmentsCtrl = TextEditingController();
   DateTime? endDate;
   String endMode = 'unlimited'; // 'unlimited' | 'installments' | 'date'
@@ -7604,7 +7867,7 @@ class _TransferScreenState extends State<TransferScreen> {
     int? recInstallments;
     DateTime? recEndDate;
     if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
-      recDay = int.tryParse(dayCtrl.text);
+      recDay = parseInt(dayCtrl.text);
       if (recDay == null) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
         return;
@@ -7614,7 +7877,7 @@ class _TransferScreenState extends State<TransferScreen> {
     } else if (recurrence == RecurrenceFrequency.weekly) {
       recWeekday = weekday;
     } else if (recurrence == RecurrenceFrequency.custom) {
-      recInterval = int.tryParse(intervalCtrl.text);
+      recInterval = parseInt(intervalCtrl.text);
       if (recInterval == null || recInterval <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
         return;
@@ -7622,7 +7885,7 @@ class _TransferScreenState extends State<TransferScreen> {
     }
     if (recurrence != RecurrenceFrequency.none) {
       if (endMode == 'installments') {
-        recInstallments = int.tryParse(installmentsCtrl.text);
+        recInstallments = parseInt(installmentsCtrl.text);
         if (recInstallments == null || recInstallments <= 0) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد کل اقساط را درست وارد کنید.')));
           return;
@@ -7762,7 +8025,7 @@ class _TransferScreenState extends State<TransferScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: dayCtrl,
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
               decoration: const InputDecoration(labelText: 'روز سررسید در ماه (۱ تا ۳۱) *', border: OutlineInputBorder()),
             ),
           ],
@@ -7779,7 +8042,7 @@ class _TransferScreenState extends State<TransferScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: intervalCtrl,
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
               decoration: const InputDecoration(labelText: 'هر چند روز یک‌بار؟', border: OutlineInputBorder()),
             ),
           ],
@@ -7798,7 +8061,7 @@ class _TransferScreenState extends State<TransferScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: installmentsCtrl,
-                keyboardType: TextInputType.number,
+                keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
                 decoration: InputDecoration(labelText: tr('total_installments'), border: const OutlineInputBorder()),
               ),
             ],
@@ -7993,15 +8256,15 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                   onChanged: (v) => setLocal(() => localRecurring = v),
                 ),
                 const SizedBox(height: 16),
-                Text('پیش‌نویس‌ها', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text('وضعیت تراکنش', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
                   initialValue: localDraft,
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
                   items: const [
-                    DropdownMenuItem(value: 'exclude', child: Text('بدون پیش‌نویس (پیش‌فرض)')),
-                    DropdownMenuItem(value: 'only', child: Text('فقط پیش‌نویس‌ها')),
-                    DropdownMenuItem(value: 'all', child: Text('همه (شامل پیش‌نویس)')),
+                    DropdownMenuItem(value: 'exclude', child: Text('تراکنش‌های تأیید شده')),
+                    DropdownMenuItem(value: 'only', child: Text('تراکنش‌های پیش‌نویس')),
+                    DropdownMenuItem(value: 'all', child: Text('همه‌ی تراکنش‌ها')),
                   ],
                   onChanged: (v) => setLocal(() => localDraft = v ?? localDraft),
                 ),
@@ -8216,7 +8479,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     ),
                   if (draftFilter != 'exclude')
                     _appliedFilterChip(
-                      draftFilter == 'only' ? 'فقط پیش‌نویس‌ها' : 'شامل پیش‌نویس',
+                      draftFilter == 'only' ? 'تراکنش‌های پیش‌نویس' : 'همه‌ی تراکنش‌ها',
                       () => setState(() => draftFilter = 'exclude'),
                     ),
                   if (categoryFilter != null)
@@ -8263,7 +8526,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '${categoryName(t.categoryId)} • ${formatDate(t.date)}'
+                                '${categoryName(t.categoryId)} • ${formatDate(t.date)}${txExtraDetail(t)}'
                                 '${t.isRecurring ? ' • تکرارشونده' : ''}'
                                 '${t.draft ? ' • پیش‌نویس' : ''}',
                                 style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
@@ -8598,11 +8861,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     if (accountFilter != null) {
       primaryCurrency = currencyOf(accountFilter!);
     } else {
-      final counts = <String, int>{};
-      for (final a in accounts) {
-        counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-      }
-      primaryCurrency = counts.isEmpty ? 'IRT' : (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+      primaryCurrency = mainCurrencyOf(accounts);
     }
 
     double sumFor(List<Transaction> list, TxType type) => list
@@ -8808,14 +9067,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
     return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
-  String get primaryCurrency {
-    if (accounts.isEmpty) return 'IRT';
-    final counts = <String, int>{};
-    for (final a in accounts) {
-      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-    }
-    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
-  }
+  String get primaryCurrency => mainCurrencyOf(accounts);
 
   @override
   Widget build(BuildContext context) {
@@ -9083,15 +9335,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     );
   }
 
-  String get primaryCurrency {
-    if (accountFilter != null) return currencyOf(accountFilter!);
-    if (accounts.isEmpty) return 'IRT';
-    final counts = <String, int>{};
-    for (final a in accounts) {
-      counts[a.currency] = (counts[a.currency] ?? 0) + 1;
-    }
-    return (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
-  }
+  String get primaryCurrency => accountFilter != null ? currencyOf(accountFilter!) : mainCurrencyOf(accounts);
 
   @override
   Widget build(BuildContext context) {
@@ -9278,12 +9522,12 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                         ),
                         if (exp > 0)
                           Text(
-                            ltr('-${exp.toStringAsFixed(0)}'),
+                            ltr('-${formatAmountInput(exp)}'),
                             style: TextStyle(fontSize: 9, color: future ? Colors.red.shade200 : Colors.red.shade700),
                           ),
                         if (inc > 0)
                           Text(
-                            ltr('+${inc.toStringAsFixed(0)}'),
+                            ltr('+${formatAmountInput(inc)}'),
                             style: TextStyle(fontSize: 9, color: future ? Colors.green.shade200 : Colors.green.shade700),
                           ),
                       ],
@@ -9725,7 +9969,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   Future<void> _addItemRow({int? editIndex}) async {
     final existing = editIndex != null ? items[editIndex] : null;
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
+    final qtyCtrl = TextEditingController(text: persianDigits(existing?.quantity?.toString() ?? '1'));
     final priceCtrl = TextEditingController(text: existing?.price == null ? '' : formatAmountInput(existing!.price!));
     final warrantyCtrl = TextEditingController(text: existing?.warrantyNote ?? '');
     final added = await showDialog<bool>(
@@ -9738,7 +9982,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             children: [
               TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
               const SizedBox(height: 8),
-              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('quantity'))),
+              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()], decoration: InputDecoration(labelText: tr('quantity'))),
               const SizedBox(height: 8),
               TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()], decoration: InputDecoration(labelText: tr('price'))),
               const SizedBox(height: 8),
@@ -9759,7 +10003,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     if (added != true || nameCtrl.text.trim().isEmpty) return;
     final entry = ReceiptItemEntry(
       name: nameCtrl.text.trim(),
-      quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+      quantity: parseAmount(qtyCtrl.text),
       price: parseAmount(priceCtrl.text),
       warrantyUntil: existing?.warrantyUntil,
       returnUntil: existing?.returnUntil,
@@ -9841,7 +10085,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       categoryId: selectedCategory?.id ?? '_uncategorized_',
       accountId: selectedAccount?.id ?? 'default',
       date: date,
-      note: merchantCtrl.text.trim(),
+      merchant: merchantCtrl.text.trim(),
       draft: draft,
       items: items,
       imagePath: persistedImage,
@@ -10588,6 +10832,10 @@ class TransactionDetailScreen extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: Column(
                 children: [
+                  if (t.merchant.trim().isNotEmpty) ...[
+                    _row(context, 'فروشگاه', t.merchant.trim()),
+                    const Divider(height: 1),
+                  ],
                   _row(context, 'دسته‌بندی', _categoryName),
                   const Divider(height: 1),
                   _row(context, 'حساب', _accountName),
@@ -10756,6 +11004,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   late TxType type;
   final amountCtrl = TextEditingController();
   final noteCtrl = TextEditingController();
+  final merchantCtrl = TextEditingController();
   final dayCtrl = TextEditingController();
   final intervalCtrl = TextEditingController();
   final installmentsCtrl = TextEditingController();
@@ -10795,19 +11044,20 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (e != null) {
       amountCtrl.text = formatAmountInput(e.amount);
       noteCtrl.text = e.note;
+      merchantCtrl.text = e.merchant;
       date = e.date;
       recurrence = e.recurrence;
-      dayCtrl.text = e.recurrenceDay?.toString() ?? date.day.toString();
+      dayCtrl.text = persianDigits(e.recurrenceDay?.toString() ?? date.day.toString());
       weekday = e.recurrenceWeekday ?? date.weekday;
-      intervalCtrl.text = e.recurrenceIntervalDays?.toString() ?? '';
-      installmentsCtrl.text = e.installments?.toString() ?? '';
+      intervalCtrl.text = persianDigits(e.recurrenceIntervalDays?.toString() ?? '');
+      installmentsCtrl.text = persianDigits(e.installments?.toString() ?? '');
       endDate = e.recurrenceEndDate;
       endMode = e.recurrenceEndDate != null ? 'date' : (e.installments != null ? 'count' : 'unlimited');
       notifyEnabled = e.notifyEnabled;
       notifyLastTwoEnabled = e.notifyLastTwoEnabled;
       notifyMessageCtrl.text = e.notifyMessage;
       notifyEachEnabled = e.notifyDaysBeforeEach != null;
-      notifyDaysCtrl.text = e.notifyDaysBeforeEach?.toString() ?? '';
+      notifyDaysCtrl.text = persianDigits(e.notifyDaysBeforeEach?.toString() ?? '');
       draft = e.draft;
       items = List.of(e.items);
       if (e.payslipDetails != null) {
@@ -10840,6 +11090,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     }
     amountCtrl.addListener(() => _dirty = true);
     noteCtrl.addListener(() => _dirty = true);
+    merchantCtrl.addListener(() => _dirty = true);
     dayCtrl.addListener(() => _dirty = true);
     intervalCtrl.addListener(() => _dirty = true);
     installmentsCtrl.addListener(() => _dirty = true);
@@ -10917,7 +11168,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     int? recInstallments;
     DateTime? recEndDate;
     if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
-      recDay = int.tryParse(dayCtrl.text);
+      recDay = parseInt(dayCtrl.text);
       if (recDay == null) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
         return false;
@@ -10927,7 +11178,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     } else if (recurrence == RecurrenceFrequency.weekly) {
       recWeekday = weekday;
     } else if (recurrence == RecurrenceFrequency.custom) {
-      recInterval = int.tryParse(intervalCtrl.text);
+      recInterval = parseInt(intervalCtrl.text);
       if (recInterval == null || recInterval <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
         return false;
@@ -10937,7 +11188,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       if (endMode == 'date') {
         recEndDate = endDate;
       } else if (endMode == 'count') {
-        recInstallments = int.tryParse(installmentsCtrl.text);
+        recInstallments = parseInt(installmentsCtrl.text);
       }
       // endMode == 'unlimited': leave both recEndDate and recInstallments null
     }
@@ -10977,6 +11228,32 @@ class _TransactionEditorState extends State<TransactionEditor> {
         );
       }
     }
+    // A draft made from a scan keeps a copy of the receipt/payslip photo. When
+    // it becomes a final transaction, ask whether that photo should be kept.
+    String? keptImage = widget.existing?.imagePath;
+    if (keptImage != null && !draft && (widget.existing?.draft ?? false)) {
+      if (!context.mounted) return false;
+      final keep = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تصویر فیش'),
+          content: const Text('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر، حذف شود')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ذخیره شود')),
+          ],
+        ),
+      );
+      if (keep == null) return false;
+      if (!keep) {
+        try {
+          await File(keptImage).delete();
+        } catch (_) {
+          // the file may already be gone - nothing else to do
+        }
+        keptImage = null;
+      }
+    }
     final result = Transaction(
       id: id,
       type: type,
@@ -10985,6 +11262,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
       accountId: selectedAccount!.id,
       date: date,
       note: noteCtrl.text.trim(),
+      imagePath: keptImage,
+      merchant: type == TxType.expense ? merchantCtrl.text.trim() : '',
       recurrence: recurrence,
       recurrenceDay: recDay,
       recurrenceWeekday: recWeekday,
@@ -10996,7 +11275,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       notifyEnabled: notifyEnabled,
       notifyLastTwoEnabled: notifyEnabled && notifyLastTwoEnabled,
       notifyMessage: notifyMessageCtrl.text.trim(),
-      notifyDaysBeforeEach: notifyEnabled && notifyEachEnabled ? int.tryParse(notifyDaysCtrl.text) : null,
+      notifyDaysBeforeEach: notifyEnabled && notifyEachEnabled ? parseInt(notifyDaysCtrl.text) : null,
       payslipDetails: payslipDetails,
     );
     // Scheduling/cancelling reminders doesn't need to block the save flow -
@@ -11014,7 +11293,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   Future<void> _addItemRow({int? editIndex}) async {
     final existing = editIndex != null ? items[editIndex] : null;
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
+    final qtyCtrl = TextEditingController(text: persianDigits(existing?.quantity?.toString() ?? '1'));
     final priceCtrl = TextEditingController(text: existing?.price == null ? '' : formatAmountInput(existing!.price!));
     final warrantyCtrl = TextEditingController(text: existing?.warrantyNote ?? '');
     final added = await showDialog<bool>(
@@ -11027,7 +11306,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             children: [
               TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
               const SizedBox(height: 8),
-              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('quantity'))),
+              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()], decoration: InputDecoration(labelText: tr('quantity'))),
               const SizedBox(height: 8),
               TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()], decoration: InputDecoration(labelText: tr('price'))),
               const SizedBox(height: 8),
@@ -11048,7 +11327,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (added != true || nameCtrl.text.trim().isEmpty) return;
     final entry = ReceiptItemEntry(
       name: nameCtrl.text.trim(),
-      quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
+      quantity: parseAmount(qtyCtrl.text),
       price: parseAmount(priceCtrl.text),
       warrantyUntil: existing?.warrantyUntil,
       returnUntil: existing?.returnUntil,
@@ -11075,9 +11354,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
             accountId: '',
             date: date,
             recurrence: recurrence,
-            recurrenceDay: int.tryParse(dayCtrl.text),
+            recurrenceDay: parseInt(dayCtrl.text),
             recurrenceWeekday: weekday,
-            recurrenceIntervalDays: int.tryParse(intervalCtrl.text),
+            recurrenceIntervalDays: parseInt(intervalCtrl.text),
           ));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -11102,7 +11381,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           TextField(
             controller: dayCtrl,
-            keyboardType: TextInputType.number,
+            keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
             decoration: const InputDecoration(
               labelText: 'روز سررسید در ماه (۱ تا ۳۱) *',
               helperText: 'برای ماه‌های کوتاه‌تر، به‌صورت خودکار آخرین روز همان ماه در نظر گرفته می‌شود.',
@@ -11129,7 +11408,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 12),
           TextField(
             controller: intervalCtrl,
-            keyboardType: TextInputType.number,
+            keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
             decoration: const InputDecoration(labelText: 'هر چند روز یک‌بار؟', border: OutlineInputBorder()),
           ),
         ],
@@ -11176,7 +11455,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             const SizedBox(height: 12),
             TextField(
               controller: installmentsCtrl,
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
               decoration: InputDecoration(labelText: tr('total_installments'), border: const OutlineInputBorder()),
             ),
           ],
@@ -11223,7 +11502,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     child: TextField(
                       controller: notifyDaysCtrl,
                       enabled: notifyEachEnabled,
-                      keyboardType: TextInputType.number,
+                      keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
                       textAlign: TextAlign.center,
                       decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4)),
                     ),
@@ -11279,7 +11558,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 Transaction? result;
                 if (existing.type == TxType.expense) {
                   final draftInit = ReceiptDraft(
-                    merchant: existing.note,
+                    merchant: existing.merchant.isNotEmpty ? existing.merchant : existing.note,
                     date: existing.date,
                     total: existing.amount,
                     items: existing.items,
@@ -11309,7 +11588,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     categoryId: result.categoryId,
                     accountId: result.accountId,
                     date: result.date,
-                    note: result.note,
+                    note: existing.merchant.isNotEmpty ? existing.note : result.note,
+                    merchant: result.merchant,
                     draft: result.draft,
                     items: result.items,
                     payslipDetails: result.payslipDetails,
@@ -11430,6 +11710,13 @@ class _TransactionEditorState extends State<TransactionEditor> {
             },
           ),
           const SizedBox(height: 16),
+          if (type == TxType.expense) ...[
+            TextField(
+              controller: merchantCtrl,
+              decoration: const InputDecoration(labelText: 'نام فروشگاه', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+          ],
           TextField(
             controller: noteCtrl,
             maxLines: null,
@@ -12006,6 +12293,10 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       }),
     );
     if (result == null) return;
+    if (existing != null && result.currency != existing.currency) {
+      await _changeCurrencyWithConversion(existing, result);
+      return;
+    }
     setState(() {
       final idx = accounts.indexWhere((a) => a.id == result.id);
       if (idx >= 0) {
@@ -12015,6 +12306,99 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       }
     });
     await Store.saveAccounts(accounts);
+  }
+
+  /// Changing an account's currency must also change its amounts, otherwise
+  /// only the label changes (1,000 Rial would silently become 1,000 Toman).
+  /// Asks for the conversion factor (pre-filled for Toman <-> Rial) and applies
+  /// it to the account - and optionally to every other account that uses the
+  /// same old currency, so the whole app can be moved to another unit at once.
+  Future<void> _changeCurrencyWithConversion(Account old, Account edited) async {
+    final oldCur = old.currency;
+    final newCur = edited.currency;
+    final factorCtrl = TextEditingController(
+      text: oldCur == 'IRR' && newCur == 'IRT'
+          ? '0.1'
+          : (oldCur == 'IRT' && newCur == 'IRR' ? '10' : '1'),
+    );
+    final others = accounts.where((a) => a.id != old.id && a.currency == oldCur).toList();
+    final isMain = accounts.isNotEmpty && accounts.first.id == old.id;
+    var convertOthers = others.isNotEmpty;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('تبدیل واحد پول'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'واحد این حساب از «${currencyLabel(oldCur)}» به «${currencyLabel(newCur)}» تغییر می‌کند. '
+                  'همه‌ی مبلغ‌های حساب (موجودی اولیه، تراکنش‌ها، قیمت اقلام) در ضریب زیر ضرب می‌شوند.',
+                  style: const TextStyle(fontSize: 13, height: 1.6),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: factorCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: 'ضریب تبدیل (هر ۱ ${currencyLabel(oldCur)} = ؟ ${currencyLabel(newCur)})',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                if (others.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: convertOthers,
+                    onChanged: (v) => setLocal(() => convertOthers = v ?? false),
+                    title: Text(
+                      'حساب‌های دیگری که واحدشان «${currencyLabel(oldCur)}» است (${others.map((a) => a.name).join('، ')}) هم با همین ضریب تبدیل شوند',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+                if (isMain || (convertOthers && accounts.first.currency == oldCur)) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'سقف بودجه‌ها و اهداف پس‌انداز که به واحد حساب اصلی هستند هم با همین ضریب تبدیل می‌شوند.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(
+              onPressed: () {
+                final f = parseAmount(factorCtrl.text);
+                if (f == null || f <= 0) return;
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('تبدیل'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final factor = parseAmount(factorCtrl.text)!;
+    // Save the other edits (name, type, opening balance) first, still in the old unit...
+    final accs = await Store.loadAccounts();
+    await Store.saveAccounts([for (final a in accs) a.id == old.id ? edited.copyWith(currency: oldCur) : a]);
+    // ...then convert the amounts together with the currency.
+    await Store.convertAccountsCurrency(
+      accountIds: {old.id, if (convertOthers) ...others.map((a) => a.id)},
+      newCurrency: newCur,
+      factor: factor,
+    );
+    final fresh = await Store.loadAccounts();
+    if (!mounted) return;
+    setState(() => accounts = fresh);
   }
 
   Future<void> _delete(Account a) async {
