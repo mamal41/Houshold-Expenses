@@ -135,21 +135,28 @@ String persianDigits(String input) {
   return buffer.toString();
 }
 
-/// Formats a date as dd.MM.yyyy, in Persian digits when the app language
-/// is Persian, LTR-isolated so it doesn't get visually reordered inside
-/// RTL text.
-/// Formats a date as dd.MM.yyyy (Gregorian) or the Jalali equivalent
-/// depending on the chosen calendar system, in Persian digits when the
-/// app language is Persian, LTR-isolated so it doesn't get visually
-/// reordered inside RTL text.
+/// Formats a date the way it is written for the chosen calendar:
+/// - Jalali (Solar Hijri): day/month/year with slashes, e.g. ۰۶/۰۷/۱۴۰۵
+/// - Gregorian: dd.MM.yyyy
+/// Digits are Persian when the app language is Persian, and the result is
+/// LTR-isolated so it doesn't get visually reordered inside RTL text.
 String formatDate(DateTime d) {
   if (currentCalendarSystem.value == CalendarSystem.jalali) {
     final j = gregorianToJalali(d.year, d.month, d.day);
     final jd = j[2].toString().padLeft(2, '0');
     final jm = j[1].toString().padLeft(2, '0');
-    return ltr(persianDigits('$jd.$jm.${j[0]}'));
+    return ltr(persianDigits('$jd/$jm/${j[0]}'));
   }
   return ltr(persianDigits(DateFormat('dd.MM.yyyy').format(d)));
+}
+
+/// Day and month only (e.g. for "every year on ..."), in the chosen calendar.
+String formatDayMonth(DateTime d) {
+  if (currentCalendarSystem.value == CalendarSystem.jalali) {
+    final j = gregorianToJalali(d.year, d.month, d.day);
+    return ltr(persianDigits('${j[2].toString().padLeft(2, '0')}/${j[1].toString().padLeft(2, '0')}'));
+  }
+  return ltr(persianDigits(DateFormat('dd.MM').format(d)));
 }
 
 Future<bool> confirmExitApp(BuildContext context) async {
@@ -3365,14 +3372,30 @@ String formatMoney(double amount, String currency) {
     case 'TRY':
       return ltr('₺$n');
     case 'AED':
-      return '${ltr(n)} د.إ';
+      return '\u2067${ltr(n)} د.إ\u2069';
     case 'IRR':
       final whole = amount.round().abs().toString();
       final grouped = whole.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
-      return '${ltr(persianDigits('${amount < 0 ? '-' : ''}$grouped'))} ریال';
+      return '\u2067${ltr(persianDigits('${amount < 0 ? '-' : ''}$grouped'))} ریال\u2069';
     default:
       return ltr('$n $currency');
   }
+}
+
+/// Short amount for tight spaces (e.g. the pie-chart legend). Rial amounts are
+/// long, so they are shown in millions ("۱۲۵.۴ م"); other currencies use the
+/// regular format.
+String formatMoneyCompact(double amount, String currency) {
+  if (currency != 'IRR') return formatMoney(amount, currency);
+  final abs = amount.abs();
+  String trim(double v) {
+    final t = v.toStringAsFixed(1);
+    return t.endsWith('.0') ? t.substring(0, t.length - 2) : t;
+  }
+
+  final sign = amount < 0 ? '-' : '';
+  if (abs >= 1e6) return '\u2067${ltr(persianDigits('$sign${trim(abs / 1e6)}'))} م\u2069';
+  return formatMoney(amount, currency);
 }
 
 /// The main, memorable title for a transaction list row: the item name if
@@ -3401,6 +3424,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool loading = true;
   String? dashboardAccountFilter;
   final Map<String, bool> _monthShowNotDue = {}; // "y-m" -> true shows the not-yet-due list instead of the due one
+  int shoppingPending = 0; // items not yet ticked off across all shopping lists
 
   @override
   void initState() {
@@ -3413,6 +3437,7 @@ class _HomeScreenState extends State<HomeScreen> {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     tx.sort((a, b) => b.date.compareTo(a.date));
+    shoppingPending = await _loadShoppingPending();
     setState(() => loading = false);
     // Best-effort background retry for categories that only got a generic
     // icon last time (e.g. Gemini was unavailable); does nothing if none
@@ -3430,6 +3455,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
     return a.isEmpty ? 'IRR' : a.first.currency;
+  }
+
+  Future<int> _loadShoppingPending() async {
+    final lists = await Store.loadShoppingLists();
+    return lists.fold<int>(0, (sum, l) => sum + l.items.where((i) => !i.checked).length);
   }
 
   int get draftCount => tx.where((t) => t.draft).length;
@@ -3718,7 +3748,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             ...safeToSpend.entries.map((e) => e.value >= 0
                                 ? Text(
                                     formatMoney(e.value, e.key),
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.indigo),
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Theme.of(context).brightness == Brightness.dark ? Colors.indigo.shade200 : Colors.indigo,
+                                    ),
                                   )
                                 : Padding(
                                     padding: const EdgeInsets.only(top: 2),
@@ -3758,7 +3792,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: ActionChip(
+                avatar: const Icon(Icons.shopping_cart_outlined, size: 18),
+                label: Text(
+                  shoppingPending > 0 ? '${tr('shopping_lists_title')} (${persianDigits('$shoppingPending')})' : tr('shopping_lists_title'),
+                ),
+                onPressed: () async {
+                  await Navigator.push(context, MaterialPageRoute(builder: (_) => const ShoppingListsScreen()));
+                  final pending = await _loadShoppingPending();
+                  if (mounted) setState(() => shoppingPending = pending);
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
             if (tx.isNotEmpty) ...[
               if (accounts.length > 1)
                 Padding(
@@ -4308,7 +4357,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
               ),
             ),
             const SizedBox(width: 4),
-            Text(ltr(formatMoney(amount, widget.currency)), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            Text(ltr(formatMoneyCompact(amount, widget.currency)), style: const TextStyle(fontSize: 11, color: Colors.grey)),
             if (canDrill) const Icon(Icons.chevron_left, size: 16, color: Colors.grey),
           ],
         ),
@@ -4510,7 +4559,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
       case RecurrenceFrequency.quarterly:
         return 'فصلی (روز ${t.recurrenceDay ?? '?'})';
       case RecurrenceFrequency.yearly:
-        return 'سالانه (${ltr(persianDigits(DateFormat('dd.MM').format(t.date)))})';
+        return 'سالانه (${formatDayMonth(t.date)})';
       case RecurrenceFrequency.none:
         return '';
     }
@@ -7881,14 +7930,14 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
                                 children: [
                                   if (m.item.warrantyUntil != null)
                                     Chip(
-                                      label: Text('گارانتی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(m.item.warrantyUntil!)))}',
+                                      label: Text('گارانتی تا ${formatDate(m.item.warrantyUntil!)}',
                                           style: const TextStyle(fontSize: 11)),
                                       visualDensity: VisualDensity.compact,
                                       backgroundColor: Colors.blue.shade50,
                                     ),
                                   if (m.item.returnUntil != null)
                                     Chip(
-                                      label: Text('مرجوعی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(m.item.returnUntil!)))}',
+                                      label: Text('مرجوعی تا ${formatDate(m.item.returnUntil!)}',
                                           style: const TextStyle(fontSize: 11)),
                                       visualDensity: VisualDensity.compact,
                                       backgroundColor: Colors.orange.shade50,
@@ -8140,7 +8189,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 ChoiceChip(label: Text(_presetLabel(p)), selected: preset == p, onSelected: (_) => _applyPreset(p)),
               ActionChip(
                 label: Text(preset == _ReportPreset.custom
-                    ? '${ltr(persianDigits(DateFormat('dd.MM.yy').format(rangeStart)))} - ${ltr(persianDigits(DateFormat('dd.MM.yy').format(rangeEnd)))}'
+                    ? '${formatDate(rangeStart)} - ${formatDate(rangeEnd)}'
                     : 'بازه‌ی دلخواه'),
                 avatar: const Icon(Icons.date_range, size: 18),
                 onPressed: _pickCustomRange,
@@ -9490,7 +9539,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           if (it.warrantyUntil != null)
                             Chip(
                               avatar: const Icon(Icons.verified_outlined, size: 14),
-                              label: Text('گارانتی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!)))}', style: const TextStyle(fontSize: 11)),
+                              label: Text('گارانتی تا ${formatDate(it.warrantyUntil!)}', style: const TextStyle(fontSize: 11)),
                               visualDensity: VisualDensity.compact,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               backgroundColor: Colors.blue.shade50,
@@ -9498,7 +9547,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           if (it.returnUntil != null)
                             Chip(
                               avatar: const Icon(Icons.assignment_return_outlined, size: 14),
-                              label: Text('مرجوعی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.returnUntil!)))}', style: const TextStyle(fontSize: 11)),
+                              label: Text('مرجوعی تا ${formatDate(it.returnUntil!)}', style: const TextStyle(fontSize: 11)),
                               visualDensity: VisualDensity.compact,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               backgroundColor: Colors.orange.shade50,
@@ -10872,7 +10921,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                             if (it.warrantyUntil != null)
                               Chip(
                                 avatar: const Icon(Icons.verified_outlined, size: 14),
-                                label: Text('گارانتی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.warrantyUntil!)))}', style: const TextStyle(fontSize: 11)),
+                                label: Text('گارانتی تا ${formatDate(it.warrantyUntil!)}', style: const TextStyle(fontSize: 11)),
                                 visualDensity: VisualDensity.compact,
                                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 backgroundColor: Colors.blue.shade50,
@@ -10880,7 +10929,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                             if (it.returnUntil != null)
                               Chip(
                                 avatar: const Icon(Icons.assignment_return_outlined, size: 14),
-                                label: Text('مرجوعی تا ${ltr(persianDigits(DateFormat('yyyy-MM-dd').format(it.returnUntil!)))}', style: const TextStyle(fontSize: 11)),
+                                label: Text('مرجوعی تا ${formatDate(it.returnUntil!)}', style: const TextStyle(fontSize: 11)),
                                 visualDensity: VisualDensity.compact,
                                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 backgroundColor: Colors.orange.shade50,
