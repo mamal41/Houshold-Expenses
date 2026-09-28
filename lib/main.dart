@@ -40,7 +40,9 @@ void main() async {
 // Unicode bidi algorithm re-ordering symbols/signs relative to the digits.
 enum CalendarSystem { gregorian, jalali }
 
-final ValueNotifier<CalendarSystem> currentCalendarSystem = ValueNotifier(CalendarSystem.gregorian);
+// Jalali (Solar Hijri) is the default; a calendar the user picked in Settings
+// is saved and restored on start-up.
+final ValueNotifier<CalendarSystem> currentCalendarSystem = ValueNotifier(CalendarSystem.jalali);
 
 const _jalaliMonthNames = [
   'فروردین',
@@ -1660,7 +1662,7 @@ class Store {
   static Future<CalendarSystem> loadCalendarSystem() async {
     final sp = await SharedPreferences.getInstance();
     final code = sp.getString(_calendarSystemKey);
-    return CalendarSystem.values.firstWhere((c) => c.name == code, orElse: () => CalendarSystem.gregorian);
+    return CalendarSystem.values.firstWhere((c) => c.name == code, orElse: () => CalendarSystem.jalali);
   }
 
   static Future<void> saveCalendarSystem(CalendarSystem system) async {
@@ -2514,7 +2516,7 @@ class CalendarSettingsScreen extends StatelessWidget {
             children: const [
               RadioListTile<CalendarSystem>(
                 title: Text('هجری شمسی'),
-                subtitle: Text('مثلاً ۰۱.۰۷.۱۴۰۵'),
+                subtitle: Text('مثلاً ۱۴۰۵/۰۷/۰۱'),
                 value: CalendarSystem.jalali,
               ),
               RadioListTile<CalendarSystem>(
