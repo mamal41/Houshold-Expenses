@@ -4,7 +4,8 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter/services.dart' show SystemNavigator, SystemChrome, SystemUiMode, Clipboard, ClipboardData;
+import 'package:flutter/services.dart'
+    show SystemNavigator, SystemChrome, SystemUiMode, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -200,6 +201,231 @@ CalendarMonth calendarMonthOf(DateTime d, [int monthOffset = 0]) {
   );
 }
 
+// ---------------------------------------------------------------- date pickers
+
+/// Date picker that follows the chosen calendar: a Solar Hijri (Jalali)
+/// dialog when Jalali is selected, the standard Material picker otherwise.
+Future<DateTime?> showAppDatePicker({
+  required BuildContext context,
+  required DateTime initialDate,
+  required DateTime firstDate,
+  required DateTime lastDate,
+  TransitionBuilder? builder,
+}) {
+  if (currentCalendarSystem.value == CalendarSystem.jalali) {
+    return showDialog<DateTime>(
+      context: context,
+      builder: (_) => JalaliDatePickerDialog(initial: initialDate, first: firstDate, last: lastDate),
+    );
+  }
+  return showDatePicker(
+    context: context,
+    initialDate: initialDate,
+    firstDate: firstDate,
+    lastDate: lastDate,
+    builder: builder ?? (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+  );
+}
+
+/// Date-range picker: Material's in Gregorian mode; in Jalali mode two
+/// Jalali pickers are shown one after the other (start, then end).
+Future<DateTimeRange?> showAppDateRangePicker({
+  required BuildContext context,
+  required DateTime firstDate,
+  required DateTime lastDate,
+  required DateTimeRange initialDateRange,
+}) async {
+  if (currentCalendarSystem.value != CalendarSystem.jalali) {
+    return showDateRangePicker(context: context, firstDate: firstDate, lastDate: lastDate, initialDateRange: initialDateRange);
+  }
+  final start = await showAppDatePicker(context: context, initialDate: initialDateRange.start, firstDate: firstDate, lastDate: lastDate);
+  if (start == null || !context.mounted) return null;
+  final endInitial = initialDateRange.end.isBefore(start) ? start : initialDateRange.end;
+  final end = await showAppDatePicker(context: context, initialDate: endInitial, firstDate: start, lastDate: lastDate);
+  if (end == null) return null;
+  return DateTimeRange(start: start, end: end);
+}
+
+class JalaliDatePickerDialog extends StatefulWidget {
+  final DateTime initial;
+  final DateTime first;
+  final DateTime last;
+  const JalaliDatePickerDialog({required this.initial, required this.first, required this.last, super.key});
+  @override
+  State<JalaliDatePickerDialog> createState() => _JalaliDatePickerDialogState();
+}
+
+class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
+  late DateTime selected;
+  late int viewYear;
+  late int viewMonth;
+
+  DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  @override
+  void initState() {
+    super.initState();
+    final first = _day(widget.first);
+    final last = _day(widget.last);
+    var init = _day(widget.initial);
+    if (init.isBefore(first)) init = first;
+    if (init.isAfter(last)) init = last;
+    selected = init;
+    final j = gregorianToJalali(init.year, init.month, init.day);
+    viewYear = j[0];
+    viewMonth = j[1];
+  }
+
+  DateTime _startOf(int y, int m) {
+    final g = jalaliToGregorian(y, m, 1);
+    return DateTime(g[0], g[1], g[2]);
+  }
+
+  int _lengthOf(int y, int m) {
+    final next = m == 12 ? _startOf(y + 1, 1) : _startOf(y, m + 1);
+    return next.difference(_startOf(y, m)).inDays;
+  }
+
+  void _shiftMonth(int delta) {
+    final total = viewYear * 12 + (viewMonth - 1) + delta;
+    setState(() {
+      viewYear = total ~/ 12;
+      viewMonth = total % 12 + 1;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final first = _day(widget.first);
+    final last = _day(widget.last);
+    final firstJ = gregorianToJalali(first.year, first.month, first.day);
+    final lastJ = gregorianToJalali(last.year, last.month, last.day);
+    final years = [for (var y = firstJ[0]; y <= lastJ[0]; y++) y];
+    if (!years.contains(viewYear)) years.add(viewYear);
+    years.sort();
+
+    final monthStart = _startOf(viewYear, viewMonth);
+    final leading = (monthStart.weekday + 1) % 7; // Saturday = 0
+    final days = _lengthOf(viewYear, viewMonth);
+    final today = _day(DateTime.now());
+    final cells = <Widget>[];
+    for (var i = 0; i < leading; i++) {
+      cells.add(const SizedBox.shrink());
+    }
+    for (var d = 1; d <= days; d++) {
+      final g = jalaliToGregorian(viewYear, viewMonth, d);
+      final date = DateTime(g[0], g[1], g[2]);
+      final enabled = !date.isBefore(first) && !date.isAfter(last);
+      final isSelected = date == selected;
+      final isToday = date == today;
+      final scheme = Theme.of(context).colorScheme;
+      cells.add(
+        Padding(
+          padding: const EdgeInsets.all(2),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: enabled ? () => setState(() => selected = date) : null,
+            child: Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isSelected ? scheme.primary : null,
+                border: isToday && !isSelected ? Border.all(color: scheme.primary) : null,
+              ),
+              child: Text(
+                persianDigits('$d'),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: isSelected ? scheme.onPrimary : (enabled ? null : Theme.of(context).disabledColor),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    while (cells.length % 7 != 0) {
+      cells.add(const SizedBox.shrink());
+    }
+    const weekdayLetters = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'];
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(formatDate(selected), style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'ماه قبل', onPressed: () => _shiftMonth(-1)),
+                  Expanded(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        DropdownButton<int>(
+                          value: viewMonth,
+                          underline: const SizedBox.shrink(),
+                          items: List.generate(12, (i) => DropdownMenuItem(value: i + 1, child: Text(_jalaliMonthNames[i]))),
+                          onChanged: (v) => setState(() => viewMonth = v ?? viewMonth),
+                        ),
+                        const SizedBox(width: 8),
+                        DropdownButton<int>(
+                          value: viewYear,
+                          underline: const SizedBox.shrink(),
+                          items: years.map((y) => DropdownMenuItem(value: y, child: Text(persianDigits('$y')))).toList(),
+                          onChanged: (v) => setState(() => viewYear = v ?? viewYear),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(icon: const Icon(Icons.chevron_left), tooltip: 'ماه بعد', onPressed: () => _shiftMonth(1)),
+                ],
+              ),
+              Row(
+                children: weekdayLetters
+                    .map((w) => Expanded(
+                          child: Center(child: Text(w, style: TextStyle(fontSize: 12, color: Colors.grey.shade600))),
+                        ))
+                    .toList(),
+              ),
+              const SizedBox(height: 4),
+              GridView.count(
+                crossAxisCount: 7,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                children: cells,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('cancel'))),
+          TextButton(
+            onPressed: () {
+              final t = _day(DateTime.now());
+              if (!t.isBefore(first) && !t.isAfter(last)) {
+                final j = gregorianToJalali(t.year, t.month, t.day);
+                setState(() {
+                  selected = t;
+                  viewYear = j[0];
+                  viewMonth = j[1];
+                });
+              }
+            },
+            child: const Text('امروز'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(context, selected), child: Text(tr('confirm'))),
+        ],
+      ),
+    );
+  }
+}
+
 Future<bool> confirmExitApp(BuildContext context) async {
   final result = await showDialog<bool>(
     context: context,
@@ -268,7 +494,7 @@ extension AccountTypeLabel on AccountType {
   }
 }
 
-const kCurrencies = ['IRR', 'EUR', 'USD', 'GBP', 'TRY', 'AED', 'CHF'];
+const kCurrencies = ['IRT', 'IRR', 'EUR', 'USD', 'GBP', 'TRY', 'AED', 'CHF'];
 
 // App identity/version shown in the "درباره‌ی برنامه" screen and used for
 // store listings. Keep this in sync with pubspec.yaml's `version:` field
@@ -418,7 +644,7 @@ class SavingsGoal {
   final double targetAmount;
   final DateTime? targetDate;
   final String currency;
-  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, this.currency = 'IRR'});
+  const SavingsGoal({required this.id, required this.name, required this.targetAmount, this.targetDate, this.currency = 'IRT'});
 
   Map<String, dynamic> toJson() =>
       {'id': id, 'name': name, 'targetAmount': targetAmount, 'targetDate': targetDate?.toIso8601String(), 'currency': currency};
@@ -427,7 +653,7 @@ class SavingsGoal {
         name: j['name'],
         targetAmount: (j['targetAmount'] as num).toDouble(),
         targetDate: j['targetDate'] != null ? DateTime.tryParse(j['targetDate']) : null,
-        currency: j['currency'] ?? 'IRR',
+        currency: j['currency'] ?? 'EUR',
       );
 }
 
@@ -515,7 +741,7 @@ class Account {
         id: j['id'],
         name: j['name'],
         type: AccountType.values.byName(j['type'] ?? 'bank'),
-        currency: j['currency'] ?? 'IRR',
+        currency: j['currency'] ?? 'EUR',
         initialBalance: (j['initialBalance'] as num?)?.toDouble() ?? 0,
       );
 }
@@ -1115,7 +1341,7 @@ const defaultCategories = <Category>[
   Category(id: '_transfer_in_', name: 'انتقال بین حساب‌ها', type: TxType.income),
 ];
 
-const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'IRR');
+const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'IRT');
 
 const kCategoryIcons = <String, IconData>{
   'e_food': Icons.restaurant_outlined,
@@ -2101,10 +2327,15 @@ class _MoneyAppState extends State<MoneyApp> {
         GlobalCupertinoLocalizations.delegate,
       ],
       builder: (context, child) => Directionality(textDirection: currentLanguage.value.direction, child: child!),
+      navigatorObservers: [appRouteObserver],
       home: const AppLockGate(child: HomeScreen()),
     );
   }
 }
+
+/// Lets the home screen notice when the person comes back to it, so its
+/// numbers refresh without pulling the page down.
+final RouteObserver<ModalRoute<void>> appRouteObserver = RouteObserver<ModalRoute<void>>();
 
 // ============================== App lock ==============================
 
@@ -3398,13 +3629,23 @@ Future<String> geminiTextRequest(String apiKey, String prompt) async {
 
 // ============================== Money formatting ==============================
 
-/// Human-friendly currency name for display: the Iranian Rial is shown as
-/// "ریال" (instead of the ISO code IRR) when the app language is Persian;
-/// every other currency keeps its code.
+/// Human-friendly currency name for display. Iranian money is shown as
+/// "تومان" / "ریال" when the app language is Persian; every other currency
+/// keeps its code. (IRT = Toman: a separate unit worth 10 Rial, offered
+/// because Toman is what people in Iran normally use day to day.)
 String currencyLabel(String code) {
-  if (code == 'IRR' && currentLanguage.value == AppLanguage.fa) return 'ریال';
+  if (currentLanguage.value == AppLanguage.fa) {
+    if (code == 'IRT') return 'تومان';
+    if (code == 'IRR') return 'ریال';
+  }
   return code;
 }
+
+/// Whether [currency] is written without decimals and in "millions" when
+/// space is tight (Toman and Rial amounts are big whole numbers).
+bool isWholeNumberCurrency(String currency) => currency == 'IRT' || currency == 'IRR';
+
+String _groupThousands(String digits) => digits.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
 
 String formatMoney(double amount, String currency) {
   final n = persianDigits(amount.toStringAsFixed(2));
@@ -3422,19 +3663,20 @@ String formatMoney(double amount, String currency) {
     case 'AED':
       return '\u2067${ltr(n)} د.إ\u2069';
     case 'IRR':
-      final whole = amount.round().abs().toString();
-      final grouped = whole.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
-      return '\u2067${ltr(persianDigits('${amount < 0 ? '-' : ''}$grouped'))} ریال\u2069';
+    case 'IRT':
+      final grouped = _groupThousands(amount.round().abs().toString());
+      final unit = currentLanguage.value == AppLanguage.fa ? (currency == 'IRT' ? 'تومان' : 'ریال') : currency;
+      return '\u2067${ltr(persianDigits('${amount < 0 ? '-' : ''}$grouped'))} $unit\u2069';
     default:
       return ltr('$n $currency');
   }
 }
 
-/// Short amount for tight spaces (e.g. the pie-chart legend). Rial amounts are
-/// long, so they are shown in millions ("۱۲۵.۴ م"); other currencies use the
-/// regular format.
+/// Short amount for tight spaces (e.g. the pie-chart legend and chart
+/// labels). Toman/Rial amounts are long, so they are shown in millions
+/// ("۱۲۵.۴ م"); other currencies use the regular format.
 String formatMoneyCompact(double amount, String currency) {
-  if (currency != 'IRR') return formatMoney(amount, currency);
+  if (!isWholeNumberCurrency(currency)) return formatMoney(amount, currency);
   final abs = amount.abs();
   String trim(double v) {
     final t = v.toStringAsFixed(1);
@@ -3444,6 +3686,133 @@ String formatMoneyCompact(double amount, String currency) {
   final sign = amount < 0 ? '-' : '';
   if (abs >= 1e6) return '\u2067${ltr(persianDigits('$sign${trim(abs / 1e6)}'))} م\u2069';
   return formatMoney(amount, currency);
+}
+
+// ---------------------------------------------------------------- amount input
+
+/// Reads an amount typed into an [AmountInputFormatter] field (or pasted):
+/// Persian/Arabic digits are accepted, "," / space / "٬" are thousands
+/// separators and "." or "٫" is the decimal point.
+double? parseAmount(String input) {
+  const persian = '۰۱۲۳۴۵۶۷۸۹';
+  const arabic = '٠١٢٣٤٥٦٧٨٩';
+  final sb = StringBuffer();
+  for (final ch in input.trim().split('')) {
+    final p = persian.indexOf(ch);
+    final a = arabic.indexOf(ch);
+    if (p >= 0) {
+      sb.write(p);
+    } else if (a >= 0) {
+      sb.write(a);
+    } else if (ch == '٫') {
+      sb.write('.');
+    } else if (ch == ',' || ch == '٬' || ch == ' ') {
+      continue;
+    } else {
+      sb.write(ch);
+    }
+  }
+  final t = sb.toString();
+  if (t.isEmpty) return null;
+  return double.tryParse(t);
+}
+
+/// Text to pre-fill an amount field with: grouped in thousands, no
+/// pointless ".00" (whole amounts show no decimals), Persian digits when the
+/// app language is Persian.
+String formatAmountInput(double v, {int maxDecimals = 2}) {
+  var s = v.abs().toStringAsFixed(maxDecimals);
+  if (s.contains('.')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '');
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  final parts = s.split('.');
+  final out = '${v < 0 ? '-' : ''}${_groupThousands(parts[0])}${parts.length > 1 ? '.${parts[1]}' : ''}';
+  return persianDigits(out);
+}
+
+/// Live thousands separators while typing an amount ("1234567" -> "1,234,567").
+/// A typed "," or "٫" acts as the decimal point; digits can be Persian.
+class AmountInputFormatter extends TextInputFormatter {
+  final bool allowNegative;
+  final int maxDecimals;
+  const AmountInputFormatter({this.allowNegative = false, this.maxDecimals = 6});
+
+  static const _persian = '۰۱۲۳۴۵۶۷۸۹';
+  static const _arabic = '٠١٢٣٤٥٦٧٨٩';
+
+  static bool _isDigit(String ch) => (ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57) || _persian.contains(ch) || _arabic.contains(ch);
+  static String _ascii(String ch) {
+    final p = _persian.indexOf(ch);
+    if (p >= 0) return '$p';
+    final a = _arabic.indexOf(ch);
+    return a >= 0 ? '$a' : ch;
+  }
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    var text = newValue.text;
+    var cursor = newValue.selection.baseOffset;
+    if (cursor < 0 || cursor > text.length) cursor = text.length;
+
+    // Backspace right after a separator: remove the digit before it instead
+    // of appearing to do nothing.
+    final oldCommas = ','.allMatches(oldValue.text).length;
+    final newCommas = ','.allMatches(text).length;
+    if (text.length == oldValue.text.length - 1 && newCommas == oldCommas - 1 && cursor > 0 && _isDigit(text[cursor - 1])) {
+      text = text.replaceRange(cursor - 1, cursor, '');
+      cursor -= 1;
+    }
+    // A comma / Arabic decimal mark typed just now means "decimal point".
+    if (text.length == oldValue.text.length + 1 && cursor > 0 && (text[cursor - 1] == ',' || text[cursor - 1] == '٫')) {
+      text = text.replaceRange(cursor - 1, cursor, '.');
+    }
+
+    final digits = StringBuffer();
+    var seenDot = false;
+    var negative = false;
+    var significantBeforeCursor = 0;
+    for (var i = 0; i < text.length; i++) {
+      final ch = text[i];
+      var kept = false;
+      if (_isDigit(ch)) {
+        digits.write(_ascii(ch));
+        kept = true;
+      } else if (ch == '.' && !seenDot) {
+        digits.write('.');
+        seenDot = true;
+        kept = true;
+      } else if (ch == '-' && allowNegative && i == 0) {
+        negative = true;
+        kept = true;
+      }
+      if (kept && i < cursor) significantBeforeCursor++;
+    }
+
+    var raw = digits.toString();
+    var intPart = raw;
+    var fracPart = '';
+    final dot = raw.indexOf('.');
+    if (dot >= 0) {
+      intPart = raw.substring(0, dot);
+      fracPart = raw.substring(dot + 1);
+      if (fracPart.length > maxDecimals) fracPart = fracPart.substring(0, maxDecimals);
+    }
+    if (intPart.length > 1) intPart = intPart.replaceFirst(RegExp(r'^0+'), '');
+    if (intPart.isEmpty && dot >= 0) intPart = '0';
+
+    var formatted = '${negative ? '-' : ''}${_groupThousands(intPart)}${dot >= 0 ? '.$fracPart' : ''}';
+    formatted = persianDigits(formatted);
+
+    var pos = 0;
+    var count = 0;
+    while (pos < formatted.length && count < significantBeforeCursor) {
+      final ch = formatted[pos];
+      if (_isDigit(ch) || ch == '.' || ch == '-') count++;
+      pos++;
+    }
+    return TextEditingValue(text: formatted, selection: TextSelection.collapsed(offset: pos));
+  }
 }
 
 /// The main, memorable title for a transaction list row: the item name if
@@ -3465,7 +3834,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
   List<Transaction> tx = [];
   List<Category> categories = [];
   List<Account> accounts = [];
@@ -3478,6 +3847,46 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) appRouteObserver.subscribe(this, route);
+  }
+
+  @override
+  void dispose() {
+    appRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// Called when a screen pushed on top of Home is closed: refresh quietly
+  /// (no spinner, no full reload) so the numbers are always current.
+  @override
+  void didPopNext() {
+    _refresh();
+  }
+
+  DateTime _lastRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _refreshing = false;
+
+  Future<void> _refresh() async {
+    if (_refreshing || !mounted) return;
+    // Skip if we've only just refreshed (e.g. an explicit reload right after closing a screen).
+    if (DateTime.now().difference(_lastRefresh) < const Duration(milliseconds: 400)) return;
+    _refreshing = true;
+    try {
+      await _reloadTx();
+      categories = await Store.loadCategories();
+      accounts = await Store.loadAccounts();
+      shoppingPending = await _loadShoppingPending();
+      if (mounted) setState(() {});
+    } finally {
+      _lastRefresh = DateTime.now();
+      _refreshing = false;
+    }
   }
 
   Future<void> _load() async {
@@ -3501,7 +3910,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'IRR' : a.first.currency;
+    return a.isEmpty ? 'IRT' : a.first.currency;
   }
 
   Future<int> _loadShoppingPending() async {
@@ -3515,10 +3924,14 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Loads transactions for the home screen: [tx] holds only confirmed ones
   /// (drafts must not affect any balance, total, chart or list here); the
   /// number of drafts is kept separately for the badge.
+  int _reloadSeq = 0;
   Future<void> _reloadTx() async {
+    final seq = ++_reloadSeq;
     final all = await Store.loadTransactions();
+    if (seq != _reloadSeq) return; // a newer reload is already in flight; let it win
     _draftCount = all.where((t) => t.draft).length;
     tx = all.where((t) => !t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+    _lastRefresh = DateTime.now();
   }
 
   Map<String, double> get totalBalanceByCurrency {
@@ -3576,7 +3989,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String get primaryCurrency {
     if (dashboardAccountFilter != null) return currencyOf(dashboardAccountFilter!);
-    if (accounts.isEmpty) return 'IRR';
+    if (accounts.isEmpty) return 'IRT';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -3759,12 +4172,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text('موجودی کل', style: Theme.of(context).textTheme.titleMedium),
-                        if (draftCount > 0)
-                          Chip(
-                            label: Text('$draftCount پیش‌نویس'),
-                            backgroundColor: Colors.amber.shade100,
-                            visualDensity: VisualDensity.compact,
-                          ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -3817,7 +4224,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         const SizedBox(width: 4),
                                         Expanded(
                                           child: Text(
-                                            'قبوض پیش‌رو ${ltr(formatMoney(-e.value, e.key))} بیشتر از موجودی فعلیته',
+                                            'پرداخت‌های پیش‌رو ${ltr(formatMoney(-e.value, e.key))} بیشتر از موجودی فعلیته',
                                             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.red.shade700),
                                           ),
                                         ),
@@ -4478,7 +4885,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'IRR' : a.first.currency;
+    return a.isEmpty ? 'IRT' : a.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -4599,7 +5006,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'IRR' : a.first.currency;
+    return a.isEmpty ? 'IRT' : a.first.currency;
   }
 
   String _recurrenceLabel(Transaction t) {
@@ -4750,12 +5157,12 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   String get primaryCurrency {
     if (accountFilter != null) return currencyOf(accountFilter!);
-    if (accounts.isEmpty) return 'IRR';
+    if (accounts.isEmpty) return 'IRT';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -5138,7 +5545,7 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
 
   String currencyOf(String accountId) {
     final a = accounts.where((a) => a.id == accountId).toList();
-    return a.isEmpty ? 'IRR' : a.first.currency;
+    return a.isEmpty ? 'IRT' : a.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -5313,7 +5720,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
   }
 
   String get primaryCurrency {
-    if (accounts.isEmpty) return 'IRR';
+    if (accounts.isEmpty) return 'IRT';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -5323,7 +5730,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   /// Average monthly income/expense (in the primary currency, transfers
@@ -5518,7 +5925,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
   bool loading = true;
   List<Account> accounts = [];
   List<Transaction> tx = [];
-  String baseCurrency = 'IRR';
+  String baseCurrency = 'IRT';
   Map<String, double> rates = {};
 
   @override
@@ -5531,12 +5938,20 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
     accounts = await Store.loadAccounts();
     tx = await Store.loadConfirmedTransactions();
     final storedBase = await Store.loadBaseCurrency();
-    baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'IRR');
+    baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'IRT');
     rates = await Store.loadExchangeRates();
     setState(() => loading = false);
   }
 
-  double _rateFor(String currency) => currency == baseCurrency ? 1.0 : (rates[currency] ?? 1.0);
+  double _rateFor(String currency) {
+    if (currency == baseCurrency) return 1.0;
+    final stored = rates[currency];
+    if (stored != null) return stored;
+    // 1 Toman = 10 Rial, so no manual rate is needed between the two.
+    if (baseCurrency == 'IRR' && currency == 'IRT') return 10.0;
+    if (baseCurrency == 'IRT' && currency == 'IRR') return 0.1;
+    return 1.0;
+  }
 
   double _netWorthAt(DateTime endOfMonth) {
     var total = 0.0;
@@ -5594,7 +6009,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                             padding: const EdgeInsets.only(bottom: 8),
                             child: TextField(
                               controller: e.value,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
                               decoration: InputDecoration(labelText: '۱ ${currencyLabel(e.key)} = ? ${currencyLabel(localBase)}', isDense: true),
                             ),
                           )),
@@ -5613,7 +6028,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
     final newRates = <String, double>{};
     for (final entry in ctrls.entries) {
       if (entry.key == localBase) continue;
-      final v = double.tryParse(entry.value.text.replaceAll(',', '.'));
+      final v = parseAmount(entry.value.text);
       if (v != null && v > 0) newRates[entry.key] = v;
     }
     baseCurrency = localBase;
@@ -5763,11 +6178,11 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   String get primaryCurrency {
-    if (accounts.isEmpty) return 'IRR';
+    if (accounts.isEmpty) return 'IRT';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -5829,21 +6244,21 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
   }
 
   Future<void> _editAllocation(Category c) async {
-    final ctrl = TextEditingController(text: _allocationFor(c.id) > 0 ? _allocationFor(c.id).toStringAsFixed(0) : '');
+    final ctrl = TextEditingController(text: _allocationFor(c.id) > 0 ? formatAmountInput(_allocationFor(c.id)) : '');
     final result = await showDialog<double?>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('تخصیص ${c.name}'),
         content: TextField(
           controller: ctrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
           decoration: const InputDecoration(labelText: 'مبلغ تخصیص‌یافته در ماه'),
           autofocus: true,
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, 0.0), child: const Text('صفر کن')),
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.'))), child: Text(tr('save'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, parseAmount(ctrl.text)), child: Text(tr('save'))),
         ],
       ),
     );
@@ -6001,14 +6416,14 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
 
   Future<void> _editGoal(Category c) async {
     final existing = goals.where((g) => g.categoryId == c.id).toList();
-    final ctrl = TextEditingController(text: existing.isEmpty ? '' : existing.first.monthlyAmount.toStringAsFixed(0));
+    final ctrl = TextEditingController(text: existing.isEmpty ? '' : formatAmountInput(existing.first.monthlyAmount));
     final result = await showDialog<double?>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('هدف هزینه‌ی ${c.name}'),
         content: TextField(
           controller: ctrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
           decoration: const InputDecoration(labelText: 'مبلغ هدف در ماه', hintText: 'مثلاً 200'),
           autofocus: true,
         ),
@@ -6020,7 +6435,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
             ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.'))),
+            onPressed: () => Navigator.pop(ctx, parseAmount(ctrl.text)),
             child: Text(tr('save')),
           ),
         ],
@@ -6130,8 +6545,8 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
 
   Future<void> _addOrEditGoal({SavingsGoal? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final amountCtrl = TextEditingController(text: existing?.targetAmount.toStringAsFixed(0) ?? '');
-    String currency = existing?.currency ?? 'IRR';
+    final amountCtrl = TextEditingController(text: (existing == null ? '' : formatAmountInput(existing.targetAmount)));
+    String currency = existing?.currency ?? 'IRT';
     DateTime? targetDate = existing?.targetDate;
     final result = await showDialog<bool>(
       context: context,
@@ -6150,7 +6565,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                       flex: 2,
                       child: TextField(
                         controller: amountCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
                         decoration: const InputDecoration(labelText: 'مبلغ هدف'),
                       ),
                     ),
@@ -6171,7 +6586,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                   title: Text(targetDate == null ? 'تاریخ هدف (اختیاری)' : formatDate(targetDate!)),
                   trailing: const Icon(Icons.calendar_today, size: 18),
                   onTap: () async {
-                    final picked = await showDatePicker(
+                    final picked = await showAppDatePicker(
                       context: ctx,
                       initialDate: targetDate ?? DateTime.now().add(const Duration(days: 365)),
                       firstDate: DateTime.now(),
@@ -6202,7 +6617,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
       return;
     }
     if (result != true) return;
-    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    final amount = parseAmount(amountCtrl.text);
     if (nameCtrl.text.trim().isEmpty || amount == null || amount <= 0) return;
     final goal = SavingsGoal(
       id: existing?.id ?? 'sg_${DateTime.now().microsecondsSinceEpoch}',
@@ -6229,7 +6644,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
             children: [
               TextField(
                 controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
                 decoration: InputDecoration(labelText: 'مبلغ واریزی (${currencyLabel(g.currency)})'),
                 autofocus: true,
               ),
@@ -6240,7 +6655,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
                   final picked =
-                      await showDatePicker(
+                      await showAppDatePicker(
                         context: ctx,
                         initialDate: date,
                         firstDate: DateTime(2015),
@@ -6260,7 +6675,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
       }),
     );
     if (result != true) return;
-    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    final amount = parseAmount(amountCtrl.text);
     if (amount == null || amount <= 0) return;
     final contribution = SavingsContribution(
       id: 'sc_${DateTime.now().microsecondsSinceEpoch}',
@@ -6924,7 +7339,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
   Future<void> _addOrEditItem({ShoppingListItem? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '');
-    final priceCtrl = TextEditingController(text: existing?.estimatedPrice?.toString() ?? '');
+    final priceCtrl = TextEditingController(text: existing?.estimatedPrice == null ? '' : formatAmountInput(existing!.estimatedPrice!));
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -6938,7 +7353,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
             const SizedBox(height: 8),
             TextField(
               controller: priceCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
               decoration: const InputDecoration(labelText: 'قیمت تقریبی (اختیاری)'),
             ),
           ],
@@ -6954,7 +7369,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
       id: existing?.id ?? 'sli_${DateTime.now().microsecondsSinceEpoch}',
       name: nameCtrl.text.trim(),
       quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
-      estimatedPrice: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      estimatedPrice: parseAmount(priceCtrl.text),
       checked: existing?.checked ?? false,
     );
     final items = [...list.items.where((i) => i.id != item.id), item];
@@ -7090,7 +7505,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
                               ? Text(
                                   '${item.quantity != null ? 'تعداد: ${item.quantity!.toStringAsFixed(item.quantity! % 1 == 0 ? 0 : 2)}' : ''}'
                                   '${item.quantity != null && item.estimatedPrice != null ? ' • ' : ''}'
-                                  '${item.estimatedPrice != null ? '~${item.estimatedPrice!.toStringAsFixed(2)}' : ''}',
+                                  '${item.estimatedPrice != null ? '~${formatAmountInput(item.estimatedPrice!)}' : ''}',
                                 )
                               : null,
                           trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deleteItem(item)),
@@ -7148,7 +7563,7 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   Future<void> _pickDate() async {
-    final picked = await showDatePicker(
+    final picked = await showAppDatePicker(
       context: context,
       initialDate: date,
       firstDate: DateTime(2015),
@@ -7159,7 +7574,7 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   Future<void> _save() async {
-    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    final amount = parseAmount(amountCtrl.text);
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
       return;
@@ -7174,7 +7589,7 @@ class _TransferScreenState extends State<TransferScreen> {
     }
     var convertedAmount = amount;
     if (fromAccount!.currency != toAccount!.currency) {
-      final rate = double.tryParse(exchangeRateCtrl.text.replaceAll(',', '.'));
+      final rate = parseAmount(exchangeRateCtrl.text);
       if (rate == null || rate <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('برای انتقال بین ${currencyLabel(fromAccount!.currency)} و ${currencyLabel(toAccount!.currency)}، نرخ تبدیل را وارد کنید.'),
@@ -7292,7 +7707,7 @@ class _TransferScreenState extends State<TransferScreen> {
           const SizedBox(height: 16),
           TextField(
             controller: amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
             decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 100.00', border: const OutlineInputBorder()),
             onChanged: (_) => setState(() {}),
           ),
@@ -7300,7 +7715,7 @@ class _TransferScreenState extends State<TransferScreen> {
             const SizedBox(height: 16),
             TextField(
               controller: exchangeRateCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
               decoration: InputDecoration(
                 labelText: '۱ ${currencyLabel(fromAccount!.currency)} = ? ${currencyLabel(toAccount!.currency)}',
                 hintText: 'نرخ تبدیل',
@@ -7309,8 +7724,8 @@ class _TransferScreenState extends State<TransferScreen> {
               onChanged: (_) => setState(() {}),
             ),
             Builder(builder: (context) {
-              final amt = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
-              final rate = double.tryParse(exchangeRateCtrl.text.replaceAll(',', '.'));
+              final amt = parseAmount(amountCtrl.text);
+              final rate = parseAmount(exchangeRateCtrl.text);
               if (amt == null || rate == null || rate <= 0) return const SizedBox.shrink();
               return Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -7394,7 +7809,7 @@ class _TransferScreenState extends State<TransferScreen> {
                 title: Text(endDate == null ? 'تاریخ پایان را انتخاب کنید' : formatDate(endDate!)),
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
-                  final picked = await showDatePicker(
+                  final picked = await showAppDatePicker(
                     context: context,
                     initialDate: endDate ?? date.add(const Duration(days: 30)),
                     firstDate: date,
@@ -7465,7 +7880,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -7917,7 +8332,7 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   Future<void> _openEditor(Transaction t) async {
@@ -8090,7 +8505,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _pickCustomRange() async {
-    final picked = await showDateRangePicker(
+    final picked = await showAppDateRangePicker(
       context: context,
       firstDate: DateTime(2015),
       lastDate: DateTime.now(),
@@ -8134,7 +8549,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   Map<Category, double> _expenseByTopCategory(List<Transaction> list, String currency) {
@@ -8187,7 +8602,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       for (final a in accounts) {
         counts[a.currency] = (counts[a.currency] ?? 0) + 1;
       }
-      primaryCurrency = counts.isEmpty ? 'IRR' : (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+      primaryCurrency = counts.isEmpty ? 'IRT' : (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
     }
 
     double sumFor(List<Transaction> list, TxType type) => list
@@ -8390,11 +8805,11 @@ class _ForecastScreenState extends State<ForecastScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   String get primaryCurrency {
-    if (accounts.isEmpty) return 'IRR';
+    if (accounts.isEmpty) return 'IRT';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -8591,7 +9006,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
 
   String currencyOf(String accountId) {
     final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   String categoryName(String id) {
@@ -8670,7 +9085,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
 
   String get primaryCurrency {
     if (accountFilter != null) return currencyOf(accountFilter!);
-    if (accounts.isEmpty) return 'IRR';
+    if (accounts.isEmpty) return 'IRT';
     final counts = <String, int>{};
     for (final a in accounts) {
       counts[a.currency] = (counts[a.currency] ?? 0) + 1;
@@ -9197,7 +9612,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   void initState() {
     super.initState();
     merchantCtrl.text = widget.initial.merchant;
-    totalCtrl.text = widget.initial.total?.toStringAsFixed(2) ?? '';
+    totalCtrl.text = widget.initial.total == null ? '' : formatAmountInput(widget.initial.total!);
     date = widget.initial.date ?? DateTime.now();
     items = List.of(widget.initial.items);
     _load();
@@ -9228,7 +9643,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         if (result['merchant'] != null) merchantCtrl.text = result['merchant'];
         if (result['total'] != null) {
           final t = (result['total'] as num).toDouble();
-          totalCtrl.text = t == t.roundToDouble() ? t.toStringAsFixed(0) : t.toStringAsFixed(2);
+          totalCtrl.text = formatAmountInput(t);
         }
         if (result['date'] != null) {
           final parsed = DateTime.tryParse(result['date']);
@@ -9311,7 +9726,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final existing = editIndex != null ? items[editIndex] : null;
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
-    final priceCtrl = TextEditingController(text: existing?.price?.toString() ?? '');
+    final priceCtrl = TextEditingController(text: existing?.price == null ? '' : formatAmountInput(existing!.price!));
     final warrantyCtrl = TextEditingController(text: existing?.warrantyNote ?? '');
     final added = await showDialog<bool>(
       context: context,
@@ -9325,7 +9740,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               const SizedBox(height: 8),
               TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('quantity'))),
               const SizedBox(height: 8),
-              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('price'))),
+              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()], decoration: InputDecoration(labelText: tr('price'))),
               const SizedBox(height: 8),
               TextField(
                 controller: warrantyCtrl,
@@ -9345,7 +9760,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final entry = ReceiptItemEntry(
       name: nameCtrl.text.trim(),
       quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
-      price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      price: parseAmount(priceCtrl.text),
       warrantyUntil: existing?.warrantyUntil,
       returnUntil: existing?.returnUntil,
       warrantyNote: warrantyCtrl.text.trim().isEmpty ? null : warrantyCtrl.text.trim(),
@@ -9360,7 +9775,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   }
 
   Future<void> _save({required bool draft}) async {
-    final total = double.tryParse(totalCtrl.text.replaceAll(',', '.'));
+    final total = parseAmount(totalCtrl.text);
     if (total == null || total <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ کل معتبر وارد کنید.')));
       return;
@@ -9488,7 +9903,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           const SizedBox(height: 12),
           TextField(
             controller: totalCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
             decoration: const InputDecoration(labelText: 'مبلغ کل', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 12),
@@ -9497,7 +9912,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             title: Text('تاریخ: ${formatDate(date)}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
-              final d = await showDatePicker(
+              final d = await showAppDatePicker(
                 context: context,
                 firstDate: DateTime(2000),
                 lastDate: DateTime(2100),
@@ -9583,7 +9998,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                     Text(
                       '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                       '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                      '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRR') : ''}',
+                      '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRT') : ''}',
                     ),
                     if (it.hasWarrantyInfo) ...[
                       const SizedBox(height: 4),
@@ -9685,7 +10100,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   void initState() {
     super.initState();
     for (final key in _payslipLabels.keys) {
-      numCtrls[key] = TextEditingController(text: widget.initial[key] != null ? (widget.initial[key] as num).toStringAsFixed(2) : '');
+      numCtrls[key] = TextEditingController(text: widget.initial[key] != null ? formatAmountInput((widget.initial[key] as num).toDouble()) : '');
     }
     steuerklasseCtrl.text = widget.initial['steuerklasse']?.toString() ?? '';
     arbeitgeberCtrl.text = widget.initial['arbeitgeber']?.toString() ?? '';
@@ -9728,7 +10143,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       final result = await geminiExtractPayslip(key.trim(), widget.imagePath);
       if (result != null) {
         for (final k in _payslipLabels.keys) {
-          if (result[k] != null) numCtrls[k]!.text = (result[k] as num).toStringAsFixed(2);
+          if (result[k] != null) numCtrls[k]!.text = formatAmountInput((result[k] as num).toDouble());
         }
         if (result['steuerklasse'] != null) steuerklasseCtrl.text = result['steuerklasse'].toString();
         if (result['arbeitgeber'] != null) arbeitgeberCtrl.text = result['arbeitgeber'].toString();
@@ -9805,12 +10220,12 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   }
 
   Future<void> _save({required bool draft}) async {
-    final netto = double.tryParse(numCtrls['netto']!.text.replaceAll(',', '.'));
+    final netto = parseAmount(numCtrls['netto']!.text);
     if (netto == null || netto <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ Netto معتبر وارد کنید.')));
       return;
     }
-    final depositedAmount = double.tryParse(numCtrls['depositedAmount']!.text.replaceAll(',', '.'));
+    final depositedAmount = parseAmount(numCtrls['depositedAmount']!.text);
     // The actual amount credited to the account can differ from netto (e.g.
     // advances or other payroll-side deductions) - prefer it when present.
     final transactionAmount = (depositedAmount != null && depositedAmount > 0) ? depositedAmount : netto;
@@ -9838,7 +10253,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       );
       if (proceed != true) return;
     }
-    double? num_(String k) => double.tryParse(numCtrls[k]!.text.trim().replaceAll(',', '.'));
+    double? num_(String k) => parseAmount(numCtrls[k]!.text.trim());
     final details = PayslipDetails(
       brutto: num_('brutto'),
       netto: num_('netto'),
@@ -9964,7 +10379,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: TextField(
                   controller: numCtrls[k],
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
                   decoration: InputDecoration(labelText: _payslipLabels[k], border: const OutlineInputBorder()),
                 ),
               ))),
@@ -9986,7 +10401,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                         children: [
                           TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'عنوان (مثلاً حق مسکن)'), autofocus: true),
                           const SizedBox(height: 8),
-                          TextField(controller: valueCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'مبلغ')),
+                          TextField(controller: valueCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()], decoration: const InputDecoration(labelText: 'مبلغ')),
                         ],
                       ),
                       actions: [
@@ -9996,7 +10411,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                     ),
                   );
                   if (added != true) return;
-                  final v = double.tryParse(valueCtrl.text.replaceAll(',', '.'));
+                  final v = parseAmount(valueCtrl.text);
                   if (labelCtrl.text.trim().isEmpty || v == null) return;
                   setState(() => customFields = [...customFields, PayslipCustomField(label: labelCtrl.text.trim(), value: v)]);
                 },
@@ -10012,7 +10427,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(e.value.value.toStringAsFixed(2)),
+                      Text(formatAmountInput(e.value.value)),
                       IconButton(
                         icon: const Icon(Icons.delete_outline, size: 18),
                         onPressed: () => setState(() => customFields = [...customFields]..removeAt(e.key)),
@@ -10027,7 +10442,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             title: Text('تاریخ: ${formatDate(date)}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
-              final d = await showDatePicker(
+              final d = await showAppDatePicker(
                 context: context,
                 firstDate: DateTime(2000),
                 lastDate: DateTime(2100),
@@ -10093,7 +10508,7 @@ class TransactionDetailScreen extends StatelessWidget {
 
   String get _currency {
     final m = accounts.where((a) => a.id == t.accountId).toList();
-    return m.isEmpty ? 'IRR' : m.first.currency;
+    return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
   Widget _row(BuildContext context, String label, String value) {
@@ -10254,6 +10669,80 @@ class TransactionDetailScreen extends StatelessWidget {
   }
 }
 
+/// Lets the person add, view and remove their own payslip lines (e.g. حق مسکن،
+/// حق اولاد، بیمه‌ی تأمین اجتماعی) - works for a payslip from any country.
+class PayslipCustomFieldsEditor extends StatelessWidget {
+  final List<PayslipCustomField> fields;
+  final ValueChanged<List<PayslipCustomField>> onChanged;
+  const PayslipCustomFieldsEditor({required this.fields, required this.onChanged, super.key});
+
+  Future<void> _add(BuildContext context) async {
+    final labelCtrl = TextEditingController();
+    final valueCtrl = TextEditingController();
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('افزودن فیلد'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'عنوان (مثلاً حق مسکن)'), autofocus: true),
+            const SizedBox(height: 8),
+            TextField(
+              controller: valueCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: const [AmountInputFormatter()],
+              decoration: const InputDecoration(labelText: 'مبلغ'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('add'))),
+        ],
+      ),
+    );
+    if (added != true) return;
+    final v = parseAmount(valueCtrl.text);
+    if (labelCtrl.text.trim().isEmpty || v == null) return;
+    onChanged([...fields, PayslipCustomField(label: labelCtrl.text.trim(), value: v)]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Expanded(
+              child: Text('فیلدهای دیگر (مثلاً حق مسکن، حق اولاد و...)', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            ),
+            TextButton.icon(onPressed: () => _add(context), icon: const Icon(Icons.add, size: 16), label: const Text('افزودن فیلد')),
+          ],
+        ),
+        ...fields.asMap().entries.map((e) => Card(
+              child: ListTile(
+                dense: true,
+                title: Text(e.value.label),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(formatAmountInput(e.value.value)),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      onPressed: () => onChanged([...fields]..removeAt(e.key)),
+                    ),
+                  ],
+                ),
+              ),
+            )),
+      ],
+    );
+  }
+}
+
 class TransactionEditor extends StatefulWidget {
   final List<Category> categories;
   final List<Account> accounts;
@@ -10292,6 +10781,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
   final payslipSteuerklasseCtrl = TextEditingController();
   final payslipArbeitgeberCtrl = TextEditingController();
   final payslipMonatCtrl = TextEditingController();
+  List<PayslipCustomField> payslipCustomFields = [];
 
   @override
   void initState() {
@@ -10303,7 +10793,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
         ? null
         : widget.accounts.firstWhere((a) => a.id == e?.accountId, orElse: () => widget.accounts.first);
     if (e != null) {
-      amountCtrl.text = e.amount.toStringAsFixed(2);
+      amountCtrl.text = formatAmountInput(e.amount);
       noteCtrl.text = e.note;
       date = e.date;
       recurrence = e.recurrence;
@@ -10338,11 +10828,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
           'sonstigeAbzuege': pd.sonstigeAbzuege,
         };
         for (final k in _payslipLabels.keys) {
-          payslipNumCtrls[k]!.text = map[k] != null ? map[k]!.toStringAsFixed(2) : '';
+          payslipNumCtrls[k]!.text = map[k] != null ? formatAmountInput(map[k]!) : '';
         }
         payslipSteuerklasseCtrl.text = pd.steuerklasse ?? '';
         payslipArbeitgeberCtrl.text = pd.arbeitgeber ?? '';
         payslipMonatCtrl.text = pd.abrechnungsmonat ?? '';
+        payslipCustomFields = List.of(pd.customFields);
       }
       final match = categories.where((c) => c.id == e.categoryId).toList();
       selectedCategory = match.isEmpty ? null : match.first;
@@ -10381,8 +10872,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
     });
   }
 
-  Future<bool> _save() async {
-    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+  Future<bool> _save({bool? asDraft}) async {
+    if (asDraft != null) draft = asDraft;
+    final amount = parseAmount(amountCtrl.text);
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
       return false;
@@ -10454,18 +10946,20 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (type == TxType.income) {
       double? num_(String k) {
         final t = payslipNumCtrls[k]!.text.trim();
-        return t.isEmpty ? null : double.tryParse(t.replaceAll(',', '.'));
+        return t.isEmpty ? null : parseAmount(t);
       }
 
       final hasAny = payslipNumCtrls.values.any((c) => c.text.trim().isNotEmpty) ||
           payslipSteuerklasseCtrl.text.trim().isNotEmpty ||
           payslipArbeitgeberCtrl.text.trim().isNotEmpty ||
-          payslipMonatCtrl.text.trim().isNotEmpty;
+          payslipMonatCtrl.text.trim().isNotEmpty ||
+          payslipCustomFields.isNotEmpty;
       if (hasAny) {
         payslipDetails = PayslipDetails(
           brutto: num_('brutto'),
           netto: num_('netto'),
-          depositedAmount: num_('depositedAmount'),
+          // The deposited amount is the main amount field of an income.
+          depositedAmount: amount,
           lohnsteuer: num_('lohnsteuer'),
           solidaritaetszuschlag: num_('solidaritaetszuschlag'),
               krankenversicherung: num_('krankenversicherung'),
@@ -10479,6 +10973,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           steuerklasse: payslipSteuerklasseCtrl.text.trim().isEmpty ? null : payslipSteuerklasseCtrl.text.trim(),
           arbeitgeber: payslipArbeitgeberCtrl.text.trim().isEmpty ? null : payslipArbeitgeberCtrl.text.trim(),
           abrechnungsmonat: payslipMonatCtrl.text.trim().isEmpty ? null : payslipMonatCtrl.text.trim(),
+          customFields: payslipCustomFields,
         );
       }
     }
@@ -10520,7 +11015,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     final existing = editIndex != null ? items[editIndex] : null;
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final qtyCtrl = TextEditingController(text: existing?.quantity?.toString() ?? '1');
-    final priceCtrl = TextEditingController(text: existing?.price?.toString() ?? '');
+    final priceCtrl = TextEditingController(text: existing?.price == null ? '' : formatAmountInput(existing!.price!));
     final warrantyCtrl = TextEditingController(text: existing?.warrantyNote ?? '');
     final added = await showDialog<bool>(
       context: context,
@@ -10534,7 +11029,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               const SizedBox(height: 8),
               TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('quantity'))),
               const SizedBox(height: 8),
-              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('price'))),
+              TextField(controller: priceCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()], decoration: InputDecoration(labelText: tr('price'))),
               const SizedBox(height: 8),
               TextField(
                 controller: warrantyCtrl,
@@ -10554,7 +11049,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     final entry = ReceiptItemEntry(
       name: nameCtrl.text.trim(),
       quantity: double.tryParse(qtyCtrl.text.replaceAll(',', '.')),
-      price: double.tryParse(priceCtrl.text.replaceAll(',', '.')),
+      price: parseAmount(priceCtrl.text),
       warrantyUntil: existing?.warrantyUntil,
       returnUntil: existing?.returnUntil,
       warrantyNote: warrantyCtrl.text.trim().isEmpty ? null : warrantyCtrl.text.trim(),
@@ -10662,7 +11157,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               title: Text(endDate == null ? 'انتخاب تاریخ آخرین پرداخت' : 'تا: ${formatDate(endDate!)}'),
               trailing: const Icon(Icons.event),
               onTap: () async {
-                final d = await showDatePicker(
+                final d = await showAppDatePicker(
                   context: context,
                   firstDate: date,
                   lastDate: DateTime(2100),
@@ -10891,8 +11386,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 16),
           TextField(
             controller: amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 12.50 یا 12,50', border: const OutlineInputBorder()),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
+            decoration: InputDecoration(labelText: type == TxType.income ? 'مبلغ واریز شده به حساب' : tr('amount'), hintText: 'مثلاً 250,000', border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
@@ -10919,7 +11414,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             title: Text('تاریخ: ${formatDate(date)}'),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
-              final d = await showDatePicker(
+              final d = await showAppDatePicker(
                 context: context,
                 firstDate: DateTime(2000),
                 lastDate: DateTime(2100),
@@ -10965,7 +11460,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                       Text(
                         '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                         '${it.quantity != null && it.price != null ? ' • ' : ''}'
-                        '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRR') : ''}',
+                        '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRT') : ''}',
                       ),
                       if (it.hasWarrantyInfo) ...[
                         const SizedBox(height: 4),
@@ -11026,30 +11521,49 @@ class _TransactionEditorState extends State<TransactionEditor> {
               decoration: const InputDecoration(labelText: 'کلاس مالیاتی', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
-            ..._payslipLabels.keys.map((k) => Padding(
+            ..._payslipLabels.keys.where((k) => k != 'depositedAmount').map((k) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: TextField(
                     controller: payslipNumCtrls[k],
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
                     decoration: InputDecoration(labelText: _payslipLabels[k], border: const OutlineInputBorder()),
                   ),
                 )),
+            PayslipCustomFieldsEditor(
+              fields: payslipCustomFields,
+              onChanged: (list) => setState(() {
+                payslipCustomFields = list;
+                _dirty = true;
+              }),
+            ),
           ],
           const SizedBox(height: 16),
           _recurrenceSection(),
           const SizedBox(height: 12),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(tr('save_as_draft')),
-            subtitle: const Text('پیش‌نویس‌ها بعداً قابل بررسی و تأیید نهایی هستند.'),
-            value: draft,
-            onChanged: (v) => setState(() {
-              draft = v;
-              _dirty = true;
-            }),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _save(asDraft: true),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  child: Text(tr('save_as_draft'), textAlign: TextAlign.center),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _save(asDraft: false),
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  child: const Text('ذخیره و ثبت نهایی', textAlign: TextAlign.center),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          FilledButton(onPressed: _save, child: Text(tr('save'))),
+          const SizedBox(height: 8),
+          Text(
+            'پیش‌نویس‌ها در هیچ محاسبه‌ای لحاظ نمی‌شوند تا زمانی که ثبت نهایی شوند.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
         ],
       ),
     ),
@@ -11433,10 +11947,10 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   Future<void> _editAccount({Account? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final balanceCtrl = TextEditingController(text: existing?.initialBalance != null && existing!.initialBalance != 0
-        ? existing.initialBalance.toStringAsFixed(2)
+        ? formatAmountInput(existing.initialBalance)
         : '');
     AccountType type = existing?.type ?? AccountType.bank;
-    String currency = existing?.currency ?? 'IRR';
+    String currency = existing?.currency ?? 'IRT';
     final result = await showDialog<Account>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
@@ -11465,6 +11979,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                 TextField(
                   controller: balanceCtrl,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  inputFormatters: const [AmountInputFormatter(allowNegative: true)],
                   decoration: const InputDecoration(labelText: 'موجودی اولیه', hintText: '0'),
                 ),
               ],
@@ -11480,7 +11995,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   name: nameCtrl.text.trim(),
                   type: type,
                   currency: currency,
-                  initialBalance: double.tryParse(balanceCtrl.text.replaceAll(',', '.')) ?? 0,
+                  initialBalance: parseAmount(balanceCtrl.text) ?? 0,
                 );
                 Navigator.pop(ctx, acc);
               },
