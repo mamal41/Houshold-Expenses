@@ -1683,7 +1683,8 @@ Future<void> checkBudgetGoals() async {
       'met' => 'هدف هزینه‌ی «$name» به پایان رسید',
       _ => 'نزدیک شدن به هدف هزینه‌ی «$name»',
     };
-    final body = persianDigits('${(ratio * 100).round()}%') + ' از هدف این ماه (${formatAmountInput(spend)} از ${formatAmountInput(goal.monthlyAmount)}) خرج شده.';
+    final percentText = persianDigits('${(ratio * 100).round()}%');
+    final body = '$percentText از هدف این ماه (${formatAmountInput(spend)} از ${formatAmountInput(goal.monthlyAmount)}) خرج شده.';
     await NotificationService.instance.showNow(goal.categoryId.hashCode & 0xffff, title, body);
   }
   if (changed) await Store.saveBudgetNotifyState(notifyState);
