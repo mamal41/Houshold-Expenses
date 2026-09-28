@@ -136,7 +136,7 @@ String persianDigits(String input) {
 }
 
 /// Formats a date the way it is written for the chosen calendar:
-/// - Jalali (Solar Hijri): day/month/year with slashes, e.g. ۰۶/۰۷/۱۴۰۵
+/// - Jalali (Solar Hijri): year/month/day with slashes, e.g. ۱۴۰۵/۰۷/۰۶
 /// - Gregorian: dd.MM.yyyy
 /// Digits are Persian when the app language is Persian, and the result is
 /// LTR-isolated so it doesn't get visually reordered inside RTL text.
@@ -145,18 +145,57 @@ String formatDate(DateTime d) {
     final j = gregorianToJalali(d.year, d.month, d.day);
     final jd = j[2].toString().padLeft(2, '0');
     final jm = j[1].toString().padLeft(2, '0');
-    return ltr(persianDigits('$jd/$jm/${j[0]}'));
+    return ltr(persianDigits('${j[0]}/$jm/$jd'));
   }
   return ltr(persianDigits(DateFormat('dd.MM.yyyy').format(d)));
 }
 
-/// Day and month only (e.g. for "every year on ..."), in the chosen calendar.
+/// Month and day only (e.g. for "every year on ..."): month/day in Jalali,
+/// dd.MM in Gregorian.
 String formatDayMonth(DateTime d) {
   if (currentCalendarSystem.value == CalendarSystem.jalali) {
     final j = gregorianToJalali(d.year, d.month, d.day);
-    return ltr(persianDigits('${j[2].toString().padLeft(2, '0')}/${j[1].toString().padLeft(2, '0')}'));
+    return ltr(persianDigits('${j[1].toString().padLeft(2, '0')}/${j[2].toString().padLeft(2, '0')}'));
   }
   return ltr(persianDigits(DateFormat('dd.MM').format(d)));
+}
+
+/// One calendar month in the chosen calendar system (Gregorian or Jalali):
+/// first/last day as Gregorian dates, plus its display name and year text.
+class CalendarMonth {
+  final DateTime start;
+  final DateTime end;
+  final String name;
+  final String yearText;
+  const CalendarMonth({required this.start, required this.end, required this.name, required this.yearText});
+}
+
+/// The calendar month containing [d], shifted by [monthOffset] months, in
+/// the chosen calendar system.
+CalendarMonth calendarMonthOf(DateTime d, [int monthOffset = 0]) {
+  if (currentCalendarSystem.value == CalendarSystem.jalali) {
+    final j = gregorianToJalali(d.year, d.month, d.day);
+    final total = j[0] * 12 + (j[1] - 1) + monthOffset;
+    final y = total ~/ 12;
+    final m = total % 12 + 1;
+    final s = jalaliToGregorian(y, m, 1);
+    final n = jalaliToGregorian(m == 12 ? y + 1 : y, m == 12 ? 1 : m + 1, 1);
+    return CalendarMonth(
+      start: DateTime(s[0], s[1], s[2]),
+      end: DateTime(n[0], n[1], n[2] - 1),
+      name: _jalaliMonthNames[m - 1],
+      yearText: persianDigits('$y'),
+    );
+  }
+  final total = d.year * 12 + (d.month - 1) + monthOffset;
+  final y = total ~/ 12;
+  final m = total % 12 + 1;
+  return CalendarMonth(
+    start: DateTime(y, m, 1),
+    end: DateTime(y, m + 1, 0),
+    name: _gregorianMonthNames[m - 1],
+    yearText: persianDigits('$y'),
+  );
 }
 
 Future<bool> confirmExitApp(BuildContext context) async {
@@ -4710,8 +4749,21 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   }
 
   Future<void> _pickCustomMonth() async {
-    var y = customMonth.year;
-    var m = customMonth.month;
+    final isJalali = currentCalendarSystem.value == CalendarSystem.jalali;
+    final now = DateTime.now();
+    int y, m, baseYear;
+    if (isJalali) {
+      final j = gregorianToJalali(customMonth.year, customMonth.month, customMonth.day);
+      y = j[0];
+      m = j[1];
+      baseYear = gregorianToJalali(now.year, now.month, now.day)[0];
+    } else {
+      y = customMonth.year;
+      m = customMonth.month;
+      baseYear = now.year;
+    }
+    final monthNames = isJalali ? _jalaliMonthNames : _gregorianMonthNames;
+    final years = {for (var i = 0; i < 4; i++) baseYear + i, y}.toList()..sort();
     final picked = await showDialog<DateTime>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -4724,7 +4776,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                 child: DropdownButtonFormField<int>(
                   initialValue: m,
                   decoration: const InputDecoration(labelText: 'ماه'),
-                  items: List.generate(12, (i) => i + 1).map((mo) => DropdownMenuItem(value: mo, child: Text(_gregorianMonthNames[mo - 1]))).toList(),
+                  items: List.generate(12, (i) => i + 1).map((mo) => DropdownMenuItem(value: mo, child: Text(monthNames[mo - 1]))).toList(),
                   onChanged: (v) => setLocal(() => m = v ?? m),
                 ),
               ),
@@ -4733,9 +4785,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                 child: DropdownButtonFormField<int>(
                   initialValue: y,
                   decoration: const InputDecoration(labelText: 'سال'),
-                  items: List.generate(4, (i) => DateTime.now().year + i)
-                      .map((yr) => DropdownMenuItem(value: yr, child: Text(ltr('$yr'))))
-                      .toList(),
+                  items: years.map((yr) => DropdownMenuItem(value: yr, child: Text(ltr(persianDigits('$yr'))))).toList(),
                   onChanged: (v) => setLocal(() => y = v ?? y),
                 ),
               ),
@@ -4743,7 +4793,17 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, DateTime(y, m, 1)), child: Text(tr('confirm'))),
+            FilledButton(
+              onPressed: () {
+                if (isJalali) {
+                  final g = jalaliToGregorian(y, m, 1);
+                  Navigator.pop(ctx, DateTime(g[0], g[1], g[2]));
+                } else {
+                  Navigator.pop(ctx, DateTime(y, m, 1));
+                }
+              },
+              child: Text(tr('confirm')),
+            ),
           ],
         ),
       ),
@@ -4758,12 +4818,13 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   DateTimeRange _rangeFor(_UpcomingRange r, DateTime today) {
     switch (r) {
       case _UpcomingRange.endOfThisMonth:
-        return DateTimeRange(start: today, end: DateTime(today.year, today.month + 1, 0));
+        return DateTimeRange(start: today, end: calendarMonthOf(today).end);
       case _UpcomingRange.nextMonth:
-        final start = DateTime(today.year, today.month + 1, 1);
-        return DateTimeRange(start: start, end: DateTime(start.year, start.month + 1, 0));
+        final m = calendarMonthOf(today, 1);
+        return DateTimeRange(start: m.start, end: m.end);
       case _UpcomingRange.custom:
-        return DateTimeRange(start: customMonth, end: DateTime(customMonth.year, customMonth.month + 1, 0));
+        final m = calendarMonthOf(customMonth);
+        return DateTimeRange(start: m.start, end: m.end);
     }
   }
 
@@ -4772,17 +4833,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   /// [chartMonthOffset] - without this, recurring transactions silently
   /// stopped showing up once the chart was paged past a fixed horizon.
   int _neededHorizonDays(DateTime today) {
-    var y = today.year;
-    var m = today.month + 5 + chartMonthOffset;
-    while (m > 12) {
-      m -= 12;
-      y++;
-    }
-    while (m < 1) {
-      m += 12;
-      y--;
-    }
-    final lastChartMonthEnd = DateTime(y, m + 1, 0);
+    final lastChartMonthEnd = calendarMonthOf(today, 5 + chartMonthOffset).end;
     final needed = lastChartMonthEnd.difference(today).inDays + 5;
     return needed > 220 ? needed : 220;
   }
@@ -4819,28 +4870,17 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
 
     // 6-month lookahead chart data (projected expense per month, including
     // recurring occurrences).
-    final chartMonths = <({DateTime month, double expense})>[];
+    final chartMonths = <({CalendarMonth month, double expense})>[];
     for (var i = 0; i < 6; i++) {
-      var y = today.year;
-      var m = today.month + i + chartMonthOffset;
-      while (m > 12) {
-        m -= 12;
-        y++;
-      }
-      while (m < 1) {
-        m += 12;
-        y--;
-      }
-      final mStart = DateTime(y, m, 1);
-      final mEnd = DateTime(y, m + 1, 0);
+      final cm = calendarMonthOf(today, i + chartMonthOffset);
       final total = allOccurrences
           .where((e) =>
               e.t.type == TxType.expense &&
               (accountFilter != null ? e.t.accountId == accountFilter : currencyOf(e.t.accountId) == currency) &&
-              !e.date.isBefore(mStart) &&
-              !e.date.isAfter(mEnd))
+              !e.date.isBefore(cm.start) &&
+              !e.date.isAfter(cm.end))
           .fold(0.0, (s, e) => s + e.t.amount);
-      chartMonths.add((month: mStart, expense: total));
+      chartMonths.add((month: cm, expense: total));
     }
     final maxChart = chartMonths.fold(0.0, (m, c) => c.expense > m ? c.expense : m);
 
@@ -4866,7 +4906,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                 ),
                 ActionChip(
                   label: Text(range == _UpcomingRange.custom
-                      ? '${_gregorianMonthNames[customMonth.month - 1]} ${customMonth.year}'
+                      ? '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}'
                       : 'ماه دلخواه'),
                   avatar: const Icon(Icons.calendar_month_outlined, size: 18),
                   onPressed: _pickCustomMonth,
@@ -4939,7 +4979,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                                         mainAxisAlignment: MainAxisAlignment.end,
                                         children: [
                                           Text(
-                                            chartMonths[i].expense > 0 ? ltr(formatMoney(chartMonths[i].expense, currency)) : '',
+                                            chartMonths[i].expense > 0 ? ltr(formatMoneyCompact(chartMonths[i].expense, currency)) : '',
                                             style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
                                             textAlign: TextAlign.center,
                                             maxLines: 1,
@@ -4956,11 +4996,11 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                                           ),
                                           const SizedBox(height: 4),
                                           Text(
-                                            () { final n = _gregorianMonthNames[chartMonths[i].month.month - 1]; return n.length > 3 ? n.substring(0, 3) : n; }(),
+                                            () { final n = chartMonths[i].month.name; return (currentCalendarSystem.value == CalendarSystem.gregorian && n.length > 3) ? n.substring(0, 3) : n; }(),
                                             style: const TextStyle(fontSize: 10),
                                           ),
                                           Text(
-                                            ltr(persianDigits('${chartMonths[i].month.year}')),
+                                            ltr(chartMonths[i].month.yearText),
                                             style: TextStyle(fontSize: 8, color: Colors.grey.shade600),
                                           ),
                                         ],
