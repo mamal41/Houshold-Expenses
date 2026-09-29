@@ -4172,7 +4172,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerProviderStateMixin, WidgetsBindingObserver {
   List<Transaction> tx = [];
   List<Category> categories = [];
   List<Account> accounts = [];
@@ -4180,13 +4180,49 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   String? dashboardAccountFilter;
   final Map<String, bool> _monthShowNotDue = {}; // "y-m" -> true shows the not-yet-due list instead of the due one
   int shoppingPending = 0; // items not yet ticked off across all shopping lists
-  late final AnimationController _draftHintController = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+  late final AnimationController _draftHintController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1300));
   bool _draftHintPlayed = false; // only nudge the person once per time the app is opened
+  Timer? _draftHintStopTimer;
+  DateTime? _pausedAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  /// Makes the drafts icon pulse, glow and wiggle for several seconds so
+  /// unconfirmed drafts can't go unnoticed when the app is opened.
+  void _playDraftHint() {
+    if (!mounted || draftCount == 0) return;
+    _draftHintStopTimer?.cancel();
+    _draftHintController.repeat();
+    _draftHintStopTimer = Timer(const Duration(milliseconds: 1300 * 6), _stopDraftHint);
+  }
+
+  void _stopDraftHint() {
+    _draftHintStopTimer?.cancel();
+    if (!mounted || !_draftHintController.isAnimating) return;
+    // Let the current cycle finish so the icon settles back smoothly.
+    _draftHintController.animateTo(1.0).then((_) {
+      if (mounted) _draftHintController.value = 0;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back to the app after a real stay in the background counts as
+    // opening it again (short trips to the camera/file picker don't).
+    if (state == AppLifecycleState.paused) {
+      _pausedAt = DateTime.now();
+    } else if (state == AppLifecycleState.resumed) {
+      final pausedAt = _pausedAt;
+      _pausedAt = null;
+      if (pausedAt != null && DateTime.now().difference(pausedAt) >= const Duration(minutes: 1) && draftCount > 0) {
+        Future.delayed(const Duration(milliseconds: 700), _playDraftHint);
+      }
+    }
   }
 
   @override
@@ -4199,6 +4235,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   @override
   void dispose() {
     appRouteObserver.unsubscribe(this);
+    WidgetsBinding.instance.removeObserver(this);
+    _draftHintStopTimer?.cancel();
     _draftHintController.dispose();
     super.dispose();
   }
@@ -4238,14 +4276,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     _memo.clear();
     shoppingPending = await _loadShoppingPending();
     setState(() => loading = false);
-    // A little wiggle on the drafts icon the first time the app is opened
+    // Draw attention to the drafts icon the first time the app is opened
     // with unconfirmed drafts sitting around, so it's noticed - not on
-    // every later silent refresh, just once per app visit.
+    // every later silent refresh, just once per app visit. A short delay
+    // lets the home screen settle first so the animation is actually seen.
     if (!_draftHintPlayed && draftCount > 0) {
       _draftHintPlayed = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _draftHintController.forward(from: 0);
-      });
+      Future.delayed(const Duration(milliseconds: 700), _playDraftHint);
     }
     // Best-effort background retry for categories that only got a generic
     // icon last time (e.g. Gemini was unavailable); does nothing if none
@@ -4491,6 +4528,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   }
 
   Future<void> _openDrafts() async {
+    _stopDraftHint();
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen()));
     await _load();
   }
@@ -4527,12 +4565,38 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
               animation: _draftHintController,
               builder: (context, child) {
                 final t = _draftHintController.value;
-                // A few quick swings that settle back to zero.
-                final angle = 0.26 * (1 - t) * sin(t * 4 * pi);
-                return Transform.rotate(angle: angle, child: child);
+                // Each cycle: a bounce up with a wiggle, plus a ring of light
+                // spreading out behind the icon. At rest (t == 0) everything
+                // is back to normal and the ring is invisible.
+                final bump = sin(t * pi); // 0 -> 1 -> 0
+                final scale = 1 + 0.35 * bump;
+                final angle = 0.35 * (1 - t) * sin(t * 6 * pi);
+                final ringAlpha = t == 0 ? 0.0 : 1 - t;
+                return Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    IgnorePointer(
+                      child: Transform.scale(
+                        scale: 1 + 0.7 * t,
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.amber.withValues(alpha: 0.55 * ringAlpha),
+                            border: Border.all(color: Colors.orange.withValues(alpha: 0.9 * ringAlpha), width: 3),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Transform.scale(scale: scale, child: Transform.rotate(angle: angle, child: child)),
+                  ],
+                );
               },
               child: Badge(
-                label: Text('$draftCount'),
+                label: Text(persianDigits('$draftCount')),
+                backgroundColor: Colors.deepOrange,
                 isLabelVisible: draftCount > 0,
                 child: IconButton(icon: const Icon(Icons.edit_note_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
               ),
@@ -5098,7 +5162,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
               Icon(up ? Icons.trending_up : Icons.trending_down, color: up ? Colors.red : Colors.green, size: 18),
               const SizedBox(width: 4),
               Text(
-                'هزینه‌ی این ماه ${ltr('${change.abs().round()}%')} ${up ? 'بیشتر' : 'کمتر'} از ماه قبل',
+                'هزینه‌ی این ماه ${ltr(persianDigits('${change.abs().round()}%'))} ${up ? 'بیشتر' : 'کمتر'} از ماه قبل',
                 style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
               ),
             ],
@@ -7002,7 +7066,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${formatMoney(spend, mainCurrency)} از ${formatMoney(goal.monthlyAmount, mainCurrency)} (${ltr('${(ratio * 100).round()}%')})',
+                            '${formatMoney(spend, mainCurrency)} از ${formatMoney(goal.monthlyAmount, mainCurrency)} (${ltr(persianDigits('${(ratio * 100).round()}%'))})',
                             style: TextStyle(fontSize: 12, color: color),
                           ),
                         ],
@@ -7274,7 +7338,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                   projection = 'به هدف رسیدی! \u{1F389}';
                 } else if (growth > 0) {
                   final monthsLeft = ((g.targetAmount - current) / growth).ceil();
-                  projection = 'با روند فعلی، حدود $monthsLeft ماه دیگر به هدف می\u200cرسی.';
+                  projection = 'با روند فعلی، حدود ${persianDigits('$monthsLeft')} ماه دیگر به هدف می\u200cرسی.';
                 }
                 return Card(
                   child: Padding(
@@ -7304,7 +7368,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${ltr(formatMoney(current, mainCurrency))} از ${ltr(formatMoney(g.targetAmount, mainCurrency))} (${(ratio * 100).round()}%)',
+                          '${ltr(formatMoney(current, mainCurrency))} از ${ltr(formatMoney(g.targetAmount, mainCurrency))} (${ltr(persianDigits('${(ratio * 100).round()}%'))})',
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         ),
                         if (g.targetDate != null)
@@ -9181,7 +9245,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final up = change >= 0;
         final bad = higherIsBad ? up : !up;
         changeColor = bad ? Colors.red.shade700 : Colors.green.shade700;
-        changeText = '${ltr('${up ? '+' : ''}${change.round()}%')} نسبت به دوره‌ی قبل';
+        changeText = '${ltr(persianDigits('${up ? '+' : ''}${change.round()}%'))} نسبت به دوره‌ی قبل';
       }
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
@@ -10210,7 +10274,10 @@ Category? _matchCategoryHint(String? hint, List<Category> categories, TxType typ
 class ReceiptReviewScreen extends StatefulWidget {
   final String imagePath;
   final ReceiptDraft initial;
-  const ReceiptReviewScreen({required this.imagePath, required this.initial, super.key});
+  // Set when re-reviewing an already saved transaction (e.g. a draft): saving
+  // then updates that same transaction instead of creating a new one.
+  final Transaction? existing;
+  const ReceiptReviewScreen({required this.imagePath, required this.initial, this.existing, super.key});
   @override
   State<ReceiptReviewScreen> createState() => _ReceiptReviewScreenState();
 }
@@ -10241,6 +10308,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     totalCtrl.text = widget.initial.total == null ? '' : formatAmountInput(widget.initial.total!);
     date = widget.initial.date ?? DateTime.now();
     items = List.of(widget.initial.items);
+    // An existing transaction's date was already confirmed when it was saved.
+    if (widget.existing != null) dateConfirmed = true;
     _load();
   }
 
@@ -10248,12 +10317,18 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     existingTx = await Store.loadTransactions();
-    selectedAccount = accounts.isEmpty ? null : accounts.first;
-    selectedCategory = _matchCategoryHint(widget.initial.categoryHint, categories, TxType.expense);
+    selectedAccount = _initialAccount();
+    selectedCategory = categories.where((c) => c.id == widget.existing?.categoryId).firstOrNull ??
+        _matchCategoryHint(widget.initial.categoryHint, categories, TxType.expense);
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
     if (hasGeminiKey) unawaited(_improveWithGemini());
+  }
+
+  Account? _initialAccount() {
+    if (accounts.isEmpty) return null;
+    return accounts.where((a) => a.id == widget.existing?.accountId).firstOrNull ?? accounts.first;
   }
 
   Future<void> _improveWithGemini() async {
@@ -10431,6 +10506,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       if (proceed != true) return;
     }
     final duplicate = existingTx.any((t) =>
+        t.id != widget.existing?.id &&
         t.type == TxType.expense &&
         (t.amount - total).abs() < 0.01 &&
         t.date.year == date.year &&
@@ -10451,9 +10527,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       if (proceed != true) return;
     }
     if (!context.mounted) return;
-    final id = DateTime.now().microsecondsSinceEpoch.toString();
-    String? persistedImage;
-    if (draft) {
+    final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
+    // A re-reviewed transaction already has its image stored permanently.
+    String? persistedImage = widget.existing != null ? widget.imagePath : null;
+    if (draft && widget.existing == null) {
       try {
         persistedImage = await persistDraftImage(widget.imagePath, id);
       } catch (_) {
@@ -10665,9 +10742,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: OutlinedButton(onPressed: () => _save(draft: true), child: const Text('ذخیره پیش‌نویس'))),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _save(draft: true),
+                  child: Text(widget.existing != null ? 'ذخیره' : 'ذخیره پیش‌نویس'),
+                ),
+              ),
               const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('تأیید و ثبت نهایی'))),
+              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('ثبت نهایی'))),
             ],
           ),
         ],
@@ -10698,7 +10780,10 @@ const _payslipLabels = <String, String>{
 class PayslipReviewScreen extends StatefulWidget {
   final String imagePath;
   final Map<String, dynamic> initial;
-  const PayslipReviewScreen({required this.imagePath, required this.initial, super.key});
+  // Set when re-reviewing an already saved transaction (e.g. a draft): saving
+  // then updates that same transaction instead of creating a new one.
+  final Transaction? existing;
+  const PayslipReviewScreen({required this.imagePath, required this.initial, this.existing, super.key});
   @override
   State<PayslipReviewScreen> createState() => _PayslipReviewScreenState();
 }
@@ -10742,6 +10827,10 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           .where((f) => f.label.trim().isNotEmpty)
           .toList();
     }
+    if (widget.existing != null) {
+      date = widget.existing!.date;
+      dateConfirmed = true;
+    }
     _load();
   }
 
@@ -10749,13 +10838,18 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     existingTx = await Store.loadTransactions();
-    selectedAccount = accounts.isEmpty ? null : accounts.first;
-    final match = categories.where((c) => c.id == 'i_salary').toList();
-    selectedCategory = match.isEmpty ? null : match.first;
+    selectedAccount = _initialAccount();
+    final match = categories.where((c) => c.id == (widget.existing?.categoryId ?? 'i_salary')).toList();
+    selectedCategory = match.isEmpty ? categories.where((c) => c.id == 'i_salary').firstOrNull : match.first;
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
     if (hasGeminiKey) unawaited(_improveWithGemini());
+  }
+
+  Account? _initialAccount() {
+    if (accounts.isEmpty) return null;
+    return accounts.where((a) => a.id == widget.existing?.accountId).firstOrNull ?? accounts.first;
   }
 
   Future<void> _improveWithGemini() async {
@@ -10900,6 +10994,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       customFields: customFields,
     );
     final duplicate = existingTx.any((t) =>
+        t.id != widget.existing?.id &&
         t.type == TxType.income &&
         (t.amount - transactionAmount).abs() < 0.01 &&
         t.date.year == date.year &&
@@ -10920,9 +11015,10 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       if (proceed != true) return;
     }
     if (!context.mounted) return;
-    final id = DateTime.now().microsecondsSinceEpoch.toString();
-    String? persistedImage;
-    if (draft) {
+    final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
+    // A re-reviewed transaction already has its image stored permanently.
+    String? persistedImage = widget.existing != null ? widget.imagePath : null;
+    if (draft && widget.existing == null) {
       try {
         persistedImage = await persistDraftImage(widget.imagePath, id);
       } catch (_) {
@@ -11095,9 +11191,14 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           const SizedBox(height: 24),
           Row(
             children: [
-              Expanded(child: OutlinedButton(onPressed: () => _save(draft: true), child: const Text('ذخیره پیش‌نویس'))),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _save(draft: true),
+                  child: Text(widget.existing != null ? 'ذخیره' : 'ذخیره پیش‌نویس'),
+                ),
+              ),
               const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('تأیید و ثبت نهایی'))),
+              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('ثبت نهایی'))),
             ],
           ),
         ],
@@ -11980,12 +12081,20 @@ class _TransactionEditorState extends State<TransactionEditor> {
                   );
                   result = await Navigator.push<Transaction>(
                     context,
-                    MaterialPageRoute(builder: (_) => ReceiptReviewScreen(imagePath: _currentImagePath!, initial: draftInit)),
+                    MaterialPageRoute(
+                      builder: (_) => ReceiptReviewScreen(imagePath: _currentImagePath!, initial: draftInit, existing: existing),
+                    ),
                   );
                 } else {
                   result = await Navigator.push<Transaction>(
                     context,
-                    MaterialPageRoute(builder: (_) => PayslipReviewScreen(imagePath: _currentImagePath!, initial: const {})),
+                    MaterialPageRoute(
+                      builder: (_) => PayslipReviewScreen(
+                        imagePath: _currentImagePath!,
+                        initial: {...?existing.payslipDetails?.toJson(), 'date': existing.date.toIso8601String()},
+                        existing: existing,
+                      ),
+                    ),
                   );
                 }
                 if (result == null) return;
@@ -12247,7 +12356,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 child: OutlinedButton(
                   onPressed: () => _save(asDraft: true),
                   style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                  child: Text(tr('save_as_draft'), textAlign: TextAlign.center),
+                  // For a transaction that's already a draft this just saves the
+                  // edits into that same draft.
+                  child: Text((widget.existing?.draft ?? false) ? 'ذخیره' : tr('save_as_draft'), textAlign: TextAlign.center),
                 ),
               ),
               const SizedBox(width: 12),
@@ -12255,7 +12366,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 child: FilledButton(
                   onPressed: () => _save(asDraft: false),
                   style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                  child: const Text('ذخیره و ثبت نهایی', textAlign: TextAlign.center),
+                  child: const Text('ثبت نهایی', textAlign: TextAlign.center),
                 ),
               ),
             ],
