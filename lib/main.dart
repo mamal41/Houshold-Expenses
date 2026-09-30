@@ -485,11 +485,17 @@ Future<String?> askSaveChanges(BuildContext context) {
 
 /// Pinned bottom bar for the save buttons of a form screen, so they stay
 /// reachable without scrolling to the end of the page.
-Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons) {
+/// [trailing] widgets (e.g. icon buttons) sit after the buttons - on the
+/// left side in the right-to-left layout - at their natural size.
+Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons, {List<Widget> trailing = const []}) {
   final children = <Widget>[];
   for (var i = 0; i < buttons.length; i++) {
     if (i > 0) children.add(const SizedBox(width: 12));
     children.add(Expanded(child: buttons[i]));
+  }
+  if (trailing.isNotEmpty) {
+    children.add(const SizedBox(width: 4));
+    children.addAll(trailing);
   }
   return Material(
     elevation: 8,
@@ -1517,7 +1523,24 @@ const kCategoryIcons = <String, IconData>{
   '_transfer_in_': Icons.swap_horiz,
 };
 
+// Names whose icon should always follow the name, even over an icon picked
+// automatically when the category was created.
+const _preferredNameIcons = <String, IconData>{
+  'ابزار': Icons.handyman_outlined,
+  'کارمزد': Icons.percent,
+  'سوپرمارکت': Icons.local_grocery_store_outlined,
+  'میوه': Icons.eco_outlined,
+  'تره‌بار': Icons.eco_outlined,
+  'قبوض': Icons.request_quote_outlined,
+  'قبض': Icons.request_quote_outlined,
+};
+
 IconData iconForCategory(Category? c, List<Category> all) {
+  if (c != null) {
+    for (final entry in _preferredNameIcons.entries) {
+      if (c.name.contains(entry.key)) return entry.value;
+    }
+  }
   final stored = c?.iconCodePoint;
   // A stored generic placeholder icon (no better match was found when the
   // category was created) gives way to a keyword match on its name.
@@ -1559,6 +1582,8 @@ const _iconKeywordHints = <String, IconData>{
   'سبزی': Icons.eco_outlined,
   'قبوض': Icons.request_quote_outlined,
   'قبض': Icons.request_quote_outlined,
+  'ابزار': Icons.handyman_outlined,
+  'کارمزد': Icons.percent,
   'خوراک': Icons.restaurant_outlined,
   'غذا': Icons.restaurant_outlined,
   'رستوران': Icons.restaurant_outlined,
@@ -12511,61 +12536,60 @@ class _TransactionEditorState extends State<TransactionEditor> {
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           child: const Text('ثبت نهایی', textAlign: TextAlign.center),
         ),
+      ], trailing: [
+        if (_currentImagePath != null)
+          IconButton(
+            icon: const Icon(Icons.receipt_long_outlined),
+            tooltip: 'تصویر رسید/فیش',
+            onPressed: () async {
+              final action = await Navigator.push<ReceiptImageAction>(
+                context,
+                MaterialPageRoute(builder: (_) => ReceiptImageScreen(imagePath: _currentImagePath!)),
+              );
+              if (!context.mounted || action == null) return;
+              if (action == ReceiptImageAction.reread) {
+                await _reReviewWithAi();
+              } else {
+                final path = _currentImagePath;
+                if (path != null) {
+                  try {
+                    await File(path).delete();
+                  } catch (_) {
+                    // already gone - fine
+                  }
+                }
+                setState(() {
+                  _currentImagePath = null;
+                  _dirty = true;
+                });
+              }
+            },
+          ),
+        if (widget.existing != null)
+          IconButton(
+            icon: Icon(Icons.delete_outline, color: Colors.red.shade400),
+            tooltip: 'حذف تراکنش',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('حذف تراکنش'),
+                  content: const Text('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                if (!context.mounted) return;
+                Navigator.pop(context, DeleteTransactionSignal(widget.existing!.id));
+              }
+            },
+          ),
       ]),
       appBar: AppBar(
         title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
-        actions: [
-          if (_currentImagePath != null)
-            IconButton(
-              icon: const Icon(Icons.receipt_long_outlined),
-              tooltip: 'تصویر رسید/فیش',
-              onPressed: () async {
-                final action = await Navigator.push<ReceiptImageAction>(
-                  context,
-                  MaterialPageRoute(builder: (_) => ReceiptImageScreen(imagePath: _currentImagePath!)),
-                );
-                if (!context.mounted || action == null) return;
-                if (action == ReceiptImageAction.reread) {
-                  await _reReviewWithAi();
-                } else {
-                  final path = _currentImagePath;
-                  if (path != null) {
-                    try {
-                      await File(path).delete();
-                    } catch (_) {
-                      // already gone - fine
-                    }
-                  }
-                  setState(() {
-                    _currentImagePath = null;
-                    _dirty = true;
-                  });
-                }
-              },
-            ),
-          if (widget.existing != null)
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'حذف تراکنش',
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('حذف تراکنش'),
-                    content: const Text('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
-                    ],
-                  ),
-                );
-                if (confirm == true) {
-                  if (!context.mounted) return;
-                  Navigator.pop(context, DeleteTransactionSignal(widget.existing!.id));
-                }
-              },
-            ),
-        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
