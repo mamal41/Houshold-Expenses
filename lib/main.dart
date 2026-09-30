@@ -10412,8 +10412,9 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     totalCtrl.text = widget.initial.total == null ? '' : formatAmountInput(widget.initial.total!);
     date = widget.initial.date ?? DateTime.now();
     items = List.of(widget.initial.items);
-    // An existing transaction's date was already confirmed when it was saved.
-    if (widget.existing != null) dateConfirmed = true;
+    // A final transaction's date was already confirmed when it was saved; a
+    // draft's may not have been (drafts skip that question).
+    if (widget.existing != null && !widget.existing!.draft) dateConfirmed = true;
     _load();
   }
 
@@ -10580,11 +10581,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   }
 
   Future<void> _save({required bool draft}) async {
-    final total = parseAmount(totalCtrl.text);
-    if (total == null || total <= 0) {
+    // Saving a draft is never blocked by checks or questions - those only
+    // matter for the final save.
+    final parsedTotal = parseAmount(totalCtrl.text);
+    if (!draft && (parsedTotal == null || parsedTotal <= 0)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ کل معتبر وارد کنید.')));
       return;
     }
+    final total = parsedTotal ?? 0;
     if (!draft && selectedCategory == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
       return;
@@ -10593,17 +10597,15 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
       return;
     }
-    if (!dateConfirmed) {
+    if (!draft && !dateConfirmed) {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('تاریخ خوانده نشد'),
-          content: Text(
-            'هوش مصنوعی نتوانست تاریخ را از روی رسید بخواند، پس تاریخ فعلی (${formatDate(date)}) به‌صورت پیش‌فرض تنظیم شده. اگر تاریخ درستی نیست، انصراف بده و از دکمه‌ی تقویم اصلاحش کن.',
-          ),
+          content: Text('از درست بودن تاریخ ${formatDate(date)} اطمینان حاصل کنید.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تاریخ درست است، ثبت شود')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('درست است')),
           ],
         ),
       );
@@ -10616,7 +10618,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         t.date.year == date.year &&
         t.date.month == date.month &&
         t.date.day == date.day);
-    if (duplicate) {
+    if (!draft && duplicate) {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -10973,7 +10975,8 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     }
     if (widget.existing != null) {
       date = widget.existing!.date;
-      dateConfirmed = true;
+      // A final transaction's date was already confirmed; a draft's may not have been.
+      dateConfirmed = !widget.existing!.draft;
     }
     _load();
   }
@@ -11084,15 +11087,17 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   }
 
   Future<void> _save({required bool draft}) async {
+    // Saving a draft is never blocked by checks or questions - those only
+    // matter for the final save.
     final netto = parseAmount(numCtrls['netto']!.text);
-    if (netto == null || netto <= 0) {
+    if (!draft && (netto == null || netto <= 0)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ Netto معتبر وارد کنید.')));
       return;
     }
     final depositedAmount = parseAmount(numCtrls['depositedAmount']!.text);
     // The actual amount credited to the account can differ from netto (e.g.
     // advances or other payroll-side deductions) - prefer it when present.
-    final transactionAmount = (depositedAmount != null && depositedAmount > 0) ? depositedAmount : netto;
+    final transactionAmount = (depositedAmount != null && depositedAmount > 0) ? depositedAmount : (netto ?? 0);
     if (!draft && selectedCategory == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
       return;
@@ -11101,17 +11106,15 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
       return;
     }
-    if (!dateConfirmed) {
+    if (!draft && !dateConfirmed) {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('تاریخ خوانده نشد'),
-          content: Text(
-            'هوش مصنوعی نتوانست تاریخ را از روی فیش بخواند، پس تاریخ فعلی (${formatDate(date)}) به‌صورت پیش‌فرض تنظیم شده. اگر تاریخ درستی نیست، انصراف بده و از دکمه‌ی تقویم اصلاحش کن.',
-          ),
+          content: Text('از درست بودن تاریخ ${formatDate(date)} اطمینان حاصل کنید.'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تاریخ درست است، ثبت شود')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('درست است')),
           ],
         ),
       );
@@ -11144,7 +11147,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         t.date.year == date.year &&
         t.date.month == date.month &&
         t.date.day == date.day);
-    if (duplicate) {
+    if (!draft && duplicate) {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -11793,20 +11796,23 @@ class _TransactionEditorState extends State<TransactionEditor> {
 
   Future<bool> _save({bool? asDraft}) async {
     if (asDraft != null) draft = asDraft;
-    final amount = parseAmount(amountCtrl.text);
-    if (amount == null || amount <= 0) {
+    // Saving a draft is never blocked by checks or questions - those only
+    // matter for the final save.
+    final parsedAmount = parseAmount(amountCtrl.text);
+    if (!draft && (parsedAmount == null || parsedAmount <= 0)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
       return false;
     }
-    if (selectedCategory == null) {
+    final amount = parsedAmount ?? 0;
+    if (!draft && selectedCategory == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک دسته‌بندی انتخاب کنید.')));
       return false;
     }
-    if (selectedAccount == null) {
+    if (!draft && selectedAccount == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک حساب انتخاب کنید.')));
       return false;
     }
-    final existingList = await Store.loadTransactions();
+    final existingList = draft ? const <Transaction>[] : await Store.loadTransactions();
     final duplicate = existingList.any((t) =>
         t.id != widget.existing?.id &&
         t.type == type &&
@@ -11814,7 +11820,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
         t.date.year == date.year &&
         t.date.month == date.month &&
         t.date.day == date.day &&
-        t.categoryId == selectedCategory!.id);
+        t.categoryId == selectedCategory?.id);
     if (duplicate) {
       if (!context.mounted) return false;
       final proceed = await showDialog<bool>(
@@ -11837,17 +11843,17 @@ class _TransactionEditorState extends State<TransactionEditor> {
     DateTime? recEndDate;
     if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
       recDay = parseInt(dayCtrl.text);
-      if (recDay == null) {
+      if (recDay == null && !draft) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
         return false;
       }
-      if (recDay < 1) recDay = 1;
-      if (recDay > 31) recDay = 31;
+      if (recDay != null && recDay < 1) recDay = 1;
+      if (recDay != null && recDay > 31) recDay = 31;
     } else if (recurrence == RecurrenceFrequency.weekly) {
       recWeekday = weekday;
     } else if (recurrence == RecurrenceFrequency.custom) {
       recInterval = parseInt(intervalCtrl.text);
-      if (recInterval == null || recInterval <= 0) {
+      if (!draft && (recInterval == null || recInterval <= 0)) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
         return false;
       }
@@ -11916,8 +11922,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
       id: id,
       type: type,
       amount: amount,
-      categoryId: selectedCategory!.id,
-      accountId: selectedAccount!.id,
+      categoryId: selectedCategory?.id ?? '_uncategorized_',
+      accountId: selectedAccount?.id ?? 'default',
       date: date,
       note: noteCtrl.text.trim(),
       imagePath: keptImage,
