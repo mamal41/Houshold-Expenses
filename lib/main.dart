@@ -5464,6 +5464,97 @@ class FullImageViewer extends StatelessWidget {
   }
 }
 
+enum ReceiptImageAction { reread, delete }
+
+/// Shows a transaction's stored receipt/payslip image on its own, with
+/// buttons below it to re-read it with AI or delete it. Pops with the
+/// chosen [ReceiptImageAction] (null if the person just goes back).
+class ReceiptImageScreen extends StatelessWidget {
+  final String imagePath;
+  const ReceiptImageScreen({required this.imagePath, super.key});
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف تصویر'),
+        content: const Text('آیا از حذف تصویر رسید/فیش اطمینان دارید؟ خود تراکنش حذف نمی‌شود.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr('delete')),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && context.mounted) Navigator.pop(context, ReceiptImageAction.delete);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('تصویر رسید/فیش')),
+      body: Column(
+        children: [
+          Expanded(
+            child: Container(
+              color: Colors.black,
+              width: double.infinity,
+              child: LayoutBuilder(
+                builder: (context, c) => InteractiveViewer(
+                  constrained: false,
+                  minScale: 0.3,
+                  maxScale: 6,
+                  child: SizedBox(
+                    width: c.maxWidth,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minHeight: c.maxHeight),
+                      child: Center(child: Image.file(File(imagePath), width: c.maxWidth, fit: BoxFit.fitWidth)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => Navigator.pop(context, ReceiptImageAction.reread),
+                      icon: const Icon(Icons.auto_awesome),
+                      label: const Text('خواندن مجدد با هوش مصنوعی', textAlign: TextAlign.center),
+                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _confirmDelete(context),
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('حذف تصویر'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                        side: const BorderSide(color: Colors.red),
+                        minimumSize: const Size.fromHeight(48),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class DraftsScreen extends StatefulWidget {
   const DraftsScreen({super.key});
   @override
@@ -10636,11 +10727,15 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
     // A re-reviewed transaction already has its image stored permanently.
     String? persistedImage = widget.existing != null ? widget.imagePath : null;
-    // Finalizing a draft: ask whether its receipt/payslip photo is still wanted.
-    if (!draft && (widget.existing?.draft ?? false) && persistedImage != null) {
+    // Drafts always keep their scan; on the final save ask whether the
+    // receipt/payslip photo should be kept with the transaction.
+    var keepNewImage = draft;
+    if (!draft) {
       final keep = await askKeepReceiptImage(context);
       if (keep == null) return;
-      if (!keep) {
+      if (widget.existing == null) {
+        keepNewImage = keep;
+      } else if (!keep && persistedImage != null) {
         try {
           await File(persistedImage).delete();
         } catch (_) {
@@ -10650,11 +10745,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       }
       if (!context.mounted) return;
     }
-    if (draft && widget.existing == null) {
+    if (keepNewImage && widget.existing == null) {
       try {
         persistedImage = await persistDraftImage(widget.imagePath, id);
       } catch (_) {
-        // best-effort only - saving the draft itself matters more than the image copy
+        // best-effort only - saving the transaction matters more than the image copy
       }
     }
     final result = Transaction(
@@ -11165,11 +11260,15 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
     // A re-reviewed transaction already has its image stored permanently.
     String? persistedImage = widget.existing != null ? widget.imagePath : null;
-    // Finalizing a draft: ask whether its receipt/payslip photo is still wanted.
-    if (!draft && (widget.existing?.draft ?? false) && persistedImage != null) {
+    // Drafts always keep their scan; on the final save ask whether the
+    // receipt/payslip photo should be kept with the transaction.
+    var keepNewImage = draft;
+    if (!draft) {
       final keep = await askKeepReceiptImage(context);
       if (keep == null) return;
-      if (!keep) {
+      if (widget.existing == null) {
+        keepNewImage = keep;
+      } else if (!keep && persistedImage != null) {
         try {
           await File(persistedImage).delete();
         } catch (_) {
@@ -11179,11 +11278,11 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       }
       if (!context.mounted) return;
     }
-    if (draft && widget.existing == null) {
+    if (keepNewImage && widget.existing == null) {
       try {
         persistedImage = await persistDraftImage(widget.imagePath, id);
       } catch (_) {
-        // best-effort only - saving the draft itself matters more than the image copy
+        // best-effort only - saving the transaction matters more than the image copy
       }
     }
     final result = Transaction(
@@ -11954,6 +12053,60 @@ class _TransactionEditorState extends State<TransactionEditor> {
     return true;
   }
 
+  /// Re-runs the AI review on this transaction's stored receipt/payslip image.
+  Future<void> _reReviewWithAi() async {
+    final existing = widget.existing!;
+    Transaction? result;
+    if (existing.type == TxType.expense) {
+      final draftInit = ReceiptDraft(
+        merchant: existing.merchant.isNotEmpty ? existing.merchant : existing.note,
+        date: existing.date,
+        total: existing.amount,
+        items: existing.items,
+        categoryHint: selectedCategory?.name,
+      );
+      result = await Navigator.push<Transaction>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ReceiptReviewScreen(imagePath: _currentImagePath!, initial: draftInit, existing: existing),
+        ),
+      );
+    } else {
+      result = await Navigator.push<Transaction>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PayslipReviewScreen(
+            imagePath: _currentImagePath!,
+            initial: {...?existing.payslipDetails?.toJson(), 'date': existing.date.toIso8601String()},
+            existing: existing,
+          ),
+        ),
+      );
+    }
+    if (result == null) return;
+    if (!context.mounted) return;
+    // Keep the same id as the transaction being edited, so
+    // saving replaces it instead of creating a duplicate.
+    _dirty = false;
+    Navigator.pop(
+      context,
+      Transaction(
+        id: existing.id,
+        type: result.type,
+        amount: result.amount,
+        categoryId: result.categoryId,
+        accountId: result.accountId,
+        date: result.date,
+        note: existing.merchant.isNotEmpty ? existing.note : result.note,
+        merchant: result.merchant,
+        draft: result.draft,
+        items: result.items,
+        payslipDetails: result.payslipDetails,
+        imagePath: result.imagePath,
+      ),
+    );
+  }
+
   Future<void> _addItemRow({int? editIndex}) async {
     final existing = editIndex != null ? items[editIndex] : null;
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
@@ -12215,90 +12368,30 @@ class _TransactionEditorState extends State<TransactionEditor> {
         actions: [
           if (_currentImagePath != null)
             IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'حذف تصویر رسید/فیش',
+              icon: const Icon(Icons.receipt_long_outlined),
+              tooltip: 'تصویر رسید/فیش',
               onPressed: () async {
-                final confirmDeleteImg = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('حذف تصویر'),
-                    content: const Text('تصویر ذخیره‌شده‌ی رسید/فیش حذف شود؟ خود تراکنش حذف نمی‌شود.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
-                    ],
-                  ),
-                );
-                if (confirmDeleteImg != true) return;
-                final path = _currentImagePath;
-                if (path != null) {
-                  try {
-                    await File(path).delete();
-                  } catch (_) {
-                    // already gone - fine
-                  }
-                }
-                setState(() {
-                  _currentImagePath = null;
-                  _dirty = true;
-                });
-              },
-            ),
-          if (_currentImagePath != null)
-            IconButton(
-              icon: const Icon(Icons.image_search_outlined),
-              tooltip: 'بازبینی تصویر رسید/فیش (اجرای دوباره‌ی هوش مصنوعی)',
-              onPressed: () async {
-                final existing = widget.existing!;
-                Transaction? result;
-                if (existing.type == TxType.expense) {
-                  final draftInit = ReceiptDraft(
-                    merchant: existing.merchant.isNotEmpty ? existing.merchant : existing.note,
-                    date: existing.date,
-                    total: existing.amount,
-                    items: existing.items,
-                    categoryHint: selectedCategory?.name,
-                  );
-                  result = await Navigator.push<Transaction>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ReceiptReviewScreen(imagePath: _currentImagePath!, initial: draftInit, existing: existing),
-                    ),
-                  );
-                } else {
-                  result = await Navigator.push<Transaction>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PayslipReviewScreen(
-                        imagePath: _currentImagePath!,
-                        initial: {...?existing.payslipDetails?.toJson(), 'date': existing.date.toIso8601String()},
-                        existing: existing,
-                      ),
-                    ),
-                  );
-                }
-                if (result == null) return;
-                if (!context.mounted) return;
-                // Keep the same id as the transaction being edited, so
-                // saving replaces it instead of creating a duplicate.
-                _dirty = false;
-                Navigator.pop(
+                final action = await Navigator.push<ReceiptImageAction>(
                   context,
-                  Transaction(
-                    id: existing.id,
-                    type: result.type,
-                    amount: result.amount,
-                    categoryId: result.categoryId,
-                    accountId: result.accountId,
-                    date: result.date,
-                    note: existing.merchant.isNotEmpty ? existing.note : result.note,
-                    merchant: result.merchant,
-                    draft: result.draft,
-                    items: result.items,
-                    payslipDetails: result.payslipDetails,
-                    imagePath: result.imagePath,
-                  ),
+                  MaterialPageRoute(builder: (_) => ReceiptImageScreen(imagePath: _currentImagePath!)),
                 );
+                if (!context.mounted || action == null) return;
+                if (action == ReceiptImageAction.reread) {
+                  await _reReviewWithAi();
+                } else {
+                  final path = _currentImagePath;
+                  if (path != null) {
+                    try {
+                      await File(path).delete();
+                    } catch (_) {
+                      // already gone - fine
+                    }
+                  }
+                  setState(() {
+                    _currentImagePath = null;
+                    _dirty = true;
+                  });
+                }
               },
             ),
           if (widget.existing != null)
