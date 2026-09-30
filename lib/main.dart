@@ -1448,10 +1448,18 @@ const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: A
 
 const kCategoryIcons = <String, IconData>{
   'e_food': Icons.restaurant_outlined,
+  'e_food_market': Icons.local_grocery_store_outlined,
+  'e_food_produce': Icons.eco_outlined,
+  'e_food_restaurant': Icons.restaurant_menu_outlined,
   'e_housing': Icons.home_outlined,
   'e_transport': Icons.directions_bus_outlined,
   'e_car': Icons.directions_car_outlined,
-  'e_bills': Icons.receipt_long_outlined,
+  'e_bills': Icons.request_quote_outlined,
+  'e_bills_power': Icons.bolt_outlined,
+  'e_bills_water': Icons.water_drop_outlined,
+  'e_bills_gas': Icons.local_fire_department_outlined,
+  'e_bills_internet': Icons.wifi_outlined,
+  'e_bills_phone': Icons.phone_iphone_outlined,
   'e_health': Icons.medical_services_outlined,
   'e_leisure': Icons.sports_esports_outlined,
   'e_clothing': Icons.checkroom_outlined,
@@ -1472,9 +1480,20 @@ const kCategoryIcons = <String, IconData>{
 };
 
 IconData iconForCategory(Category? c, List<Category> all) {
-  if (c?.iconCodePoint != null) {
-    return IconData(c!.iconCodePoint!, fontFamily: 'MaterialIcons');
+  final stored = c?.iconCodePoint;
+  // A stored generic placeholder icon (no better match was found when the
+  // category was created) gives way to a keyword match on its name.
+  final isGenericStored =
+      stored == Icons.category_outlined.codePoint || stored == Icons.attach_money_outlined.codePoint;
+  if (stored != null && !isGenericStored) {
+    return IconData(stored, fontFamily: 'MaterialIcons');
   }
+  if (c != null && isGenericStored) {
+    for (final entry in _iconKeywordHints.entries) {
+      if (c.name.contains(entry.key)) return entry.value;
+    }
+  }
+  if (stored != null) return IconData(stored, fontFamily: 'MaterialIcons');
   var cur = c;
   while (cur != null) {
     final icon = kCategoryIcons[cur.id];
@@ -1490,6 +1509,18 @@ IconData iconForCategory(Category? c, List<Category> all) {
 // Checked first (fast, offline); Gemini is used as a fallback for names
 // that don't match any of these.
 const _iconKeywordHints = <String, IconData>{
+  // More specific names first - the first matching keyword wins (e.g.
+  // "آبمیوه" should get the fruit icon, not the water one).
+  'سوپرمارکت': Icons.local_grocery_store_outlined,
+  'سوپر': Icons.local_grocery_store_outlined,
+  'هایپر': Icons.local_grocery_store_outlined,
+  'خواربار': Icons.local_grocery_store_outlined,
+  'میوه': Icons.eco_outlined,
+  'تره‌بار': Icons.eco_outlined,
+  'تره بار': Icons.eco_outlined,
+  'سبزی': Icons.eco_outlined,
+  'قبوض': Icons.request_quote_outlined,
+  'قبض': Icons.request_quote_outlined,
   'خوراک': Icons.restaurant_outlined,
   'غذا': Icons.restaurant_outlined,
   'رستوران': Icons.restaurant_outlined,
