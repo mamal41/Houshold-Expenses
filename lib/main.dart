@@ -466,6 +466,44 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
   return choice == 'discard';
 }
 
+/// Asked when leaving a screen for an already saved transaction whose
+/// fields were changed. Returns 'save', 'discard' or null (stay).
+Future<String?> askSaveChanges(BuildContext context) {
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('ذخیره تغییرات'),
+      content: const Text('آیا تغییرات انجام شده ذخیره شود؟'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خیر')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('بله، ذخیره شود')),
+      ],
+    ),
+  );
+}
+
+/// Pinned bottom bar for the save buttons of a form screen, so they stay
+/// reachable without scrolling to the end of the page.
+Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons) {
+  final children = <Widget>[];
+  for (var i = 0; i < buttons.length; i++) {
+    if (i > 0) children.add(const SizedBox(width: 12));
+    children.add(Expanded(child: buttons[i]));
+  }
+  return Material(
+    elevation: 8,
+    color: Theme.of(context).colorScheme.surface,
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(children: children),
+      ),
+    ),
+  );
+}
+
 // ============================== Enums ==============================
 
 enum TxType { expense, income }
@@ -10527,6 +10565,18 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   String? keepReceiptReason;
   late List<ReceiptItemEntry> items;
 
+  // Snapshot of the form taken once it's loaded (before the AI fills
+  // anything in), used to tell whether anything was changed since.
+  String? _initialSignature;
+  String _signature() => jsonEncode([
+        merchantCtrl.text,
+        totalCtrl.text,
+        date.toIso8601String(),
+        selectedCategory?.id,
+        selectedAccount?.id,
+        items.map((e) => e.toJson()).toList(),
+      ]);
+
   @override
   void initState() {
     super.initState();
@@ -10547,6 +10597,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     selectedAccount = _initialAccount();
     selectedCategory = categories.where((c) => c.id == widget.existing?.categoryId).firstOrNull ??
         _matchCategoryHint(widget.initial.categoryHint, categories, TxType.expense);
+    _initialSignature = _signature();
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
@@ -10761,7 +10812,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     // Drafts always keep their scan; on the final save ask whether the
     // receipt/payslip photo should be kept with the transaction.
     var keepNewImage = draft;
-    if (!draft) {
+    if (!draft && (widget.existing == null || widget.existing!.draft)) {
       final keep = await askKeepReceiptImage(context);
       if (keep == null) return;
       if (widget.existing == null) {
@@ -10805,12 +10856,43 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
+        final existing = widget.existing;
+        if (existing != null) {
+          // Re-reviewing a saved transaction: only ask when something changed.
+          if (_signature() == _initialSignature) {
+            Navigator.pop(context);
+            return;
+          }
+          final choice = await askSaveChanges(context);
+          if (!context.mounted) return;
+          if (choice == 'discard') {
+            Navigator.pop(context);
+          } else if (choice == 'save') {
+            await _save(draft: existing.draft);
+          }
+          return;
+        }
         final shouldPop = await confirmDiscardChanges(context);
         if (!context.mounted) return;
         if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
       appBar: AppBar(title: Text(tr('review_receipt'))),
+      bottomNavigationBar: pinnedBottomButtons(context, [
+        // For an already saved transaction this keeps it as it was (draft or
+        // final) and just saves the edits.
+        OutlinedButton(
+          onPressed: () => _save(draft: widget.existing?.draft ?? true),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          child: Text(widget.existing != null ? 'ذخیره تغییرات' : 'ذخیره پیش‌نویس'),
+        ),
+        if (widget.existing == null || widget.existing!.draft)
+          FilledButton(
+            onPressed: () => _save(draft: false),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: const Text('ثبت نهایی'),
+          ),
+      ]),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -11011,19 +11093,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               ),
             );
           }),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _save(draft: true),
-                  child: Text(widget.existing != null ? 'ذخیره' : 'ذخیره پیش‌نویس'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('ثبت نهایی'))),
-            ],
-          ),
+          const SizedBox(height: 16),
         ],
       ),
     ),
@@ -11079,6 +11149,20 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   List<Transaction> existingTx = [];
   List<PayslipCustomField> customFields = [];
 
+  // Snapshot of the form taken once it's loaded (before the AI fills
+  // anything in), used to tell whether anything was changed since.
+  String? _initialSignature;
+  String _signature() => jsonEncode([
+        for (final k in _payslipLabels.keys) numCtrls[k]!.text,
+        steuerklasseCtrl.text,
+        arbeitgeberCtrl.text,
+        monatCtrl.text,
+        date.toIso8601String(),
+        selectedCategory?.id,
+        selectedAccount?.id,
+        customFields.map((f) => f.toJson()).toList(),
+      ]);
+
   @override
   void initState() {
     super.initState();
@@ -11114,6 +11198,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     selectedAccount = _initialAccount();
     final match = categories.where((c) => c.id == (widget.existing?.categoryId ?? 'i_salary')).toList();
     selectedCategory = match.isEmpty ? categories.where((c) => c.id == 'i_salary').firstOrNull : match.first;
+    _initialSignature = _signature();
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
@@ -11294,7 +11379,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     // Drafts always keep their scan; on the final save ask whether the
     // receipt/payslip photo should be kept with the transaction.
     var keepNewImage = draft;
-    if (!draft) {
+    if (!draft && (widget.existing == null || widget.existing!.draft)) {
       final keep = await askKeepReceiptImage(context);
       if (keep == null) return;
       if (widget.existing == null) {
@@ -11339,12 +11424,43 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
+        final existing = widget.existing;
+        if (existing != null) {
+          // Re-reviewing a saved transaction: only ask when something changed.
+          if (_signature() == _initialSignature) {
+            Navigator.pop(context);
+            return;
+          }
+          final choice = await askSaveChanges(context);
+          if (!context.mounted) return;
+          if (choice == 'discard') {
+            Navigator.pop(context);
+          } else if (choice == 'save') {
+            await _save(draft: existing.draft);
+          }
+          return;
+        }
         final shouldPop = await confirmDiscardChanges(context);
         if (!context.mounted) return;
         if (shouldPop) Navigator.pop(context);
       },
       child: Scaffold(
       appBar: AppBar(title: Text(tr('review_payslip'))),
+      bottomNavigationBar: pinnedBottomButtons(context, [
+        // For an already saved transaction this keeps it as it was (draft or
+        // final) and just saves the edits.
+        OutlinedButton(
+          onPressed: () => _save(draft: widget.existing?.draft ?? true),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          child: Text(widget.existing != null ? 'ذخیره تغییرات' : 'ذخیره پیش‌نویس'),
+        ),
+        if (widget.existing == null || widget.existing!.draft)
+          FilledButton(
+            onPressed: () => _save(draft: false),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: const Text('ثبت نهایی'),
+          ),
+      ]),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -11505,19 +11621,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
             onChanged: (v) => setState(() => selectedAccount = v),
           ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _save(draft: true),
-                  child: Text(widget.existing != null ? 'ذخیره' : 'ذخیره پیش‌نویس'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _save(draft: false), child: const Text('ثبت نهایی'))),
-            ],
-          ),
+          const SizedBox(height: 16),
         ],
       ),
     ),
@@ -12394,6 +12498,20 @@ class _TransactionEditorState extends State<TransactionEditor> {
         }
       },
       child: Scaffold(
+      bottomNavigationBar: pinnedBottomButtons(context, [
+        OutlinedButton(
+          onPressed: () => _save(asDraft: true),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          // For a transaction that's already a draft this just saves the
+          // edits into that same draft.
+          child: Text((widget.existing?.draft ?? false) ? 'ذخیره تغییرات' : tr('save_as_draft'), textAlign: TextAlign.center),
+        ),
+        FilledButton(
+          onPressed: () => _save(asDraft: false),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          child: const Text('ثبت نهایی', textAlign: TextAlign.center),
+        ),
+      ]),
       appBar: AppBar(
         title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
         actions: [
@@ -12653,33 +12771,12 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ],
           const SizedBox(height: 16),
           _recurrenceSection(),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _save(asDraft: true),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                  // For a transaction that's already a draft this just saves the
-                  // edits into that same draft.
-                  child: Text((widget.existing?.draft ?? false) ? 'ذخیره' : tr('save_as_draft'), textAlign: TextAlign.center),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => _save(asDraft: false),
-                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                  child: const Text('ثبت نهایی', textAlign: TextAlign.center),
-                ),
-              ),
-            ],
-          ),
           const SizedBox(height: 8),
           Text(
             'پیش‌نویس‌ها در هیچ محاسبه‌ای لحاظ نمی‌شوند تا زمانی که ثبت نهایی شوند.',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
           ),
+          const SizedBox(height: 8),
         ],
       ),
     ),
