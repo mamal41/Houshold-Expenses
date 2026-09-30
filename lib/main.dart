@@ -1295,7 +1295,10 @@ typedef TxOccurrence = ({DateTime date, Transaction t, bool isReal});
 /// occurrence of every recurring transaction, up to [horizonDays] ahead.
 /// Virtual entries are never persisted - they exist only to power
 /// forward-looking displays.
-List<TxOccurrence> occurrencesWithRecurringProjections(List<Transaction> tx, {int horizonDays = 400}) {
+///
+/// Projections normally start after today; pass [from] to also include
+/// recurring occurrences from that day on (e.g. earlier in this month).
+List<TxOccurrence> occurrencesWithRecurringProjections(List<Transaction> tx, {int horizonDays = 400, DateTime? from}) {
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final horizon = today.add(Duration(days: horizonDays));
@@ -1307,7 +1310,7 @@ List<TxOccurrence> occurrencesWithRecurringProjections(List<Transaction> tx, {in
     for (final d in computeRecurrenceOccurrences(t)) {
       final dd = DateTime(d.year, d.month, d.day);
       if (dd == anchor) continue; // already represented by the real stored transaction above
-      if (!dd.isAfter(today) || dd.isAfter(horizon)) continue;
+      if ((from != null ? dd.isBefore(from) : !dd.isAfter(today)) || dd.isAfter(horizon)) continue;
       result.add((date: dd, t: t, isReal: false));
     }
   }
@@ -1535,6 +1538,12 @@ const _preferredNameIcons = <String, IconData>{
   'قبض': Icons.request_quote_outlined,
 };
 
+/// The generic placeholder icons given to a category no better icon was
+/// found for yet (shapes for expenses, money for income).
+bool _isGenericIcon(int? codePoint) =>
+    codePoint != null &&
+    (codePoint == Icons.category_outlined.codePoint || codePoint == Icons.attach_money_outlined.codePoint);
+
 IconData iconForCategory(Category? c, List<Category> all) {
   if (c != null) {
     for (final entry in _preferredNameIcons.entries) {
@@ -1544,8 +1553,7 @@ IconData iconForCategory(Category? c, List<Category> all) {
   final stored = c?.iconCodePoint;
   // A stored generic placeholder icon (no better match was found when the
   // category was created) gives way to a keyword match on its name.
-  final isGenericStored =
-      stored == Icons.category_outlined.codePoint || stored == Icons.attach_money_outlined.codePoint;
+  final isGenericStored = _isGenericIcon(stored);
   if (stored != null && !isGenericStored) {
     return IconData(stored, fontFamily: 'MaterialIcons');
   }
@@ -1648,34 +1656,148 @@ const _iconKeywordHints = <String, IconData>{
   'زیبایی': Icons.face_retouching_natural_outlined,
 };
 
+// Icons Gemini can choose from for a category no keyword matched, by
+// Material icon name. The name list is sent in the prompt and the reply is
+// matched back to the icon here.
+const _aiIconChoices = <String, IconData>{
+  'restaurant': Icons.restaurant_outlined,
+  'local_grocery_store': Icons.local_grocery_store_outlined,
+  'eco': Icons.eco_outlined,
+  'local_cafe': Icons.local_cafe_outlined,
+  'fastfood': Icons.fastfood_outlined,
+  'lunch_dining': Icons.lunch_dining_outlined,
+  'bakery_dining': Icons.bakery_dining_outlined,
+  'local_pizza': Icons.local_pizza_outlined,
+  'icecream': Icons.icecream_outlined,
+  'cake': Icons.cake_outlined,
+  'local_bar': Icons.local_bar_outlined,
+  'liquor': Icons.liquor_outlined,
+  'home': Icons.home_outlined,
+  'chair': Icons.chair_outlined,
+  'kitchen': Icons.kitchen_outlined,
+  'bed': Icons.bed_outlined,
+  'cleaning_services': Icons.cleaning_services_outlined,
+  'local_laundry_service': Icons.local_laundry_service_outlined,
+  'yard': Icons.yard_outlined,
+  'grass': Icons.grass_outlined,
+  'roofing': Icons.roofing_outlined,
+  'plumbing': Icons.plumbing_outlined,
+  'electrical_services': Icons.electrical_services_outlined,
+  'construction': Icons.construction_outlined,
+  'handyman': Icons.handyman_outlined,
+  'build': Icons.build_outlined,
+  'engineering': Icons.engineering_outlined,
+  'directions_car': Icons.directions_car_outlined,
+  'local_gas_station': Icons.local_gas_station_outlined,
+  'ev_station': Icons.ev_station_outlined,
+  'car_repair': Icons.car_repair_outlined,
+  'tire_repair': Icons.tire_repair_outlined,
+  'local_parking': Icons.local_parking_outlined,
+  'local_taxi': Icons.local_taxi_outlined,
+  'directions_bus': Icons.directions_bus_outlined,
+  'subway': Icons.subway_outlined,
+  'train': Icons.train_outlined,
+  'flight': Icons.flight_outlined,
+  'hotel': Icons.hotel_outlined,
+  'two_wheeler': Icons.two_wheeler_outlined,
+  'directions_bike': Icons.directions_bike_outlined,
+  'commute': Icons.commute_outlined,
+  'local_shipping': Icons.local_shipping_outlined,
+  'bolt': Icons.bolt_outlined,
+  'water_drop': Icons.water_drop_outlined,
+  'local_fire_department': Icons.local_fire_department_outlined,
+  'wifi': Icons.wifi_outlined,
+  'phone_iphone': Icons.phone_iphone_outlined,
+  'router': Icons.router_outlined,
+  'tv': Icons.tv_outlined,
+  'devices': Icons.devices_outlined,
+  'computer': Icons.computer_outlined,
+  'laptop_mac': Icons.laptop_mac_outlined,
+  'headphones': Icons.headphones_outlined,
+  'photo_camera': Icons.photo_camera_outlined,
+  'print': Icons.print_outlined,
+  'medical_services': Icons.medical_services_outlined,
+  'medication': Icons.medication_outlined,
+  'local_hospital': Icons.local_hospital_outlined,
+  'local_pharmacy': Icons.local_pharmacy_outlined,
+  'health_and_safety': Icons.health_and_safety_outlined,
+  'fitness_center': Icons.fitness_center_outlined,
+  'spa': Icons.spa_outlined,
+  'face_retouching_natural': Icons.face_retouching_natural_outlined,
+  'content_cut': Icons.content_cut_outlined,
+  'sports_esports': Icons.sports_esports_outlined,
+  'sports_soccer': Icons.sports_soccer_outlined,
+  'pool': Icons.pool_outlined,
+  'hiking': Icons.hiking_outlined,
+  'beach_access': Icons.beach_access_outlined,
+  'park': Icons.park_outlined,
+  'movie': Icons.movie_outlined,
+  'theater_comedy': Icons.theater_comedy_outlined,
+  'music_note': Icons.music_note_outlined,
+  'palette': Icons.palette_outlined,
+  'celebration': Icons.celebration_outlined,
+  'casino': Icons.casino_outlined,
+  'checkroom': Icons.checkroom_outlined,
+  'shopping_bag': Icons.shopping_bag_outlined,
+  'shopping_cart': Icons.shopping_cart_outlined,
+  'storefront': Icons.storefront_outlined,
+  'local_mall': Icons.local_mall_outlined,
+  'toys': Icons.toys_outlined,
+  'child_care': Icons.child_care_outlined,
+  'baby_changing_station': Icons.baby_changing_station_outlined,
+  'elderly': Icons.elderly_outlined,
+  'family_restroom': Icons.family_restroom_outlined,
+  'pets': Icons.pets_outlined,
+  'school': Icons.school_outlined,
+  'menu_book': Icons.menu_book_outlined,
+  'work': Icons.work_outlined,
+  'business_center': Icons.business_center_outlined,
+  'account_balance': Icons.account_balance_outlined,
+  'savings': Icons.savings_outlined,
+  'payments': Icons.payments_outlined,
+  'attach_money': Icons.attach_money_outlined,
+  'currency_exchange': Icons.currency_exchange_outlined,
+  'credit_card': Icons.credit_card_outlined,
+  'percent': Icons.percent_outlined,
+  'request_quote': Icons.request_quote_outlined,
+  'receipt_long': Icons.receipt_long_outlined,
+  'description': Icons.description_outlined,
+  'gavel': Icons.gavel_outlined,
+  'subscriptions': Icons.subscriptions_outlined,
+  'cloud': Icons.cloud_outlined,
+  'security': Icons.security_outlined,
+  'volunteer_activism': Icons.volunteer_activism_outlined,
+  'card_giftcard': Icons.card_giftcard_outlined,
+  'mosque': Icons.mosque_outlined,
+  'church': Icons.church_outlined,
+  'local_post_office': Icons.local_post_office_outlined,
+  'smoking_rooms': Icons.smoking_rooms_outlined,
+  'lightbulb': Icons.lightbulb_outlined,
+  'agriculture': Icons.agriculture_outlined,
+  'trending_up': Icons.trending_up_outlined,
+};
+
 Future<IconData?> _suggestIconViaGemini(String categoryName) async {
   final key = await Store.loadGeminiKey();
   if (key == null || key.trim().isEmpty) return null;
   try {
-    final options = _iconKeywordHints.keys.join('، ');
-    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/${_geminiModels.first}:generateContent?key=$key');
-    final body = jsonEncode({
-      'contents': [
-        {
-          'parts': [
-            {
-              'text':
-                  'یک دسته‌بندی مالی با نام "$categoryName" داریم. از این لیست کلمات، فقط دقیقاً یکی را که مفهوماً نزدیک‌ترین به این دسته‌بندی است انتخاب کن و فقط همان یک کلمه را بدون هیچ توضیح دیگری برگردان: $options',
-            },
-          ],
-        },
-      ],
-    });
-    final resp = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: body).timeout(const Duration(seconds: 8));
-    if (resp.statusCode != 200) return null;
-    final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
-    final text = decoded['candidates']?[0]?['content']?['parts']?[0]?['text']?.toString().trim();
-    if (text == null) return null;
-    for (final k in _iconKeywordHints.keys) {
-      if (text.contains(k)) return _iconKeywordHints[k];
+    // Uses the shared Gemini request helper (model fallback, retries on
+    // overload, generous timeout) - a single quick call to one model with
+    // an 8-second timeout failed far too often, leaving the generic icon.
+    final reply = await geminiTextRequest(
+      key.trim(),
+      'A personal finance app has a spending/income category named "$categoryName" (the name may be Persian). '
+      'Pick the single Material icon from this list that best represents it and reply with only the icon name, '
+      'nothing else: ${_aiIconChoices.keys.join(', ')}',
+    );
+    final text = reply.toLowerCase();
+    // Longest names first, so e.g. "car_repair" wins over "car".
+    final names = _aiIconChoices.keys.toList()..sort((a, b) => b.length.compareTo(a.length));
+    for (final n in names) {
+      if (text.contains(n)) return _aiIconChoices[n];
     }
   } catch (_) {
-    // best-effort only; fall back to a generic icon on any failure
+    // best-effort only; the category keeps the generic icon and is retried later
   }
   return null;
 }
@@ -1700,7 +1822,10 @@ Future<({IconData icon, bool isFallback})> suggestIconForCategory(String name, T
 /// much more, so it shouldn't compete for it on every single launch.
 Future<void> retryPendingCategoryIcons() async {
   final categories = await Store.loadCategories();
-  final pending = categories.where((c) => c.iconNeedsRetry).toList();
+  // Anything still showing the generic placeholder icon (also older
+  // categories saved before the retry flag existed) - capped per day so a
+  // long list can't eat the day's Gemini quota.
+  final pending = categories.where((c) => c.iconNeedsRetry || _isGenericIcon(c.iconCodePoint)).take(10).toList();
   if (pending.isEmpty) return;
   final lastTry = await Store.loadLastIconRetryDate();
   final today = DateTime.now();
@@ -2584,7 +2709,7 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'expense_by_category': {AppLanguage.fa: 'هزینه‌ها بر اساس دسته‌بندی', AppLanguage.en: 'Expenses by category', AppLanguage.de: 'Ausgaben nach Kategorie'},
   'last_6_months': {AppLanguage.fa: 'روند ۶ ماه اخیر', AppLanguage.en: 'Last 6 months trend', AppLanguage.de: 'Trend der letzten 6 Monate'},
   'gemini_key': {AppLanguage.fa: 'کلید Gemini API', AppLanguage.en: 'Gemini API key', AppLanguage.de: 'Gemini-API-Schlüssel'},
-  'upcoming_payments': {AppLanguage.fa: 'پرداخت‌های پیش‌رو', AppLanguage.en: 'Upcoming payments', AppLanguage.de: 'Bevorstehende Zahlungen'},
+  'upcoming_payments': {AppLanguage.fa: 'هزینه‌های پیش‌رو', AppLanguage.en: 'Upcoming expenses', AppLanguage.de: 'Bevorstehende Ausgaben'},
   'budget_goals': {AppLanguage.fa: 'اهداف هزینه', AppLanguage.en: 'Budget goals', AppLanguage.de: 'Budgetziele'},
   'savings_goals': {AppLanguage.fa: 'اهداف پس‌انداز', AppLanguage.en: 'Savings goals', AppLanguage.de: 'Sparziele'},
   'transfer_between_accounts': {AppLanguage.fa: 'انتقال بین حساب‌ها', AppLanguage.en: 'Transfer between accounts', AppLanguage.de: 'Kontoübertragung'},
@@ -4401,13 +4526,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Coming back to the app after a real stay in the background counts as
-    // opening it again (short trips to the camera/file picker don't).
+    // opening it again. Trips to the camera, gallery or file picker while
+    // scanning also pause the app, sometimes for over a minute, so only a
+    // longer absence (same grace period as the app lock) replays the hint.
     if (state == AppLifecycleState.paused) {
       _pausedAt = DateTime.now();
     } else if (state == AppLifecycleState.resumed) {
+      // The date may have moved on (e.g. a new month) while the app sat in
+      // the background - refresh so balances and month tabs follow.
+      unawaited(_refresh());
       final pausedAt = _pausedAt;
       _pausedAt = null;
-      if (pausedAt != null && DateTime.now().difference(pausedAt) >= const Duration(minutes: 1) && draftCount > 0) {
+      if (pausedAt != null && DateTime.now().difference(pausedAt) >= const Duration(minutes: 5) && draftCount > 0) {
         Future.delayed(const Duration(milliseconds: 700), _playDraftHint);
       }
     }
@@ -4985,27 +5115,26 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
               () {
                 final today = DateTime.now();
                 final todayMidnight = DateTime(today.year, today.month, today.day);
-                final pastOrDue = tx.where((t) => !t.date.isAfter(todayMidnight)).toList();
-                var nextMonthNum = today.month + 1;
-                var nextMonthYear = today.year;
-                if (nextMonthNum > 12) {
-                  nextMonthNum = 1;
-                  nextMonthYear++;
+                // Months follow the calendar chosen in settings (Jalali or
+                // Gregorian) and are worked out from today's date on every
+                // build, so the tabs move on as soon as a new month starts.
+                String keyOf(DateTime d) {
+                  final start = calendarMonthOf(d).start;
+                  return '${start.year}-${start.month}-${start.day}';
                 }
+
+                final prevMonth = calendarMonthOf(todayMidnight, -1);
+                final thisMonth = calendarMonthOf(todayMidnight);
+                final nextMonth = calendarMonthOf(todayMidnight, 1);
 
                 // All not-yet-due entries (real future-dated transactions,
                 // plus projected occurrences of recurring transactions),
-                // grouped by the month they actually fall in - so each
-                // month's own "not yet due" list only ever contains items
-                // that truly belong to that month (a current-month item
-                // due later this month no longer gets mislabeled as
-                // belonging to next month).
-                final futureByMonth = _memoized<Map<String, List<TxOccurrence>>>('future|$_dayKey', () {
+                // grouped by the month they actually fall in.
+                final futureByMonth = _memoized<Map<String, List<TxOccurrence>>>('future|$_dayKey|${currentCalendarSystem.value.name}', () {
                   final map = <String, List<TxOccurrence>>{};
-                  for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 60)) {
+                  for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 75)) {
                     if (!e.date.isAfter(todayMidnight)) continue;
-                    final key = '${e.date.year}-${e.date.month}';
-                    (map[key] ??= []).add(e);
+                    (map[keyOf(e.date)] ??= []).add(e);
                   }
                   for (final list in map.values) {
                     list.sort((a, b) => a.date.compareTo(b.date));
@@ -5013,48 +5142,45 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                   return map;
                 });
 
-                // Group already-due transactions by month, most recent first
-                // (tx is already sorted by date descending), keeping only
-                // the last 2 months that actually have transactions.
-                final monthKeys = <String>[];
-                final grouped = <String, List<Transaction>>{};
-                for (final t in pastOrDue) {
-                  final key = '${t.date.year}-${t.date.month}';
-                  if (!grouped.containsKey(key)) {
-                    monthKeys.add(key);
-                    grouped[key] = [];
-                  }
-                  grouped[key]!.add(t);
+                // Already-due transactions of this month and last month
+                // (tx is sorted by date descending).
+                final dueByMonth = <String, List<Transaction>>{};
+                for (final t in tx) {
+                  if (t.date.isAfter(todayMidnight) || t.date.isBefore(prevMonth.start)) continue;
+                  (dueByMonth[keyOf(t.date)] ??= []).add(t);
                 }
-                final limitedKeys = monthKeys.take(2).toList();
 
-                final nextMonthKey = '$nextMonthYear-$nextMonthNum';
-                final nextMonthFuture = futureByMonth[nextMonthKey] ?? [];
+                String title(CalendarMonth m) => '${m.name} ${m.yearText}';
+                final nextKey = keyOf(nextMonth.start);
+                final thisKey = keyOf(thisMonth.start);
+                final prevKey = keyOf(prevMonth.start);
 
                 return Column(
                   children: [
-                    if (nextMonthFuture.isNotEmpty)
+                    if ((futureByMonth[nextKey] ?? []).isNotEmpty)
                       _monthTabSection(
-                        monthKey: nextMonthKey,
-                        title: '${_gregorianMonthNames[nextMonthNum - 1]} $nextMonthYear',
+                        monthKey: nextKey,
+                        title: title(nextMonth),
                         dimTitle: true,
                         initiallyExpanded: false,
                         dueTx: const [],
-                        notDueEntries: nextMonthFuture,
+                        notDueEntries: futureByMonth[nextKey]!,
                       ),
-                    ...limitedKeys.asMap().entries.map((entry) {
-                      final key = entry.value;
-                      final parts = key.split('-');
-                      final y = int.parse(parts[0]);
-                      final m = int.parse(parts[1]);
-                      return _monthTabSection(
-                        monthKey: key,
-                        title: '${_gregorianMonthNames[m - 1]} $y',
-                        initiallyExpanded: entry.key == 0,
-                        dueTx: grouped[key]!,
-                        notDueEntries: futureByMonth[key] ?? [],
-                      );
-                    }),
+                    _monthTabSection(
+                      monthKey: thisKey,
+                      title: title(thisMonth),
+                      initiallyExpanded: true,
+                      dueTx: dueByMonth[thisKey] ?? const [],
+                      notDueEntries: futureByMonth[thisKey] ?? const [],
+                    ),
+                    if ((dueByMonth[prevKey] ?? []).isNotEmpty)
+                      _monthTabSection(
+                        monthKey: prevKey,
+                        title: title(prevMonth),
+                        initiallyExpanded: false,
+                        dueTx: dueByMonth[prevKey]!,
+                        notDueEntries: const [],
+                      ),
                   ],
                 );
               }(),
@@ -5084,6 +5210,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
+        // Keyed by month so a new month gets a fresh tile (its own
+        // expanded state) instead of inheriting the previous one's.
+        key: PageStorageKey('month-$monthKey'),
         initiallyExpanded: initiallyExpanded,
         tilePadding: EdgeInsets.zero,
         title: Text(
@@ -5923,6 +6052,8 @@ class UpcomingPaymentsScreen extends StatefulWidget {
 
 enum _UpcomingRange { endOfThisMonth, nextMonth, custom }
 
+const _chartMonths = 4;
+
 class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   bool loading = true;
   List<Transaction> tx = [];
@@ -6040,11 +6171,11 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
   }
 
   /// How far ahead recurring-occurrence projections need to reach to cover
-  /// the 6-month chart, which can be paged forward/back with
+  /// the 4-month chart, which can be paged forward/back with
   /// [chartMonthOffset] - without this, recurring transactions silently
   /// stopped showing up once the chart was paged past a fixed horizon.
   int _neededHorizonDays(DateTime today) {
-    final lastChartMonthEnd = calendarMonthOf(today, 5 + chartMonthOffset).end;
+    final lastChartMonthEnd = calendarMonthOf(today, _chartMonths - 1 + chartMonthOffset).end;
     final needed = lastChartMonthEnd.difference(today).inDays + 5;
     return needed > 220 ? needed : 220;
   }
@@ -6079,12 +6210,19 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       totalsByCurrency[cur] = (totalsByCurrency[cur] ?? 0) + e.t.amount;
     }
 
-    // 6-month lookahead chart data (projected expense per month, including
-    // recurring occurrences).
+    // Lookahead chart: projected expense per calendar month. Whole months
+    // are counted - including recurring payments that already fell due
+    // earlier in the current month - not just what's still to come.
+    final firstChartMonth = calendarMonthOf(today, chartMonthOffset);
+    final chartOccurrences = occurrencesWithRecurringProjections(
+      tx,
+      horizonDays: _neededHorizonDays(today),
+      from: firstChartMonth.start,
+    );
     final chartMonths = <({CalendarMonth month, double expense})>[];
-    for (var i = 0; i < 6; i++) {
+    for (var i = 0; i < _chartMonths; i++) {
       final cm = calendarMonthOf(today, i + chartMonthOffset);
-      final total = allOccurrences
+      final total = chartOccurrences
           .where((e) =>
               e.t.type == TxType.expense &&
               (accountFilter != null ? e.t.accountId == accountFilter : currencyOf(e.t.accountId) == currency) &&
@@ -6095,203 +6233,221 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     }
     final maxChart = chartMonths.fold(0.0, (m, c) => c.expense > m ? c.expense : m);
 
+    final customLabel = range == _UpcomingRange.custom
+        ? '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}'
+        : 'ماه دلخواه';
+
     return Scaffold(
-      appBar: AppBar(title: Text(tr('upcoming_payments'))),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('تا آخر این ماه'),
-                  selected: range == _UpcomingRange.endOfThisMonth,
-                  onSelected: (_) => setState(() => range = _UpcomingRange.endOfThisMonth),
-                ),
-                ChoiceChip(
-                  label: const Text('ماه بعد'),
-                  selected: range == _UpcomingRange.nextMonth,
-                  onSelected: (_) => setState(() => range = _UpcomingRange.nextMonth),
-                ),
-                ActionChip(
-                  label: Text(range == _UpcomingRange.custom
-                      ? '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}'
-                      : 'ماه دلخواه'),
-                  avatar: const Icon(Icons.calendar_month_outlined, size: 18),
-                  onPressed: _pickCustomMonth,
-                ),
-                FilterChip(
-                  label: const Text('نمودار ۶ ماه آینده'),
-                  selected: showChart,
-                  onSelected: (v) => setState(() => showChart = v),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: DropdownButtonFormField<String?>(
-              initialValue: accountFilter,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
-              items: [
-                DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
-                ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
-              ],
-              onChanged: (v) => setState(() => accountFilter = v),
-            ),
-          ),
-          if (showChart)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.chevron_left, size: 20),
-                            tooltip: 'یک ماه بعد',
-                            onPressed: () => setState(() => chartMonthOffset++),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Expanded(
-                            child: Text(
-                              'هزینه‌ی پیش‌بینی‌شده (شامل تراکنش‌های تکرارشونده)',
-                              style: Theme.of(context).textTheme.titleSmall,
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.chevron_right, size: 20),
-                            tooltip: 'یک ماه قبل',
-                            onPressed: () => setState(() => chartMonthOffset--),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        height: 190,
-                        child: maxChart <= 0
-                            ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
-                            : Row(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  for (var i = 0; i < chartMonths.length; i++)
-                                    Expanded(
-                                      child: Column(
-                                        mainAxisAlignment: MainAxisAlignment.end,
-                                        children: [
-                                          Text(
-                                            chartMonths[i].expense > 0 ? ltr(formatMoneyCompact(chartMonths[i].expense, currency)) : '',
-                                            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
-                                            textAlign: TextAlign.center,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Container(
-                                            height: maxChart > 0 ? 110 * (chartMonths[i].expense / maxChart).clamp(0.02, 1.0) : 2,
-                                            margin: const EdgeInsets.symmetric(horizontal: 4),
-                                            decoration: BoxDecoration(
-                                              color: Colors.red.shade400,
-                                              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            () { final n = chartMonths[i].month.name; return (currentCalendarSystem.value == CalendarSystem.gregorian && n.length > 3) ? n.substring(0, 3) : n; }(),
-                                            style: const TextStyle(fontSize: 10),
-                                          ),
-                                          Text(
-                                            ltr(chartMonths[i].month.yearText),
-                                            style: TextStyle(fontSize: 8, color: Colors.grey.shade600),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                ],
-                              ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (totalsByCurrency.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('جمع هزینه‌های پیش‌رو', style: TextStyle(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 4),
-                      ...totalsByCurrency.entries.map((e) => Text(ltr(formatMoney(e.value, e.key)), style: const TextStyle(color: Colors.red))),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: entries.isEmpty
-                ? const Center(child: Text('در این بازه پرداخت پیش‌رویی وجود ندارد.'))
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: entries.length,
-                    itemBuilder: (context, i) {
-                      final e = entries[i];
-                      final daysLeft = e.date.difference(today).inDays;
-                      return Card(
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
-                            child: Icon(
-                              e.t.type == TxType.income ? Icons.add : Icons.remove,
-                              color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
-                            ),
-                          ),
-                          title: Text(categoryName(e.t.categoryId)),
-                          subtitle: Text(
-                            daysLeft == 0
-                                ? 'امروز'
-                                : '${formatDate(e.date)} • ${ltr(persianDigits('$daysLeft'))} روز دیگر',
-                          ),
-                          trailing: Text(
-                            ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
-                            ),
-                          ),
-                          onTap: () async {
-                            final result = await Navigator.push<Object>(
-                              context,
-                              MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: e.t, categories: categories, accounts: accounts)),
-                            );
-                            if (result is DeleteTransactionSignal) {
-                              await Store.deleteTransaction(result.id);
-                            } else if (result is Transaction) {
-                              await Store.upsertTransaction(result);
-                            }
-                            await _load();
-                          },
-                        ),
-                      );
-                    },
-                  ),
+      appBar: AppBar(
+        title: Text(tr('upcoming_payments')),
+        actions: [
+          IconButton(
+            icon: Icon(showChart ? Icons.bar_chart : Icons.bar_chart_outlined),
+            tooltip: showChart ? 'پنهان کردن نمودار' : 'نمایش نمودار',
+            isSelected: showChart,
+            onPressed: () => setState(() => showChart = !showChart),
           ),
         ],
+      ),
+      // Everything scrolls together, so the list isn't squeezed under a
+      // fixed chart.
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('بازه‌ی زمانی', style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  SegmentedButton<_UpcomingRange>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                    segments: [
+                      const ButtonSegment(value: _UpcomingRange.endOfThisMonth, label: Text('تا آخر این ماه')),
+                      const ButtonSegment(value: _UpcomingRange.nextMonth, label: Text('ماه بعد')),
+                      ButtonSegment(
+                        value: _UpcomingRange.custom,
+                        icon: const Icon(Icons.calendar_month_outlined, size: 16),
+                        label: Text(customLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                    ],
+                    selected: {range},
+                    onSelectionChanged: (sel) {
+                      final r = sel.first;
+                      if (r == _UpcomingRange.custom) {
+                        _pickCustomMonth();
+                      } else {
+                        setState(() => range = r);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String?>(
+                    initialValue: accountFilter,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'حساب',
+                      prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: [
+                      DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
+                      ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
+                    ],
+                    onChanged: (v) => setState(() => accountFilter = v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (showChart) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.chevron_left, size: 20),
+                          tooltip: 'یک ماه بعد',
+                          onPressed: () => setState(() => chartMonthOffset++),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Expanded(
+                          child: Text(
+                            'هزینه‌ی پیش‌بینی‌شده‌ی ماهانه',
+                            style: Theme.of(context).textTheme.titleSmall,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.chevron_right, size: 20),
+                          tooltip: 'یک ماه قبل',
+                          onPressed: () => setState(() => chartMonthOffset--),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 200,
+                      child: maxChart <= 0
+                          ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
+                          : Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                for (var i = 0; i < chartMonths.length; i++)
+                                  Expanded(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text(
+                                            chartMonths[i].expense > 0 ? ltr(formatMoneyCompact(chartMonths[i].expense, currency)) : '',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                            textAlign: TextAlign.center,
+                                            maxLines: 1,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Container(
+                                          height: 115 * (chartMonths[i].expense / maxChart).clamp(0.02, 1.0),
+                                          margin: const EdgeInsets.symmetric(horizontal: 10),
+                                          decoration: BoxDecoration(
+                                            color: chartMonths[i].month.start == calendarMonthOf(today).start
+                                                ? Colors.red.shade600
+                                                : Colors.red.shade300,
+                                            borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(chartMonths[i].month.name, style: const TextStyle(fontSize: 12)),
+                                        Text(
+                                          ltr(chartMonths[i].month.yearText),
+                                          style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          if (totalsByCurrency.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.summarize_outlined),
+                title: const Text('جمع هزینه‌های پیش‌رو در این بازه', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: totalsByCurrency.entries
+                      .map((e) => Text(ltr(formatMoney(e.value, e.key)), style: const TextStyle(color: Colors.red, fontSize: 15)))
+                      .toList(),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          if (entries.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Center(child: Text('در این بازه هزینه‌ی پیش‌رویی وجود ندارد.')),
+            )
+          else
+            ...entries.map((e) => _entryCard(e, today)),
+        ],
+      ),
+    );
+  }
+
+  Widget _entryCard(TxOccurrence e, DateTime today) {
+    final daysLeft = e.date.difference(today).inDays;
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+          child: Icon(
+            e.t.type == TxType.income ? Icons.add : Icons.remove,
+            color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+          ),
+        ),
+        title: Text(categoryName(e.t.categoryId)),
+        subtitle: Text(
+          daysLeft == 0 ? 'امروز' : '${formatDate(e.date)} • ${ltr(persianDigits('$daysLeft'))} روز دیگر',
+        ),
+        trailing: Text(
+          ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+          ),
+        ),
+        onTap: () async {
+          final result = await Navigator.push<Object>(
+            context,
+            MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: e.t, categories: categories, accounts: accounts)),
+          );
+          if (result is DeleteTransactionSignal) {
+            await Store.deleteTransaction(result.id);
+          } else if (result is Transaction) {
+            await Store.upsertTransaction(result);
+          }
+          await _load();
+        },
       ),
     );
   }
@@ -10593,6 +10749,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   // Snapshot of the form taken once it's loaded (before the AI fills
   // anything in), used to tell whether anything was changed since.
   String? _initialSignature;
+  List<Listenable> get _watchedControllers => [merchantCtrl, totalCtrl];
   String _signature() => jsonEncode([
         merchantCtrl.text,
         totalCtrl.text,
@@ -10903,21 +11060,42 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       },
       child: Scaffold(
       appBar: AppBar(title: Text(tr('review_receipt'))),
-      bottomNavigationBar: pinnedBottomButtons(context, [
-        // For an already saved transaction this keeps it as it was (draft or
-        // final) and just saves the edits.
-        OutlinedButton(
-          onPressed: () => _save(draft: widget.existing?.draft ?? true),
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          child: Text(widget.existing != null ? 'ذخیره تغییرات' : 'ذخیره پیش‌نویس'),
-        ),
-        if (widget.existing == null || widget.existing!.draft)
-          FilledButton(
-            onPressed: () => _save(draft: false),
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('ثبت نهایی'),
-          ),
-      ]),
+      bottomNavigationBar: ListenableBuilder(
+        // Rebuild as fields are typed in, so "save changes" lights up as
+        // soon as something differs from what was saved.
+        listenable: Listenable.merge(_watchedControllers),
+        builder: (context, _) {
+          final changed = _signature() != _initialSignature;
+          return pinnedBottomButtons(context, [
+            // For an already saved transaction this keeps it as it was (draft
+            // or final) and just saves the edits - enabled once changed.
+            if (widget.existing == null)
+              OutlinedButton(
+                onPressed: () => _save(draft: true),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ذخیره پیش‌نویس'),
+              )
+            else if (widget.existing!.draft)
+              OutlinedButton(
+                onPressed: changed ? () => _save(draft: true) : null,
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ذخیره تغییرات'),
+              )
+            else
+              FilledButton(
+                onPressed: changed ? () => _save(draft: false) : null,
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ذخیره تغییرات'),
+              ),
+            if (widget.existing == null || widget.existing!.draft)
+              FilledButton(
+                onPressed: () => _save(draft: false),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ثبت نهایی'),
+              ),
+          ]);
+        },
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -11177,6 +11355,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   // Snapshot of the form taken once it's loaded (before the AI fills
   // anything in), used to tell whether anything was changed since.
   String? _initialSignature;
+  List<Listenable> get _watchedControllers => [...numCtrls.values, steuerklasseCtrl, arbeitgeberCtrl, monatCtrl];
   String _signature() => jsonEncode([
         for (final k in _payslipLabels.keys) numCtrls[k]!.text,
         steuerklasseCtrl.text,
@@ -11471,21 +11650,42 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       },
       child: Scaffold(
       appBar: AppBar(title: Text(tr('review_payslip'))),
-      bottomNavigationBar: pinnedBottomButtons(context, [
-        // For an already saved transaction this keeps it as it was (draft or
-        // final) and just saves the edits.
-        OutlinedButton(
-          onPressed: () => _save(draft: widget.existing?.draft ?? true),
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          child: Text(widget.existing != null ? 'ذخیره تغییرات' : 'ذخیره پیش‌نویس'),
-        ),
-        if (widget.existing == null || widget.existing!.draft)
-          FilledButton(
-            onPressed: () => _save(draft: false),
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('ثبت نهایی'),
-          ),
-      ]),
+      bottomNavigationBar: ListenableBuilder(
+        // Rebuild as fields are typed in, so "save changes" lights up as
+        // soon as something differs from what was saved.
+        listenable: Listenable.merge(_watchedControllers),
+        builder: (context, _) {
+          final changed = _signature() != _initialSignature;
+          return pinnedBottomButtons(context, [
+            // For an already saved transaction this keeps it as it was (draft
+            // or final) and just saves the edits - enabled once changed.
+            if (widget.existing == null)
+              OutlinedButton(
+                onPressed: () => _save(draft: true),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ذخیره پیش‌نویس'),
+              )
+            else if (widget.existing!.draft)
+              OutlinedButton(
+                onPressed: changed ? () => _save(draft: true) : null,
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ذخیره تغییرات'),
+              )
+            else
+              FilledButton(
+                onPressed: changed ? () => _save(draft: false) : null,
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ذخیره تغییرات'),
+              ),
+            if (widget.existing == null || widget.existing!.draft)
+              FilledButton(
+                onPressed: () => _save(draft: false),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                child: const Text('ثبت نهایی'),
+              ),
+          ]);
+        },
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -12018,20 +12218,34 @@ class _TransactionEditorState extends State<TransactionEditor> {
       final match = categories.where((c) => c.id == e.categoryId).toList();
       selectedCategory = match.isEmpty ? null : match.first;
     }
-    amountCtrl.addListener(() => _dirty = true);
-    noteCtrl.addListener(() => _dirty = true);
-    merchantCtrl.addListener(() => _dirty = true);
-    dayCtrl.addListener(() => _dirty = true);
-    intervalCtrl.addListener(() => _dirty = true);
-    installmentsCtrl.addListener(() => _dirty = true);
-    notifyMessageCtrl.addListener(() => _dirty = true);
-    notifyDaysCtrl.addListener(() => _dirty = true);
-    for (final c in payslipNumCtrls.values) {
-      c.addListener(() => _dirty = true);
+    for (final c in [
+      amountCtrl,
+      noteCtrl,
+      merchantCtrl,
+      dayCtrl,
+      intervalCtrl,
+      installmentsCtrl,
+      notifyMessageCtrl,
+      notifyDaysCtrl,
+      ...payslipNumCtrls.values,
+      payslipSteuerklasseCtrl,
+      payslipArbeitgeberCtrl,
+      payslipMonatCtrl,
+    ]) {
+      _watchText(c);
     }
-    payslipSteuerklasseCtrl.addListener(() => _dirty = true);
-    payslipArbeitgeberCtrl.addListener(() => _dirty = true);
-    payslipMonatCtrl.addListener(() => _dirty = true);
+  }
+
+  /// Marks the form as changed when [c]'s text changes (controller listeners
+  /// also fire for cursor/selection moves, which aren't changes), and
+  /// rebuilds so the save button and back-button behaviour follow along.
+  void _watchText(TextEditingController c) {
+    var last = c.text;
+    c.addListener(() {
+      if (c.text == last) return;
+      last = c.text;
+      if (!_dirty && mounted) setState(() => _dirty = true);
+    });
   }
 
   Future<void> _pickCategory() async {
@@ -12514,6 +12728,17 @@ class _TransactionEditorState extends State<TransactionEditor> {
       canPop: !_dirty,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
+        if (widget.existing != null) {
+          // Only reached when something was changed (canPop is false then).
+          final choice = await askSaveChanges(context);
+          if (!context.mounted) return;
+          if (choice == 'discard') {
+            Navigator.pop(context);
+          } else if (choice == 'save') {
+            await _save();
+          }
+          return;
+        }
         final shouldPop = await confirmDiscardChanges(context, onSave: () async => _save());
         if (didPop || !context.mounted) return;
         if (shouldPop) {
@@ -12524,18 +12749,34 @@ class _TransactionEditorState extends State<TransactionEditor> {
       },
       child: Scaffold(
       bottomNavigationBar: pinnedBottomButtons(context, [
-        OutlinedButton(
-          onPressed: () => _save(asDraft: true),
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          // For a transaction that's already a draft this just saves the
-          // edits into that same draft.
-          child: Text((widget.existing?.draft ?? false) ? 'ذخیره تغییرات' : tr('save_as_draft'), textAlign: TextAlign.center),
-        ),
-        FilledButton(
-          onPressed: () => _save(asDraft: false),
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          child: const Text('ثبت نهایی', textAlign: TextAlign.center),
-        ),
+        // A confirmed transaction only needs "save changes", enabled once
+        // something was changed. A draft keeps "save changes" (into the same
+        // draft, also enabled once changed) next to "final save"; a new
+        // transaction gets "save as draft" and "final save".
+        if (widget.existing == null)
+          OutlinedButton(
+            onPressed: () => _save(asDraft: true),
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: Text(tr('save_as_draft'), textAlign: TextAlign.center),
+          )
+        else if (widget.existing!.draft)
+          OutlinedButton(
+            onPressed: _dirty ? () => _save(asDraft: true) : null,
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: const Text('ذخیره تغییرات', textAlign: TextAlign.center),
+          ),
+        if (widget.existing != null && !widget.existing!.draft)
+          FilledButton(
+            onPressed: _dirty ? () => _save(asDraft: false) : null,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: const Text('ذخیره تغییرات', textAlign: TextAlign.center),
+          )
+        else
+          FilledButton(
+            onPressed: () => _save(asDraft: false),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: const Text('ثبت نهایی', textAlign: TextAlign.center),
+          ),
       ], trailing: [
         if (_currentImagePath != null)
           IconButton(
