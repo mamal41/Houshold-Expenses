@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
@@ -3453,8 +3454,6 @@ Future<bool?> askKeepReceiptImage(BuildContext context) {
   );
 }
 
-/// Renders the first page of a PDF at [path] to a temporary JPEG image and
-/// returns the image file path. Only the first page is processed for now.
 /// Copies a scanned receipt/payslip image (which otherwise lives in a
 /// temp directory the OS can clear at any time) into permanent app
 /// storage, so a saved draft can still show/re-run AI on its image later.
@@ -3468,27 +3467,89 @@ Future<String> persistDraftImage(String tempPath, String txId) async {
   return destPath;
 }
 
-Future<String> rasterizeFirstPdfPage(String path) async {
+const _maxPdfPages = 6;
+// Tallest combined image we produce; taller bitmaps can fail to decode or
+// display on some phones, so many pages get a narrower (smaller) width.
+const _maxStitchedHeight = 8000.0;
+
+/// Renders a PDF at [path] to one temporary image and returns its path.
+/// Multi-page PDFs (e.g. payslips spanning several pages) get all their
+/// pages - up to [_maxPdfPages] - stacked top to bottom in a single image,
+/// so the AI reads every page and the preview/draft keeps them all.
+Future<String> rasterizePdfPages(String path) async {
   final doc = await PdfDocument.openFile(path);
-  final page = await doc.getPage(1);
-  // Cap the rendered size (matches the max dimension used for camera/gallery
-  // photos) so large PDF pages don't produce oversized uploads to Gemini.
-  const maxDim = 1800.0;
-  var scale = 2.0;
-  final longest = page.width > page.height ? page.width : page.height;
-  if (longest * scale > maxDim) scale = maxDim / longest;
-  final rendered = await page.render(
-    width: page.width * scale,
-    height: page.height * scale,
-    format: PdfPageImageFormat.jpeg,
-  );
-  await page.close();
-  await doc.close();
-  final dir = await getTemporaryDirectory();
-  final outPath = '${dir.path}/scan_${DateTime.now().microsecondsSinceEpoch}.jpg';
-  final file = File(outPath);
-  await file.writeAsBytes(rendered!.bytes);
-  return outPath;
+  try {
+    final dir = await getTemporaryDirectory();
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final count = min(doc.pagesCount, _maxPdfPages);
+    if (count <= 1) {
+      final page = await doc.getPage(1);
+      // Cap the rendered size (matches the max dimension used for camera/gallery
+      // photos) so large PDF pages don't produce oversized uploads to Gemini.
+      const maxDim = 1800.0;
+      var scale = 2.0;
+      final longest = page.width > page.height ? page.width : page.height;
+      if (longest * scale > maxDim) scale = maxDim / longest;
+      final rendered = await page.render(
+        width: page.width * scale,
+        height: page.height * scale,
+        format: PdfPageImageFormat.jpeg,
+      );
+      await page.close();
+      final outPath = '${dir.path}/scan_$stamp.jpg';
+      await File(outPath).writeAsBytes(rendered!.bytes);
+      return outPath;
+    }
+
+    // One common width for every page; shrink it if the stack gets too tall.
+    final ratios = <double>[];
+    for (var i = 1; i <= count; i++) {
+      final page = await doc.getPage(i);
+      ratios.add(page.height / page.width);
+      await page.close();
+    }
+    const gap = 12.0;
+    final totalRatio = ratios.fold(0.0, (a, b) => a + b);
+    var outW = 1400.0;
+    if (outW * totalRatio + gap * (count - 1) > _maxStitchedHeight) {
+      outW = (_maxStitchedHeight - gap * (count - 1)) / totalRatio;
+    }
+    final heights = ratios.map((r) => (outW * r).roundToDouble()).toList();
+    final totalH = heights.fold(0.0, (a, b) => a + b) + gap * (count - 1);
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawRect(Rect.fromLTWH(0, 0, outW, totalH), Paint()..color = Colors.grey.shade400);
+    var y = 0.0;
+    for (var i = 0; i < count; i++) {
+      final page = await doc.getPage(i + 1);
+      final rendered = await page.render(width: outW, height: heights[i], format: PdfPageImageFormat.png);
+      await page.close();
+      final codec = await ui.instantiateImageCodec(rendered!.bytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      canvas.drawRect(Rect.fromLTWH(0, y, outW, heights[i]), Paint()..color = Colors.white);
+      canvas.drawImageRect(
+        img,
+        Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+        Rect.fromLTWH(0, y, outW, heights[i]),
+        Paint()..filterQuality = FilterQuality.high,
+      );
+      img.dispose();
+      codec.dispose();
+      y += heights[i] + gap;
+    }
+    final picture = recorder.endRecording();
+    final stitched = await picture.toImage(outW.round(), totalH.round());
+    picture.dispose();
+    final data = await stitched.toByteData(format: ui.ImageByteFormat.png);
+    stitched.dispose();
+    final outPath = '${dir.path}/scan_$stamp.png';
+    await File(outPath).writeAsBytes(data!.buffer.asUint8List());
+    return outPath;
+  } finally {
+    await doc.close();
+  }
 }
 
 /// Runs on-device ML Kit text recognition (Latin script) on the image at [path].
@@ -3824,7 +3885,7 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
         'parts': [
           {'text': prompt},
           {
-            'inline_data': {'mime_type': 'image/jpeg', 'data': b64}
+            'inline_data': {'mime_type': imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg', 'data': b64}
           },
         ],
       },
@@ -5382,11 +5443,21 @@ class FullImageViewer extends StatelessWidget {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(backgroundColor: Colors.black, iconTheme: const IconThemeData(color: Colors.white)),
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 0.5,
+      // Fit to the screen width and let tall images (all pages of a
+      // multi-page PDF stacked together) be scrolled by dragging, with
+      // pinch-to-zoom for details. Short images stay vertically centred.
+      body: LayoutBuilder(
+        builder: (context, c) => InteractiveViewer(
+          constrained: false,
+          minScale: 0.3,
           maxScale: 6,
-          child: Image.file(File(imagePath), fit: BoxFit.contain),
+          child: SizedBox(
+            width: c.maxWidth,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: c.maxHeight),
+              child: Center(child: Image.file(File(imagePath), width: c.maxWidth, fit: BoxFit.fitWidth)),
+            ),
+          ),
         ),
       ),
     );
@@ -10154,7 +10225,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
         if (res == null || res.files.single.path == null) return;
         if (!context.mounted) return;
         setState(() => busy = true);
-        imagePath = await rasterizeFirstPdfPage(res.files.single.path!);
+        imagePath = await rasterizePdfPages(res.files.single.path!);
       } else {
         final img = await ImagePicker().pickImage(
           source: source == ScanSource.camera ? ImageSource.camera : ImageSource.gallery,
@@ -10619,7 +10690,33 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FullImageViewer(imagePath: widget.imagePath))),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.file(File(widget.imagePath), height: 180, width: double.infinity, fit: BoxFit.cover),
+              child: Stack(
+                children: [
+                  Image.file(
+                    File(widget.imagePath),
+                    height: 180,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.topCenter,
+                  ),
+                  PositionedDirectional(
+                    bottom: 8,
+                    start: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.zoom_out_map, size: 14, color: Colors.white),
+                          SizedBox(width: 4),
+                          Text('برای دیدن کامل همه‌ی صفحات بزنید', style: TextStyle(color: Colors.white, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -11122,7 +11219,33 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FullImageViewer(imagePath: widget.imagePath))),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.file(File(widget.imagePath), height: 180, width: double.infinity, fit: BoxFit.cover),
+              child: Stack(
+                children: [
+                  Image.file(
+                    File(widget.imagePath),
+                    height: 180,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.topCenter,
+                  ),
+                  PositionedDirectional(
+                    bottom: 8,
+                    start: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.zoom_out_map, size: 14, color: Colors.white),
+                          SizedBox(width: 4),
+                          Text('برای دیدن کامل همه‌ی صفحات بزنید', style: TextStyle(color: Colors.white, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
