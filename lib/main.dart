@@ -3436,6 +3436,23 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
 
 // ============================== OCR service ==============================
 
+/// Asked when a draft that carries a scanned receipt/payslip photo becomes a
+/// final transaction. Returns true to keep the photo, false to delete it and
+/// null if the dialog was dismissed (the save should then be cancelled).
+Future<bool?> askKeepReceiptImage(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('تصویر فیش'),
+      content: const Text('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر، حذف شود')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ذخیره شود')),
+      ],
+    ),
+  );
+}
+
 /// Renders the first page of a PDF at [path] to a temporary JPEG image and
 /// returns the image file path. Only the first page is processed for now.
 /// Copies a scanned receipt/payslip image (which otherwise lives in a
@@ -10546,6 +10563,20 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
     // A re-reviewed transaction already has its image stored permanently.
     String? persistedImage = widget.existing != null ? widget.imagePath : null;
+    // Finalizing a draft: ask whether its receipt/payslip photo is still wanted.
+    if (!draft && (widget.existing?.draft ?? false) && persistedImage != null) {
+      final keep = await askKeepReceiptImage(context);
+      if (keep == null) return;
+      if (!keep) {
+        try {
+          await File(persistedImage).delete();
+        } catch (_) {
+          // the file may already be gone - nothing else to do
+        }
+        persistedImage = null;
+      }
+      if (!context.mounted) return;
+    }
     if (draft && widget.existing == null) {
       try {
         persistedImage = await persistDraftImage(widget.imagePath, id);
@@ -11034,6 +11065,20 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
     // A re-reviewed transaction already has its image stored permanently.
     String? persistedImage = widget.existing != null ? widget.imagePath : null;
+    // Finalizing a draft: ask whether its receipt/payslip photo is still wanted.
+    if (!draft && (widget.existing?.draft ?? false) && persistedImage != null) {
+      final keep = await askKeepReceiptImage(context);
+      if (keep == null) return;
+      if (!keep) {
+        try {
+          await File(persistedImage).delete();
+        } catch (_) {
+          // the file may already be gone - nothing else to do
+        }
+        persistedImage = null;
+      }
+      if (!context.mounted) return;
+    }
     if (draft && widget.existing == null) {
       try {
         persistedImage = await persistDraftImage(widget.imagePath, id);
@@ -11733,17 +11778,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     String? keptImage = _currentImagePath;
     if (keptImage != null && !draft && (widget.existing?.draft ?? false)) {
       if (!context.mounted) return false;
-      final keep = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('تصویر فیش'),
-          content: const Text('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر، حذف شود')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ذخیره شود')),
-          ],
-        ),
-      );
+      final keep = await askKeepReceiptImage(context);
       if (keep == null) return false;
       if (!keep) {
         try {
@@ -12132,7 +12167,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     draft: result.draft,
                     items: result.items,
                     payslipDetails: result.payslipDetails,
-                    imagePath: result.imagePath ?? _currentImagePath,
+                    imagePath: result.imagePath,
                   ),
                 );
               },
