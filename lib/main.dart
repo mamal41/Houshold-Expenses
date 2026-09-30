@@ -3695,6 +3695,109 @@ class GeminiException implements Exception {
 // some newer ones), so try those first to avoid hitting quota limits.
 const _geminiModels = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash'];
 
+/// What a Gemini 429 response is actually about: Google uses the same code
+/// for the per-minute rate limit and for the daily quota, and only the
+/// response body tells them apart.
+({bool daily, Duration? retryAfter}) _parseGeminiQuota(String body) {
+  final daily = body.contains('PerDay');
+  final m = RegExp(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"').firstMatch(body);
+  final secs = m == null ? null : double.tryParse(m.group(1)!);
+  return (daily: daily, retryAfter: secs == null ? null : Duration(milliseconds: (secs * 1000).round()));
+}
+
+/// Sends [body] to Gemini, walking the model fallback list, and returns the
+/// first successful response or throws a [GeminiException] whose message
+/// names the real cause.
+///
+/// Each attempt counts against the free-tier limits, so retries are kept to
+/// a minimum: an overloaded (503) or rate-limited (429) model gets at most
+/// one more try after a pause and then the next model is used instead
+/// (each model has its own separate quota), rather than hammering the same
+/// model - which is what used to turn "servers busy" into a spurious
+/// "daily quota exhausted".
+Future<http.Response> _geminiPost(String apiKey, String body) async {
+  http.Response? resp;
+  Object? lastNetworkError;
+  final attemptedModels = <String>[];
+  var sawOverload = false;
+  var sawPerMinuteLimit = false;
+  var sawDailyLimit = false;
+  for (final model in _geminiModels) {
+    attemptedModels.add(model);
+    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        resp = await http
+            .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+            .timeout(const Duration(seconds: 45));
+        lastNetworkError = null;
+      } catch (e) {
+        lastNetworkError = e;
+        resp = null;
+        if (attempt == 1) break;
+        await Future.delayed(const Duration(seconds: 2));
+        continue;
+      }
+      final code = resp.statusCode;
+      if (code == 200) return resp;
+      if (code == 503 || code == 500) {
+        sawOverload = true;
+        if (attempt == 0) {
+          await Future.delayed(const Duration(seconds: 3));
+          continue;
+        }
+        break;
+      }
+      if (code == 429) {
+        final quota = _parseGeminiQuota(resp.body);
+        if (quota.daily) {
+          // This model's daily quota is gone; retrying it is pointless.
+          sawDailyLimit = true;
+          break;
+        }
+        sawPerMinuteLimit = true;
+        final wait = quota.retryAfter ?? const Duration(seconds: 10);
+        if (attempt == 0 && wait <= const Duration(seconds: 20)) {
+          await Future.delayed(wait + const Duration(seconds: 1));
+          continue;
+        }
+        break;
+      }
+      break;
+    }
+    // No connection at all - other models won't fare any better.
+    if (resp == null) break;
+    // Retired/renamed model, overloaded or out of quota: try the next one.
+    // Anything else (bad key, bad request) won't be fixed by another model.
+    if (![404, 429, 500, 503].contains(resp.statusCode)) break;
+  }
+  final raw = resp != null
+      ? 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nHTTP ${resp.statusCode}\n${resp.body}'
+      : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
+  if (resp == null) {
+    throw GeminiException('اتصال به Gemini برقرار نشد. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.', raw);
+  }
+  if (sawPerMinuteLimit) {
+    throw GeminiException(
+        'تعداد درخواست‌ها به Gemini در یک دقیقه از حد مجاز رایگان گذشت. حدود یک دقیقه صبر کنید و دوباره امتحان کنید (سهمیه‌ی روزانه تمام نشده).',
+        raw);
+  }
+  if (sawOverload) {
+    throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند دقیقه دیگر دوباره امتحان کنید.', raw);
+  }
+  if (sawDailyLimit) {
+    throw GeminiException('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.', raw);
+  }
+  final code = resp.statusCode;
+  if (code == 400 && resp.body.contains('API_KEY_INVALID')) {
+    throw GeminiException('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.', raw);
+  }
+  if (code == 403) {
+    throw GeminiException('کلید API جمنای اجازه‌ی دسترسی ندارد (HTTP 403). آن را در تنظیمات بررسی کنید.', raw);
+  }
+  throw GeminiException('خطای Gemini API ($code)', raw);
+}
+
 Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, String prompt) async {
   final bytes = await File(imagePath).readAsBytes();
   final b64 = base64Encode(bytes);
@@ -3712,53 +3815,7 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
     'generationConfig': {'response_mime_type': 'application/json'},
   });
 
-  http.Response? resp;
-  Object? lastNetworkError;
-  final attemptedModels = <String>[];
-  for (final model in _geminiModels) {
-    attemptedModels.add(model);
-    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
-    // Gemini occasionally returns a transient 503 "model overloaded" error;
-    // retry a couple of times with a short backoff before giving up on this
-    // model and moving to the next one in the fallback list.
-    for (var attempt = 0; attempt < 3; attempt++) {
-      try {
-        resp = await http
-            .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
-            .timeout(const Duration(seconds: 45));
-        lastNetworkError = null;
-      } catch (e) {
-        lastNetworkError = e;
-        resp = null;
-        if (attempt == 2) break;
-        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
-        continue;
-      }
-      if (resp.statusCode == 200) break;
-      if ((resp.statusCode == 503 || resp.statusCode == 429) && attempt < 2) {
-        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
-        continue;
-      }
-      break;
-    }
-    if (resp != null && resp.statusCode == 200) break;
-    // 404 (model retired/renamed) or 429 (this model's own quota exhausted,
-    // a different model may still have quota) - try the next fallback.
-    if (resp != null && resp.statusCode != 404 && resp.statusCode != 429) break;
-  }
-  if (resp == null || resp.statusCode != 200) {
-    final code = resp?.statusCode;
-    final raw = resp != null
-        ? 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nHTTP ${resp.statusCode}\n${resp.body}'
-        : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
-    if (code == 503) {
-      throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.', raw);
-    }
-    if (code == 429) {
-      throw GeminiException('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.', raw);
-    }
-    throw GeminiException('خطای Gemini API (${code ?? '—'})', raw);
-  }
+  final resp = await _geminiPost(apiKey, body);
   final rawBody = utf8.decode(resp.bodyBytes);
   final decoded = jsonDecode(rawBody);
   final candidates = decoded['candidates'];
@@ -3866,48 +3923,7 @@ Future<String> geminiTextRequest(String apiKey, String prompt) async {
     ],
   });
 
-  http.Response? resp;
-  Object? lastNetworkError;
-  final attemptedModels = <String>[];
-  for (final model in _geminiModels) {
-    attemptedModels.add(model);
-    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
-    for (var attempt = 0; attempt < 3; attempt++) {
-      try {
-        resp = await http
-            .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
-            .timeout(const Duration(seconds: 45));
-        lastNetworkError = null;
-      } catch (e) {
-        lastNetworkError = e;
-        resp = null;
-        if (attempt == 2) break;
-        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
-        continue;
-      }
-      if (resp.statusCode == 200) break;
-      if ((resp.statusCode == 503 || resp.statusCode == 429) && attempt < 2) {
-        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
-        continue;
-      }
-      break;
-    }
-    if (resp != null && resp.statusCode == 200) break;
-    if (resp != null && resp.statusCode != 404 && resp.statusCode != 429) break;
-  }
-  if (resp == null || resp.statusCode != 200) {
-    final code = resp?.statusCode;
-    final raw = resp != null
-        ? 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nHTTP ${resp.statusCode}\n${resp.body}'
-        : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
-    if (code == 503) {
-      throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند لحظه دیگر دوباره امتحان کنید.', raw);
-    }
-    if (code == 429) {
-      throw GeminiException('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.', raw);
-    }
-    throw GeminiException('خطای Gemini API (${code ?? '—'})', raw);
-  }
+  final resp = await _geminiPost(apiKey, body);
   final rawBody = utf8.decode(resp.bodyBytes);
   final decoded = jsonDecode(rawBody);
   final candidates = decoded['candidates'];
