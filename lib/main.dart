@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
@@ -219,13 +220,51 @@ Future<DateTime?> showAppDatePicker({
       builder: (_) => JalaliDatePickerDialog(initial: initialDate, first: firstDate, last: lastDate),
     );
   }
+  final base = builder ?? (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!);
   return showDatePicker(
     context: context,
     initialDate: initialDate,
     firstDate: firstDate,
     lastDate: lastDate,
-    builder: builder ?? (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+    // In Persian the Material picker starts weeks on Saturday; that's only
+    // right for the Jalali calendar - a Gregorian month starts on Monday.
+    builder: currentLanguage.value == AppLanguage.fa
+        ? (ctx, child) => Localizations.override(
+              context: ctx,
+              delegates: const [_MondayFirstFaMaterialDelegate()],
+              child: base(ctx, child),
+            )
+        : base,
   );
+}
+
+/// Persian Material texts, but with Monday as the first day of the week.
+class _MondayFirstFaMaterialLocalizations extends MaterialLocalizationFa {
+  _MondayFirstFaMaterialLocalizations()
+      : super(
+          fullYearFormat: DateFormat.y('fa'),
+          compactDateFormat: DateFormat.yMd('fa'),
+          shortDateFormat: DateFormat.yMMMd('fa'),
+          mediumDateFormat: DateFormat.MMMEd('fa'),
+          longDateFormat: DateFormat.yMMMMEEEEd('fa'),
+          yearMonthFormat: DateFormat.yMMMM('fa'),
+          shortMonthDayFormat: DateFormat.MMMd('fa'),
+          decimalFormat: NumberFormat.decimalPattern('fa'),
+          twoDigitZeroPaddedFormat: NumberFormat('00', 'fa'),
+        );
+
+  @override
+  int get firstDayOfWeekIndex => 1;
+}
+
+class _MondayFirstFaMaterialDelegate extends LocalizationsDelegate<MaterialLocalizations> {
+  const _MondayFirstFaMaterialDelegate();
+  @override
+  bool isSupported(Locale locale) => locale.languageCode == 'fa';
+  @override
+  Future<MaterialLocalizations> load(Locale locale) => SynchronousFuture(_MondayFirstFaMaterialLocalizations());
+  @override
+  bool shouldReload(covariant LocalizationsDelegate<MaterialLocalizations> old) => false;
 }
 
 /// Date-range picker: Material's in Gregorian mode; in Jalali mode two
@@ -466,6 +505,35 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
   return choice == 'discard';
 }
 
+/// Shown on the scan review screens when the receipt/payslip is in a
+/// different currency than the chosen account, so amounts aren't saved in
+/// the wrong unit (e.g. Rial read into a Toman account).
+Widget currencyMismatchWarning(String detected, String accountCurrency) {
+  return Container(
+    margin: const EdgeInsets.only(top: 12),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Colors.orange.shade50,
+      border: Border.all(color: Colors.orange.shade300),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.warning_amber_rounded, color: Colors.orange.shade800),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'واحد پول این سند (${currencyLabel(detected)}) با واحد پول حساب انتخاب‌شده (${currencyLabel(accountCurrency)}) '
+            'یکی نیست. مبلغ را بررسی کنید یا حساب دیگری انتخاب کنید.',
+            style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 /// Asked when leaving a screen for an already saved transaction whose
 /// fields were changed. Returns 'save', 'discard' or null (stay).
 Future<String?> askSaveChanges(BuildContext context) {
@@ -562,6 +630,31 @@ int daysInMonth(int year, int month) {
 DateTime clampedMonthDate(int year, int month, int day) {
   final maxDay = daysInMonth(year, month);
   return DateTime(year, month, day > maxDay ? maxDay : day);
+}
+
+/// Day of the month of [d] in the calendar chosen in settings (a recurring
+/// transaction's "day of month" means a Jalali day in Jalali mode).
+int dayOfMonthInCalendar(DateTime d) =>
+    currentCalendarSystem.value == CalendarSystem.jalali ? gregorianToJalali(d.year, d.month, d.day)[2] : d.day;
+
+/// The date on [day] (clamped to the month's length) of the month that is
+/// [addMonths] months after [ref]'s month, in the calendar chosen in
+/// settings - so a monthly payment on "day 1" falls on 1 Mehr, 1 Aban...
+/// in Jalali mode instead of on the 1st of each Gregorian month.
+DateTime calendarMonthDate(DateTime ref, int addMonths, int day) {
+  if (currentCalendarSystem.value == CalendarSystem.jalali) {
+    final j = gregorianToJalali(ref.year, ref.month, ref.day);
+    final total = j[0] * 12 + (j[1] - 1) + addMonths;
+    final y = total ~/ 12;
+    final m = total % 12 + 1;
+    final start = jalaliToGregorian(y, m, 1);
+    final next = m == 12 ? jalaliToGregorian(y + 1, 1, 1) : jalaliToGregorian(y, m + 1, 1);
+    final len = DateTime.utc(next[0], next[1], next[2]).difference(DateTime.utc(start[0], start[1], start[2])).inDays;
+    final g = jalaliToGregorian(y, m, day > len ? len : (day < 1 ? 1 : day));
+    return DateTime(g[0], g[1], g[2]);
+  }
+  final total = ref.year * 12 + (ref.month - 1) + addMonths;
+  return clampedMonthDate(total ~/ 12, total % 12 + 1, day);
 }
 
 // ============================== Models ==============================
@@ -1180,12 +1273,8 @@ DateTime? nextOccurrencePreview(Transaction t) {
   switch (t.recurrence) {
     case RecurrenceFrequency.monthly:
       if (t.recurrenceDay == null) return null;
-      var d = clampedMonthDate(today.year, today.month, t.recurrenceDay!);
-      if (d.isBefore(today)) {
-        final ny = today.month == 12 ? today.year + 1 : today.year;
-        final nm = today.month == 12 ? 1 : today.month + 1;
-        d = clampedMonthDate(ny, nm, t.recurrenceDay!);
-      }
+      var d = calendarMonthDate(today, 0, t.recurrenceDay!);
+      if (d.isBefore(today)) d = calendarMonthDate(today, 1, t.recurrenceDay!);
       return d;
     case RecurrenceFrequency.weekly:
       if (t.recurrenceWeekday == null) return null;
@@ -1201,15 +1290,9 @@ DateTime? nextOccurrencePreview(Transaction t) {
       return next;
     case RecurrenceFrequency.quarterly:
       if (t.recurrenceDay == null) return null;
-      var probe = clampedMonthDate(t.date.year, t.date.month, t.recurrenceDay!);
+      var probe = calendarMonthDate(t.date, 0, t.recurrenceDay!);
       while (!probe.isAfter(today)) {
-        var m = probe.month + 3;
-        var y = probe.year;
-        while (m > 12) {
-          m -= 12;
-          y++;
-        }
-        probe = clampedMonthDate(y, m, t.recurrenceDay!);
+        probe = calendarMonthDate(probe, 3, t.recurrenceDay!);
       }
       return probe;
     case RecurrenceFrequency.yearly:
@@ -1244,14 +1327,7 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
     DateTime next;
     switch (t.recurrence) {
       case RecurrenceFrequency.monthly:
-        final day = t.recurrenceDay ?? current.day;
-        var y = current.year;
-        var m = current.month + 1;
-        if (m > 12) {
-          m = 1;
-          y++;
-        }
-        next = clampedMonthDate(y, m, day);
+        next = calendarMonthDate(current, 1, t.recurrenceDay ?? dayOfMonthInCalendar(current));
         break;
       case RecurrenceFrequency.weekly:
         next = current.add(const Duration(days: 7));
@@ -1260,14 +1336,7 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
         next = current.add(Duration(days: t.recurrenceIntervalDays ?? 30));
         break;
       case RecurrenceFrequency.quarterly:
-        final day = t.recurrenceDay ?? current.day;
-        var y = current.year;
-        var m = current.month + 3;
-        while (m > 12) {
-          m -= 12;
-          y++;
-        }
-        next = clampedMonthDate(y, m, day);
+        next = calendarMonthDate(current, 3, t.recurrenceDay ?? dayOfMonthInCalendar(current));
         break;
       case RecurrenceFrequency.yearly:
         next = clampedMonthDate(current.year + 1, current.month, current.day);
@@ -1296,8 +1365,9 @@ typedef TxOccurrence = ({DateTime date, Transaction t, bool isReal});
 /// Virtual entries are never persisted - they exist only to power
 /// forward-looking displays.
 ///
-/// Projections normally start after today; pass [from] to also include
-/// recurring occurrences from that day on (e.g. earlier in this month).
+/// Projections normally start today (an occurrence falling due today shows
+/// up on its day); pass [from] to also include recurring occurrences from
+/// that day on (e.g. earlier in this month).
 List<TxOccurrence> occurrencesWithRecurringProjections(List<Transaction> tx, {int horizonDays = 400, DateTime? from}) {
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
@@ -1310,7 +1380,7 @@ List<TxOccurrence> occurrencesWithRecurringProjections(List<Transaction> tx, {in
     for (final d in computeRecurrenceOccurrences(t)) {
       final dd = DateTime(d.year, d.month, d.day);
       if (dd == anchor) continue; // already represented by the real stored transaction above
-      if ((from != null ? dd.isBefore(from) : !dd.isAfter(today)) || dd.isAfter(horizon)) continue;
+      if (dd.isBefore(from ?? today) || dd.isAfter(horizon)) continue;
       result.add((date: dd, t: t, isReal: false));
     }
   }
@@ -1366,10 +1436,23 @@ class NotificationService {
   Future<void> cancelForTransaction(String txId) async {
     // slot 0/1 = second-to-last/last reminders, slots 2..201 = optional
     // per-installment reminders (capped at 200 upcoming installments).
-    // Run these in parallel rather than one at a time - awaiting 202
-    // sequential platform-channel round-trips was the main reason saving a
-    // transaction felt slow.
-    await Future.wait([for (var slot = 0; slot < 202; slot++) _plugin.cancel(_idFor(txId, slot))]);
+    // Firing 202 cancel calls over the platform channel on every save
+    // (even for transactions that never had a reminder) noticeably froze
+    // the app for a few seconds, especially on older phones - so ask once
+    // which reminders are actually pending and cancel only this
+    // transaction's.
+    if (!_initialized) return;
+    final ids = {for (var slot = 0; slot < 202; slot++) _idFor(txId, slot)};
+    List<PendingNotificationRequest> pending;
+    try {
+      pending = await _plugin.pendingNotificationRequests();
+    } catch (_) {
+      await Future.wait(ids.map(_plugin.cancel));
+      return;
+    }
+    final mine = pending.map((p) => p.id).where(ids.contains).toList();
+    if (mine.isEmpty) return;
+    await Future.wait(mine.map(_plugin.cancel));
   }
 
   /// Computes an absolute schedule instant for a given local wall-clock
@@ -3810,7 +3893,60 @@ class ReceiptDraft {
   double? total;
   List<ReceiptItemEntry> items;
   String? categoryHint;
-  ReceiptDraft({this.merchant = '', this.date, this.total, this.items = const [], this.categoryHint});
+  String? currency; // detected from the receipt text (EUR, USD, IRR, IRT...), if any
+  ReceiptDraft({this.merchant = '', this.date, this.total, this.items = const [], this.categoryHint, this.currency});
+}
+
+/// Guesses the currency printed on a receipt/payslip from its text, using
+/// the same codes as accounts. Returns null when nothing clear is found.
+String? detectCurrencyInText(String text) {
+  final t = text.toLowerCase();
+  if (t.contains('تومان') || t.contains('toman')) return 'IRT';
+  if (t.contains('ریال') || t.contains('rial') || t.contains('irr')) return 'IRR';
+  if (t.contains('€') || RegExp(r'\beur\b').hasMatch(t) || t.contains('euro')) return 'EUR';
+  if (t.contains('\$') || RegExp(r'\busd\b').hasMatch(t)) return 'USD';
+  if (t.contains('£') || RegExp(r'\bgbp\b').hasMatch(t)) return 'GBP';
+  if (RegExp(r'\bchf\b').hasMatch(t)) return 'CHF';
+  return null;
+}
+
+/// Normalises a currency answer from the AI (code, symbol or name) to the
+/// codes used for accounts.
+String? normalizeCurrency(Object? raw) {
+  if (raw == null) return null;
+  final s = raw.toString().trim();
+  if (s.isEmpty || s.toLowerCase() == 'null') return null;
+  return detectCurrencyInText(s) ?? (RegExp(r'^[A-Za-z]{3}$').hasMatch(s) ? s.toUpperCase() : null);
+}
+
+/// Last day of the pay period written on a payslip ("09/2026", "2026-09",
+/// "September 2026", "Sep. 2026"...), used as the payment date when the
+/// payslip doesn't print one.
+DateTime? payPeriodEnd(String? period) {
+  if (period == null || period.trim().isEmpty) return null;
+  final p = period.toLowerCase();
+  int? y, m;
+  final num = RegExp(r'(\d{1,2})\s*[./-]\s*(\d{4})').firstMatch(p);
+  final iso = RegExp(r'(\d{4})\s*[./-]\s*(\d{1,2})').firstMatch(p);
+  if (num != null) {
+    m = int.tryParse(num.group(1)!);
+    y = int.tryParse(num.group(2)!);
+  } else if (iso != null) {
+    y = int.tryParse(iso.group(1)!);
+    m = int.tryParse(iso.group(2)!);
+  } else {
+    const names = [
+      ['jan'], ['feb'], ['mär', 'mar'], ['apr'], ['mai', 'may'], ['jun'],
+      ['jul'], ['aug'], ['sep'], ['okt', 'oct'], ['nov'], ['dez', 'dec'],
+    ];
+    for (var i = 0; i < 12 && m == null; i++) {
+      if (names[i].any(p.contains)) m = i + 1;
+    }
+    final ym = RegExp(r'(\d{4})').firstMatch(p);
+    y = ym == null ? null : int.tryParse(ym.group(1)!);
+  }
+  if (y == null || m == null || m < 1 || m > 12) return null;
+  return DateTime(y, m + 1, 0);
 }
 
 const _totalKeywords = ['zu zahlen', 'endbetrag', 'gesamtbetrag', 'betrag', 'total', 'summe', 'gesamt', 'جمع', 'مبلغ کل'];
@@ -3911,6 +4047,7 @@ ReceiptDraft parseReceiptText(String text) {
     items.add(ReceiptItemEntry(name: name, price: price));
   }
   draft.items = items;
+  draft.currency = detectCurrencyInText(text);
   return draft;
 }
 
@@ -3966,6 +4103,8 @@ Map<String, dynamic> parsePayslipText(String text) {
     result['date'] = DateTime(y, m, d).toIso8601String();
     break;
   }
+  final cur = detectCurrencyInText(text);
+  if (cur != null) result['currency'] = cur;
 
   return result;
 }
@@ -4147,7 +4286,9 @@ const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the at
     'null, "items": [{"name": string, "quantity": number or null, "price": number or null, "isPhysicalGood": '
     'boolean, "warrantyUntil": "YYYY-MM-DD" or null, "returnUntil": "YYYY-MM-DD" or null, "warrantyNote": '
     'string or null}], "category": string or null, "keepReceipt": boolean, "keepReceiptItems": [string], '
-    '"keepReceiptReason": string}. '
+    '"keepReceiptReason": string, "currency": string or null}. '
+    '"currency" is the ISO 4217 code of the currency the amounts are printed in (e.g. "EUR", "USD"; for '
+    'Iranian receipts use "IRR" for ریال and "IRT" for تومان), or null if it cannot be told. '
     'For "items", expand any abbreviated, truncated, or SKU-coded product names printed on the receipt '
     'into their full, clear, human-readable product name (in the same language as the receipt) - never '
     'leave a short code or cut-off abbreviation as the name if you can reasonably infer the full name '
@@ -4185,7 +4326,7 @@ const _payslipPrompt = 'You are an expert payslip-reading assistant that underst
     '"arbeitslosenversicherung": number or null, "vermoegenswirksameLeistungen": number or null, '
     '"betrieblicheAltersvorsorge": number or null, "vorschuss": number or null, "sonstigeAbzuege": number '
     'or null, "steuerklasse": string or null, "arbeitgeber": string or null, "abrechnungsmonat": string or '
-    'null, "date": "YYYY-MM-DD" or null, "customFields": [{"label": string, "value": number}]}. The named '
+    'null, "date": "YYYY-MM-DD" or null, "currency": string or null, "customFields": [{"label": string, "value": number}]}. The named '
     'fields above (brutto/netto/lohnsteuer/etc.) are German payroll terms - fill them ONLY when the '
     "payslip actually uses those German concepts. For a payslip in any other format (e.g. an Iranian "
     'فیش حقوقی with items like حقوق پایه، حق مسکن، حق اولاد، حق خواربار، بیمه‌ی تأمین اجتماعی، مالیات '
@@ -4197,9 +4338,14 @@ const _payslipPrompt = 'You are an expert payslip-reading assistant that underst
     'payslip this is usually the final net/take-home amount. "vermoegenswirksameLeistungen" is '
     'VL/capital-formation benefits, "betrieblicheAltersvorsorge" is employer-sponsored supplementary '
     'pension deductions, "vorschuss" is any advance payment deducted, "sonstigeAbzuege" is any other '
-    'German-payslip deduction not covered by the other fields. "date" is the actual payment/value date '
-    'printed on the payslip - not just the month name. Numbers must be plain (no currency symbols). If a '
-    'field is unreadable, use null.';
+    'German-payslip deduction not covered by the other fields. "date" is the date the pay is transferred '
+    'to the bank account: look for a payout/value date (e.g. Auszahlung, Auszahlungsdatum, Überweisung, '
+    'Valuta, Zahltag, Zahlungsdatum, تاریخ واریز, تاریخ پرداخت). It is NOT the date the payslip was '
+    'printed/created and NOT the first day of the pay period. If no payout date is printed, use the last '
+    'day of the pay period ("abrechnungsmonat"). "abrechnungsmonat" is the pay period as printed (e.g. '
+    '"09/2026"). "currency" is the ISO 4217 code of the amounts (e.g. "EUR"; for Iranian payslips "IRR" '
+    'for ریال, "IRT" for تومان), or null if it cannot be told. Numbers must be plain (no currency symbols). '
+    'If a field is unreadable, use null.';
 
 Future<Map<String, dynamic>?> geminiExtractReceipt(String apiKey, String imagePath) =>
     _geminiRequest(apiKey, imagePath, _receiptPrompt);
@@ -4654,7 +4800,35 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     _lastRefresh = DateTime.now();
   }
 
-  Map<String, double> get totalBalanceByCurrency => _memoized('balances', _computeTotalBalance);
+  String get _calKey => currentCalendarSystem.value.name;
+
+  /// Occurrences of recurring transactions that have already fallen due
+  /// (today included) besides their stored first one. They are real
+  /// payments - rent paid each month - so they count in balances and
+  /// totals and show up in their month's list on their own day.
+  List<TxOccurrence> get _dueRecurring => _memoized('dueRec|$_dayKey|$_calKey', () {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final result = <TxOccurrence>[];
+        for (final t in tx) {
+          if (!t.isRecurring) continue;
+          final anchor = DateTime(t.date.year, t.date.month, t.date.day);
+          for (final d in computeRecurrenceOccurrences(t)) {
+            final dd = DateTime(d.year, d.month, d.day);
+            if (dd.isAfter(today)) break;
+            if (dd == anchor) continue;
+            result.add((date: dd, t: t, isReal: false));
+          }
+        }
+        return result;
+      });
+
+  /// Confirmed transactions plus dated copies of the recurring occurrences
+  /// that already fell due - what balances and period totals are made of.
+  List<Transaction> get _effectiveTx =>
+      _memoized('effTx|$_dayKey|$_calKey', () => [...tx, ..._dueRecurring.map((e) => e.t.copyWith(date: e.date))]);
+
+  Map<String, double> get totalBalanceByCurrency => _memoized('balances|$_dayKey|$_calKey', _computeTotalBalance);
   Map<String, double> _computeTotalBalance() {
     final map = <String, double>{};
     for (final a in accounts) {
@@ -4662,7 +4836,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
         map[a.currency] = (map[a.currency] ?? 0) + a.initialBalance;
       }
     }
-    for (final t in tx) {
+    for (final t in _effectiveTx) {
       final cur = currencyOf(t.accountId);
       map[cur] = (map[cur] ?? 0) + (t.type == TxType.income ? t.amount : -t.amount);
     }
@@ -4677,7 +4851,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     for (final a in accounts) {
       byAccount[a.id] = a.initialBalance;
     }
-    for (final t in tx) {
+    for (final t in _effectiveTx) {
       byAccount[t.accountId] = (byAccount[t.accountId] ?? 0) + (t.type == TxType.income ? t.amount : -t.amount);
     }
     var total = 0.0;
@@ -4708,16 +4882,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   }
 
   Map<String, Map<String, double>> get periodStatsByCurrency =>
-      _memoized('period|$dashboardAccountFilter|$_dayKey', _computePeriodStats);
+      _memoized('period|$dashboardAccountFilter|$_dayKey|$_calKey', _computePeriodStats);
   Map<String, Map<String, double>> _computePeriodStats() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final map = <String, Map<String, double>>{};
-    for (final t in tx) {
+    // "This month" in the calendar chosen in settings (Jalali or Gregorian).
+    final month = calendarMonthOf(today);
+    for (final t in _effectiveTx) {
       // Not-yet-due (future-dated) transactions shouldn't count toward the
       // period's totals until their own date actually arrives.
       if (t.date.isAfter(today)) continue;
-      if (!(t.date.year == now.year && t.date.month == now.month)) continue;
+      if (t.date.isBefore(month.start)) continue;
       final cur = currencyOf(t.accountId);
       map.putIfAbsent(cur, () => {'income': 0, 'expense': 0});
       if (t.type == TxType.income) {
@@ -4740,11 +4916,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   List<Transaction> get expenseTransactionsForPeriod {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    return tx.where((t) {
+    final month = calendarMonthOf(today);
+    return _effectiveTx.where((t) {
       if (t.type != TxType.expense) return false;
       if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) return false;
       if (t.date.isAfter(today)) return false;
-      return t.date.year == now.year && t.date.month == now.month;
+      return !t.date.isBefore(month.start);
     }).toList();
   }
 
@@ -4762,7 +4939,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
         y--;
       }
       var income = 0.0, expense = 0.0;
-      for (final t in tx) {
+      for (final t in _effectiveTx) {
         if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) continue;
         if (t.date.isAfter(today)) continue;
         if (t.date.year == y && t.date.month == m) {
@@ -4830,6 +5007,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(removed.length > 1 ? 'تراکنش‌ها حذف شدند' : 'تراکنش حذف شد'),
+        persist: false,
         action: SnackBarAction(
           label: 'برگردون',
           onPressed: () async {
@@ -5144,10 +5322,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
 
                 // Already-due transactions of this month and last month
                 // (tx is sorted by date descending).
-                final dueByMonth = <String, List<Transaction>>{};
+                final dueByMonth = <String, List<TxOccurrence>>{};
                 for (final t in tx) {
                   if (t.date.isAfter(todayMidnight) || t.date.isBefore(prevMonth.start)) continue;
-                  (dueByMonth[keyOf(t.date)] ??= []).add(t);
+                  (dueByMonth[keyOf(t.date)] ??= []).add((date: t.date, t: t, isReal: true));
+                }
+                // Recurring payments that fell due (today included) show on
+                // their own day like any other due transaction.
+                for (final e in _dueRecurring) {
+                  if (e.date.isBefore(prevMonth.start)) continue;
+                  (dueByMonth[keyOf(e.date)] ??= []).add(e);
+                }
+                for (final list in dueByMonth.values) {
+                  list.sort((a, b) => b.date.compareTo(a.date));
                 }
 
                 String title(CalendarMonth m) => '${m.name} ${m.yearText}';
@@ -5201,7 +5388,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   Widget _monthTabSection({
     required String monthKey,
     required String title,
-    required List<Transaction> dueTx,
+    required List<TxOccurrence> dueTx,
     required List<TxOccurrence> notDueEntries,
     required bool initiallyExpanded,
     bool dimTitle = false,
@@ -5257,7 +5444,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 child: Text('تراکنش سررسیدشده‌ای نیست.', style: TextStyle(color: Colors.grey, fontSize: 12)),
               )
             else
-              ...dueTx.map((t) => _buildTxTile(t))
+              ...dueTx.map((e) => e.isReal
+                  ? _buildTxTile(e.t)
+                  : _buildTxTile(e.t, projected: true, recurringDue: true, displayDate: e.date))
           else if (notDueEntries.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
@@ -5270,7 +5459,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     );
   }
 
-  Widget _buildTxTile(Transaction t, {bool dimmed = false, bool projected = false, DateTime? displayDate}) {
+  Widget _buildTxTile(Transaction t, {bool dimmed = false, bool projected = false, bool recurringDue = false, DateTime? displayDate}) {
     final opacity = dimmed ? 0.55 : 1.0;
     final tile = Card(
       child: ListTile(
@@ -5291,7 +5480,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           children: [
             Text(
               '${categoryName(t.categoryId)} • ${formatDate(displayDate ?? t.date)}${txExtraDetail(t)}'
-              '${projected ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
+              '${projected && !recurringDue ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
               '${t.draft ? ' • پیش‌نویس' : ''}',
               style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
               maxLines: 1,
@@ -5751,7 +5940,7 @@ class ReceiptImageScreen extends StatelessWidget {
                     child: FilledButton.icon(
                       onPressed: () => Navigator.pop(context, ReceiptImageAction.reread),
                       icon: const Icon(Icons.auto_awesome),
-                      label: const Text('خواندن مجدد با هوش مصنوعی', textAlign: TextAlign.center),
+                      label: const Text('خواندن اطلاعات با هوش مصنوعی', textAlign: TextAlign.center),
                       style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                     ),
                   ),
@@ -7110,11 +7299,17 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  Text(
-                                    m.value.abs() >= 1 ? ltr(persianDigits(m.value.toStringAsFixed(0))) : '',
-                                    style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                  // Grouped in threes (e.g. ۱۲,۵۰۰,۰۰۰) and shrunk to
+                                  // fit the bar instead of being cut off.
+                                  FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      m.value.abs() >= 1
+                                          ? ltr(persianDigits('${m.value < 0 ? '-' : ''}${_groupThousands(m.value.abs().round().toString())}'))
+                                          : '',
+                                      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
+                                      maxLines: 1,
+                                    ),
                                   ),
                                   const SizedBox(height: 2),
                                   Container(
@@ -8922,6 +9117,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(removed.length > 1 ? 'تراکنش\u200cها حذف شدند' : 'تراکنش حذف شد'),
+            persist: false,
             action: SnackBarAction(
               label: 'برگردون',
               onPressed: () async {
@@ -10114,7 +10310,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   }
 
   Future<void> _showDayTransactions(DateTime date) async {
-    final dayEntries = occurrencesWithRecurringProjections(tx, horizonDays: 400)
+    final dayEntries = occurrencesWithRecurringProjections(tx, horizonDays: 400, from: date)
         .where((e) =>
             e.date.year == date.year &&
             e.date.month == date.month &&
@@ -10196,7 +10392,9 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     final dayExpense = <int, double>{};
     final dayIncomeProjected = <int, double>{};
     final dayExpenseProjected = <int, double>{};
-    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 400)) {
+    // From the start of the shown month, so recurring payments that already
+    // fell due this month are shown on their days too.
+    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 400, from: DateTime(month.year, month.month, 1))) {
       if (accountFilter != null ? e.t.accountId != accountFilter : currencyOf(e.t.accountId) != currency) continue;
       if (e.date.year != month.year || e.date.month != month.month) continue;
       final notYetDue = e.date.isAfter(today);
@@ -10223,11 +10421,11 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
       plannedExpense += dayExpenseProjected[d] ?? 0;
     }
 
-    // DateTime.weekday: Monday=1 .. Sunday=7. Grid starts on Saturday
-    // (common start-of-week for a Persian-speaking audience): map so
-    // Saturday=0 .. Friday=6.
+    // DateTime.weekday: Monday=1 .. Sunday=7. Weeks start on Saturday with
+    // the Jalali calendar setting and on Monday with the Gregorian one.
+    final saturdayFirst = currentCalendarSystem.value == CalendarSystem.jalali;
     final firstWeekday = DateTime(month.year, month.month, 1).weekday; // 1..7, Mon..Sun
-    final leadingBlanks = (firstWeekday + 1) % 7; // Sat=6->0, Sun=7->1, Mon=1->2, ... Fri=5->6
+    final leadingBlanks = saturdayFirst ? (firstWeekday + 1) % 7 : firstWeekday - 1;
 
     return Scaffold(
       appBar: AppBar(title: Text(tr('month_calendar'))),
@@ -10324,7 +10522,11 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
-              children: ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج']
+              children: (currentCalendarSystem.value == CalendarSystem.jalali
+                      ? const ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج']
+                      : currentLanguage.value == AppLanguage.fa
+                          ? const ['د', 'س', 'چ', 'پ', 'ج', 'ش', 'ی']
+                          : const ['M', 'T', 'W', 'T', 'F', 'S', 'S'])
                   .map((d) => Expanded(child: Center(child: Text(d, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)))))
                   .toList(),
             ),
@@ -10673,7 +10875,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
             children: [
               _section('رسید جدید', 'تشخیص آفلاین + امکان بهبود با هوش مصنوعی', Icons.receipt_long, false),
               const SizedBox(height: 16),
-              _section('فیش حقوقی جدید', 'استخراج Brutto/Netto، مالیات، بیمه و کلاس مالیاتی', Icons.badge_outlined, true),
+              _section('فیش حقوقی جدید', 'استخراج درآمد ناخالص و خالص، مالیات، بیمه و کلاس مالیاتی', Icons.badge_outlined, true),
             ],
           ),
           if (busy)
@@ -10744,6 +10946,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   bool dateConfirmed = false; // true once read successfully by AI or picked manually
   bool? keepReceipt;
   String? keepReceiptReason;
+  late String? detectedCurrency = widget.initial.currency;
   late List<ReceiptItemEntry> items;
 
   // Snapshot of the form taken once it's loaded (before the AI fills
@@ -10826,6 +11029,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           }).where((e) => e.name.trim().isNotEmpty).toList();
         }
         if (result['keepReceipt'] is bool) keepReceipt = result['keepReceipt'] as bool;
+        detectedCurrency = normalizeCurrency(result['currency']) ?? detectedCurrency;
         if (result['keepReceiptReason'] != null) keepReceiptReason = result['keepReceiptReason'].toString();
         final matched = _matchCategoryHint(result['category']?.toString(), categories, TxType.expense);
         if (matched != null) selectedCategory = matched;
@@ -10838,7 +11042,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           content: Text(e is GeminiException
               ? e.friendlyMessage
               : 'خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
-          duration: const Duration(seconds: 6),
+          duration: const Duration(seconds: 5),
+          // A snackbar with an action stays until dismissed by default;
+          // let this one disappear by itself.
+          persist: false,
           action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
         ));
       }
@@ -11118,20 +11325,15 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.zoom_out_map, size: 14, color: Colors.white),
-                          SizedBox(width: 4),
-                          Text('برای دیدن کامل همه‌ی صفحات بزنید', style: TextStyle(color: Colors.white, fontSize: 11)),
-                        ],
-                      ),
+                      child: const Icon(Icons.zoom_out_map, size: 16, color: Colors.white),
                     ),
                   ),
                 ],
               ),
             ),
           ),
+          if (detectedCurrency != null && selectedAccount != null && detectedCurrency != selectedAccount!.currency)
+            currencyMismatchWarning(detectedCurrency!, selectedAccount!.currency),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: improving ? null : () => hasGeminiKey ? _improveWithGemini() : promptForGeminiKey(context),
@@ -11351,6 +11553,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   bool dateConfirmed = false; // true once read successfully by AI or picked manually
   List<Transaction> existingTx = [];
   List<PayslipCustomField> customFields = [];
+  late String? detectedCurrency = normalizeCurrency(widget.initial['currency']);
 
   // Snapshot of the form taken once it's loaded (before the AI fills
   // anything in), used to tell whether anything was changed since.
@@ -11376,10 +11579,9 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     steuerklasseCtrl.text = widget.initial['steuerklasse']?.toString() ?? '';
     arbeitgeberCtrl.text = widget.initial['arbeitgeber']?.toString() ?? '';
     monatCtrl.text = widget.initial['abrechnungsmonat']?.toString() ?? '';
-    if (widget.initial['date'] != null) {
-      final parsed = DateTime.tryParse(widget.initial['date'].toString());
-      if (parsed != null) date = parsed;
-    }
+    final initialDate = (widget.initial['date'] != null ? DateTime.tryParse(widget.initial['date'].toString()) : null) ??
+        payPeriodEnd(widget.initial['abrechnungsmonat']?.toString());
+    if (initialDate != null) date = initialDate;
     if (widget.initial['customFields'] is List) {
       customFields = (widget.initial['customFields'] as List)
           .whereType<Map>()
@@ -11424,20 +11626,22 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     try {
       final result = await geminiExtractPayslip(key.trim(), widget.imagePath);
       if (result != null) {
+        detectedCurrency = normalizeCurrency(result['currency']) ?? detectedCurrency;
         for (final k in _payslipLabels.keys) {
           if (result[k] != null) numCtrls[k]!.text = formatAmountInput((result[k] as num).toDouble());
         }
         if (result['steuerklasse'] != null) steuerklasseCtrl.text = result['steuerklasse'].toString();
         if (result['arbeitgeber'] != null) arbeitgeberCtrl.text = result['arbeitgeber'].toString();
         if (result['abrechnungsmonat'] != null) monatCtrl.text = result['abrechnungsmonat'].toString();
-        if (result['date'] != null) {
-          final parsed = DateTime.tryParse(result['date'].toString());
-          if (parsed != null) {
-            setState(() {
-              date = parsed;
-              dateConfirmed = true;
-            });
-          }
+        // The payout date; when the payslip doesn't print one, the end of
+        // its pay period is a far better guess than today's date.
+        final parsedDate = (result['date'] != null ? DateTime.tryParse(result['date'].toString()) : null) ??
+            payPeriodEnd(result['abrechnungsmonat']?.toString());
+        if (parsedDate != null) {
+          setState(() {
+            date = parsedDate;
+            dateConfirmed = true;
+          });
         }
         if (result['customFields'] is List) {
           final parsed = (result['customFields'] as List)
@@ -11456,7 +11660,10 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           content: Text(e is GeminiException
               ? e.friendlyMessage
               : 'خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
-          duration: const Duration(seconds: 6),
+          duration: const Duration(seconds: 5),
+          // A snackbar with an action stays until dismissed by default;
+          // let this one disappear by itself.
+          persist: false,
           action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
         ));
       }
@@ -11708,20 +11915,15 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.zoom_out_map, size: 14, color: Colors.white),
-                          SizedBox(width: 4),
-                          Text('برای دیدن کامل همه‌ی صفحات بزنید', style: TextStyle(color: Colors.white, fontSize: 11)),
-                        ],
-                      ),
+                      child: const Icon(Icons.zoom_out_map, size: 16, color: Colors.white),
                     ),
                   ),
                 ],
               ),
             ),
           ),
+          if (detectedCurrency != null && selectedAccount != null && detectedCurrency != selectedAccount!.currency)
+            currencyMismatchWarning(detectedCurrency!, selectedAccount!.currency),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: improving ? null : () => hasGeminiKey ? _improveWithGemini() : promptForGeminiKey(context),
@@ -11755,67 +11957,12 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           const SizedBox(height: 12),
           TextField(controller: steuerklasseCtrl, decoration: const InputDecoration(labelText: 'کلاس مالیاتی', border: OutlineInputBorder())),
           const SizedBox(height: 12),
-          ...(_payslipLabels.keys.map((k) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: TextField(
-                  controller: numCtrls[k],
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-                  decoration: InputDecoration(labelText: _payslipLabels[k], border: const OutlineInputBorder()),
-                ),
-              ))),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('فیلدهای دیگر (مثلاً حق مسکن، حق اولاد و...)', style: TextStyle(fontSize: 12, color: Colors.grey)),
-              TextButton.icon(
-                onPressed: () async {
-                  final labelCtrl = TextEditingController();
-                  final valueCtrl = TextEditingController();
-                  final added = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('افزودن فیلد'),
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'عنوان (مثلاً حق مسکن)'), autofocus: true),
-                          const SizedBox(height: 8),
-                          TextField(controller: valueCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()], decoration: const InputDecoration(labelText: 'مبلغ')),
-                        ],
-                      ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('add'))),
-                      ],
-                    ),
-                  );
-                  if (added != true) return;
-                  final v = parseAmount(valueCtrl.text);
-                  if (labelCtrl.text.trim().isEmpty || v == null) return;
-                  setState(() => customFields = [...customFields, PayslipCustomField(label: labelCtrl.text.trim(), value: v)]);
-                },
-                icon: const Icon(Icons.add, size: 16),
-                label: const Text('افزودن فیلد'),
-              ),
-            ],
+          PayslipFieldsEditor(
+            controllers: numCtrls,
+            customFields: customFields,
+            onCustomChanged: (list) => setState(() => customFields = list),
+            onLayoutChanged: () => setState(() {}),
           ),
-          ...customFields.asMap().entries.map((e) => Card(
-                child: ListTile(
-                  dense: true,
-                  title: Text(e.value.label),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(formatAmountInput(e.value.value)),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 18),
-                        onPressed: () => setState(() => customFields = [...customFields]..removeAt(e.key)),
-                      ),
-                    ],
-                  ),
-                ),
-              )),
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
@@ -12048,73 +12195,289 @@ class TransactionDetailScreen extends StatelessWidget {
 
 /// Lets the person add, view and remove their own payslip lines (e.g. حق مسکن،
 /// حق اولاد، بیمه‌ی تأمین اجتماعی) - works for a payslip from any country.
-class PayslipCustomFieldsEditor extends StatelessWidget {
-  final List<PayslipCustomField> fields;
-  final ValueChanged<List<PayslipCustomField>> onChanged;
-  const PayslipCustomFieldsEditor({required this.fields, required this.onChanged, super.key});
+/// Which built-in payslip fields are hidden and what they are called, as
+/// the person set it up (shared by every payslip, stored on the device).
+class PayslipFieldPrefs {
+  final Set<String> hidden;
+  final Map<String, String> labels;
+  const PayslipFieldPrefs({required this.hidden, required this.labels});
 
-  Future<void> _add(BuildContext context) async {
-    final labelCtrl = TextEditingController();
-    final valueCtrl = TextEditingController();
-    final added = await showDialog<bool>(
+  // Rarely used on most payslips, so not shown unless the person adds them
+  // back (or a payslip actually has a value for them).
+  static const defaults = PayslipFieldPrefs(
+    hidden: {'solidaritaetszuschlag', 'vermoegenswirksameLeistungen', 'vorschuss'},
+    labels: {},
+  );
+
+  String labelOf(String key) => labels[key] ?? _payslipLabels[key] ?? key;
+
+  static const _prefsKey = 'payslip_field_prefs';
+  static PayslipFieldPrefs? _cache;
+
+  static Future<PayslipFieldPrefs> load() async {
+    if (_cache != null) return _cache!;
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_prefsKey);
+    if (raw == null) return _cache = defaults;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      return _cache = PayslipFieldPrefs(
+        hidden: {...(j['hidden'] as List? ?? const []).map((e) => e.toString())},
+        labels: {...((j['labels'] as Map?) ?? const {}).map((k, v) => MapEntry(k.toString(), v.toString()))},
+      );
+    } catch (_) {
+      return _cache = defaults;
+    }
+  }
+
+  static Future<void> save(PayslipFieldPrefs p) async {
+    _cache = p;
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_prefsKey, jsonEncode({'hidden': p.hidden.toList(), 'labels': p.labels}));
+  }
+}
+
+/// All payslip amount fields - the built-in ones and those the person added -
+/// shown the same way, as text fields. Each one's name can be changed and the
+/// field removed from its menu; "add field" adds a new one or brings back a
+/// removed built-in field.
+class PayslipFieldsEditor extends StatefulWidget {
+  final Map<String, TextEditingController> controllers; // built-in fields, by key
+  final Set<String> exclude; // built-in keys shown elsewhere on the screen
+  final List<PayslipCustomField> customFields;
+  final ValueChanged<List<PayslipCustomField>> onCustomChanged;
+  final VoidCallback? onLayoutChanged;
+  const PayslipFieldsEditor({
+    required this.controllers,
+    required this.customFields,
+    required this.onCustomChanged,
+    this.exclude = const {},
+    this.onLayoutChanged,
+    super.key,
+  });
+  @override
+  State<PayslipFieldsEditor> createState() => _PayslipFieldsEditorState();
+}
+
+class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
+  PayslipFieldPrefs prefs = PayslipFieldPrefs.defaults;
+  final List<TextEditingController> _customCtrls = [];
+
+  @override
+  void initState() {
+    super.initState();
+    PayslipFieldPrefs.load().then((p) {
+      if (mounted) setState(() => prefs = p);
+    });
+    _syncCustomCtrls();
+  }
+
+  @override
+  void didUpdateWidget(covariant PayslipFieldsEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncCustomCtrls();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _customCtrls) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Keeps one text controller per custom field, updating their text only
+  /// when the value really changed (e.g. filled in by the AI), so typing
+  /// isn't disturbed.
+  void _syncCustomCtrls() {
+    final fields = widget.customFields;
+    while (_customCtrls.length > fields.length) {
+      _customCtrls.removeLast().dispose();
+    }
+    for (var i = 0; i < fields.length; i++) {
+      final text = fields[i].value == 0 ? '' : formatAmountInput(fields[i].value);
+      if (i >= _customCtrls.length) {
+        _customCtrls.add(TextEditingController(text: text));
+      } else if ((parseAmount(_customCtrls[i].text) ?? 0) != fields[i].value) {
+        _customCtrls[i].text = text;
+      }
+    }
+  }
+
+  void _updateCustom(int i, PayslipCustomField f) {
+    final list = [...widget.customFields];
+    list[i] = f;
+    widget.onCustomChanged(list);
+  }
+
+  Future<String?> _askName(String title, String initial) async {
+    final ctrl = TextEditingController(text: initial);
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('افزودن فیلد'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'عنوان (مثلاً حق مسکن)'), autofocus: true),
-            const SizedBox(height: 8),
-            TextField(
-              controller: valueCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: const [AmountInputFormatter()],
-              decoration: const InputDecoration(labelText: 'مبلغ'),
-            ),
-          ],
-        ),
+        title: Text(title),
+        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'نام فیلد')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('add'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('confirm'))),
         ],
       ),
     );
-    if (added != true) return;
-    final v = parseAmount(valueCtrl.text);
-    if (labelCtrl.text.trim().isEmpty || v == null) return;
-    onChanged([...fields, PayslipCustomField(label: labelCtrl.text.trim(), value: v)]);
+    final name = ctrl.text.trim();
+    return ok == true && name.isNotEmpty ? name : null;
+  }
+
+  Future<bool> _confirmRemove(String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف فیلد'),
+        content: Text('فیلد «$name» حذف شود؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _renameBuiltIn(String key) async {
+    final name = await _askName('تغییر نام فیلد', prefs.labelOf(key));
+    if (name == null) return;
+    final p = PayslipFieldPrefs(hidden: prefs.hidden, labels: {...prefs.labels, key: name});
+    await PayslipFieldPrefs.save(p);
+    if (mounted) setState(() => prefs = p);
+  }
+
+  Future<void> _removeBuiltIn(String key) async {
+    if (!await _confirmRemove(prefs.labelOf(key))) return;
+    widget.controllers[key]?.clear();
+    final p = PayslipFieldPrefs(hidden: {...prefs.hidden, key}, labels: prefs.labels);
+    await PayslipFieldPrefs.save(p);
+    if (mounted) setState(() => prefs = p);
+    widget.onLayoutChanged?.call();
+  }
+
+  Future<void> _add() async {
+    final hiddenKeys = _payslipLabels.keys
+        .where((k) => !widget.exclude.contains(k) && prefs.hidden.contains(k) && (widget.controllers[k]?.text.isEmpty ?? true))
+        .toList();
+    final nameCtrl = TextEditingController();
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('افزودن فیلد'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                autofocus: hiddenKeys.isEmpty,
+                decoration: const InputDecoration(labelText: 'نام فیلد جدید (مثلاً حق مسکن)'),
+              ),
+              if (hiddenKeys.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('یا برگرداندن فیلدهای حذف‌شده:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: hiddenKeys
+                      .map((k) => ActionChip(label: Text(prefs.labelOf(k)), onPressed: () => Navigator.pop(ctx, 'builtin:$k')))
+                      .toList(),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'new'), child: Text(tr('add'))),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    if (picked.startsWith('builtin:')) {
+      final key = picked.substring(8);
+      final p = PayslipFieldPrefs(hidden: {...prefs.hidden}..remove(key), labels: prefs.labels);
+      await PayslipFieldPrefs.save(p);
+      if (mounted) setState(() => prefs = p);
+      widget.onLayoutChanged?.call();
+      return;
+    }
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) return;
+    widget.onCustomChanged([...widget.customFields, PayslipCustomField(label: name, value: 0)]);
+  }
+
+  Widget _fieldRow({
+    required TextEditingController controller,
+    required String label,
+    required VoidCallback onRename,
+    required VoidCallback onRemove,
+    ValueChanged<String>? onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: const [AmountInputFormatter()],
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          suffixIcon: PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, size: 20),
+            tooltip: 'گزینه‌های فیلد',
+            onSelected: (v) => v == 'rename' ? onRename() : onRemove(),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'rename', child: Text('تغییر نام')),
+              PopupMenuItem(value: 'remove', child: Text('حذف فیلد')),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final builtIn = _payslipLabels.keys.where((k) =>
+        !widget.exclude.contains(k) &&
+        widget.controllers[k] != null &&
+        (!prefs.hidden.contains(k) || widget.controllers[k]!.text.isNotEmpty));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Expanded(
-              child: Text('فیلدهای دیگر (مثلاً حق مسکن، حق اولاد و...)', style: TextStyle(fontSize: 12, color: Colors.grey)),
-            ),
-            TextButton.icon(onPressed: () => _add(context), icon: const Icon(Icons.add, size: 16), label: const Text('افزودن فیلد')),
-          ],
+        for (final k in builtIn)
+          _fieldRow(
+            controller: widget.controllers[k]!,
+            label: prefs.labelOf(k),
+            onRename: () => _renameBuiltIn(k),
+            onRemove: () => _removeBuiltIn(k),
+          ),
+        for (var i = 0; i < widget.customFields.length && i < _customCtrls.length; i++)
+          _fieldRow(
+            controller: _customCtrls[i],
+            label: widget.customFields[i].label,
+            onChanged: (v) => _updateCustom(i, PayslipCustomField(label: widget.customFields[i].label, value: parseAmount(v) ?? 0)),
+            onRename: () async {
+              final name = await _askName('تغییر نام فیلد', widget.customFields[i].label);
+              if (name != null) _updateCustom(i, PayslipCustomField(label: name, value: widget.customFields[i].value));
+            },
+            onRemove: () async {
+              if (!await _confirmRemove(widget.customFields[i].label)) return;
+              widget.onCustomChanged([...widget.customFields]..removeAt(i));
+            },
+          ),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton.icon(onPressed: _add, icon: const Icon(Icons.add, size: 18), label: const Text('افزودن فیلد')),
         ),
-        ...fields.asMap().entries.map((e) => Card(
-              child: ListTile(
-                dense: true,
-                title: Text(e.value.label),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(formatAmountInput(e.value.value)),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      onPressed: () => onChanged([...fields]..removeAt(e.key)),
-                    ),
-                  ],
-                ),
-              ),
-            )),
       ],
     );
   }
@@ -12177,7 +12540,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       merchantCtrl.text = e.merchant;
       date = e.date;
       recurrence = e.recurrence;
-      dayCtrl.text = persianDigits(e.recurrenceDay?.toString() ?? date.day.toString());
+      dayCtrl.text = persianDigits(e.recurrenceDay?.toString() ?? dayOfMonthInCalendar(date).toString());
       weekday = e.recurrenceWeekday ?? date.weekday;
       intervalCtrl.text = persianDigits(e.recurrenceIntervalDays?.toString() ?? '');
       installmentsCtrl.text = persianDigits(e.installments?.toString() ?? '');
@@ -13018,20 +13381,16 @@ class _TransactionEditorState extends State<TransactionEditor> {
               decoration: const InputDecoration(labelText: 'کلاس مالیاتی', border: OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
-            ..._payslipLabels.keys.where((k) => k != 'depositedAmount').map((k) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: TextField(
-                    controller: payslipNumCtrls[k],
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-                    decoration: InputDecoration(labelText: _payslipLabels[k], border: const OutlineInputBorder()),
-                  ),
-                )),
-            PayslipCustomFieldsEditor(
-              fields: payslipCustomFields,
-              onChanged: (list) => setState(() {
+            PayslipFieldsEditor(
+              controllers: payslipNumCtrls,
+              // The deposited amount is this income's main amount field.
+              exclude: const {'depositedAmount'},
+              customFields: payslipCustomFields,
+              onCustomChanged: (list) => setState(() {
                 payslipCustomFields = list;
                 _dirty = true;
               }),
+              onLayoutChanged: () => setState(() {}),
             ),
           ],
           const SizedBox(height: 16),
