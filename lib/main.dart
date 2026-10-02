@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
-    show SystemNavigator, SystemChrome, SystemUiMode, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
+    show SystemNavigator, SystemChrome, SystemUiMode, SystemUiOverlay, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -27,10 +27,9 @@ import 'package:share_plus/share_plus.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Full-screen: hide the status bar and Android's gesture/nav bar; either
-  // can be revealed temporarily by swiping from that edge, then auto-hides
-  // again, so on-screen content never sits underneath the system bars.
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  // Keep Android's status bar and navigation buttons (back/home/recents)
+  // always visible; the app lays itself out between them.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
   await NotificationService.instance.init();
   currentLanguage.value = await Store.loadLanguage();
   currentThemeMode.value = await Store.loadThemeMode();
@@ -543,12 +542,100 @@ Future<String?> askSaveChanges(BuildContext context) {
       title: const Text('ذخیره تغییرات'),
       content: const Text('آیا تغییرات انجام شده ذخیره شود؟'),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
-        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خیر')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('بله، ذخیره شود')),
+        Row(
+          children: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+            const Spacer(),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خیر')),
+            const SizedBox(width: 8),
+            FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('بله')),
+          ],
+        ),
       ],
     ),
   );
+}
+
+/// Shop name field that, while typing, suggests shop names already used in
+/// earlier transactions (most used first).
+class MerchantField extends StatefulWidget {
+  final TextEditingController controller;
+  final String label;
+  const MerchantField({required this.controller, required this.label, super.key});
+  @override
+  State<MerchantField> createState() => _MerchantFieldState();
+}
+
+class _MerchantFieldState extends State<MerchantField> {
+  final focusNode = FocusNode();
+  List<String> merchants = [];
+
+  @override
+  void initState() {
+    super.initState();
+    Store.loadTransactions().then((all) {
+      final count = <String, int>{};
+      final display = <String, String>{};
+      for (final t in all) {
+        final name = t.merchant.trim();
+        if (name.isEmpty) continue;
+        final key = name.toLowerCase();
+        count[key] = (count[key] ?? 0) + 1;
+        display.putIfAbsent(key, () => name);
+      }
+      final keys = count.keys.toList()..sort((a, b) => count[b]!.compareTo(count[a]!));
+      if (mounted) setState(() => merchants = [for (final k in keys) display[k]!]);
+    });
+  }
+
+  @override
+  void dispose() {
+    focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RawAutocomplete<String>(
+      textEditingController: widget.controller,
+      focusNode: focusNode,
+      optionsBuilder: (value) {
+        final q = value.text.trim().toLowerCase();
+        if (q.isEmpty) return const <String>[];
+        final starts = merchants.where((m) => m.toLowerCase().startsWith(q) && m.toLowerCase() != q);
+        final contains = merchants.where((m) => !m.toLowerCase().startsWith(q) && m.toLowerCase().contains(q));
+        return [...starts, ...contains].take(6);
+      },
+      fieldViewBuilder: (context, controller, node, onSubmitted) => TextField(
+        controller: controller,
+        focusNode: node,
+        decoration: InputDecoration(labelText: widget.label, border: const OutlineInputBorder()),
+      ),
+      optionsViewBuilder: (context, onSelected, options) => Align(
+        alignment: AlignmentDirectional.topStart,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(8),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240, maxWidth: 320),
+            child: ListView(
+              padding: EdgeInsets.zero,
+              shrinkWrap: true,
+              children: [
+                for (final o in options)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.storefront_outlined, size: 18),
+                    title: Text(o),
+                    onTap: () => onSelected(o),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Pinned bottom bar for the save buttons of a form screen, so they stay
@@ -5036,7 +5123,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     return total;
   }
 
-  /// "Safe to spend" until the end of this month, per currency: current
+  /// "Safe to spend" until the end of this month: current
   /// balance minus every not-yet-due expense (real future-dated
   /// transactions, plus projected recurring occurrences) still expected
   /// before the month ends - a PocketGuard/Simplifi-style guardrail so a
@@ -5046,14 +5133,26 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     final balances = Map<String, double>.from(totalBalanceByCurrency);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final endOfMonth = DateTime(now.year, now.month + 1, 0);
+    final endOfMonth = calendarMonthOf(today).end;
     for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 40)) {
       if (e.t.type != TxType.expense) continue;
       if (!e.date.isAfter(today) || e.date.isAfter(endOfMonth)) continue;
       final cur = currencyOf(e.t.accountId);
       balances[cur] = (balances[cur] ?? 0) - e.t.amount;
     }
-    return balances;
+    if (balances.length <= 1) return balances;
+    // Several currencies: one figure in the main currency (each converted
+    // with its day rate), like the total balance above it - otherwise a
+    // shortfall in one currency sat next to the untouched balance of another.
+    final mainCur = mainCurrencyOf(accounts);
+    var total = 0.0;
+    balances.forEach((cur, value) {
+      final rate = cur == mainCur
+          ? 1.0
+          : accounts.firstWhere((a) => a.currency == cur, orElse: () => accounts.first).exchangeRateToMain;
+      total += value * rate;
+    });
+    return {mainCur: total};
   }
 
   Widget _balanceText(double value, String currency) => Padding(
@@ -6220,7 +6319,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
     final drafts = all.where((t) => t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
     tx = drafts.where((t) => !isBankImportId(t.id)).toList();
     bankTx = drafts.where((t) => isBankImportId(t.id)).toList();
-    matches = matchBankDrafts(bankTx, all);
+    matches = matchBankDrafts(drafts, all);
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     if (mounted) setState(() => loading = false);
@@ -6413,20 +6512,20 @@ class _DraftsScreenState extends State<DraftsScreen> {
                     ),
                     // A bank booking that's really money moved between the
                     // person's own accounts.
-                    InkWell(
-                      onTap: () async {
+                    OutlinedButton.icon(
+                      onPressed: () async {
                         if (await convertDraftToTransfer(context, t, accounts)) await _load();
                       },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.swap_horiz, size: 16, color: Colors.green.shade900),
-                            const SizedBox(width: 2),
-                            Text('انتقال است', style: TextStyle(color: Colors.green.shade900, fontSize: 12, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
+                      icon: const Icon(Icons.swap_horiz, size: 16),
+                      label: const Text('انتقال بین حساب', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.green.shade900,
+                        backgroundColor: Colors.white,
+                        side: BorderSide(color: Colors.green.shade700),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
                       ),
                     ),
                   ],
@@ -6462,7 +6561,10 @@ class _DraftsScreenState extends State<DraftsScreen> {
           children: [
             tx.isEmpty
                 ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
-                : ListView(padding: const EdgeInsets.all(16), children: tx.map((t) => _tile(t)).toList()),
+                : ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: tx.map((t) => _tile(t, duplicates: matches[t.id] ?? const <DuplicateMatch>[])).toList(),
+                  ),
             bankTx.isEmpty
                 ? const Center(
                     child: Padding(
@@ -6816,7 +6918,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
             if (sourceValue.trim().isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.swap_horiz),
-                title: Text(draftSide ? 'استفاده از مقدار تراکنش ثبت‌شده' : 'استفاده از مقدار پیش‌نویس بانک'),
+                title: Text(draftSide ? 'استفاده از مقدار تراکنش ثبت‌شده' : 'استفاده از مقدار پیش‌نویس'),
                 subtitle: Text(sourceValue, maxLines: 2, overflow: TextOverflow.ellipsis),
                 onTap: () => Navigator.pop(ctx, 'copy'),
               ),
@@ -7034,7 +7136,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                     child: Row(
                       children: [
                         const SizedBox(width: 64),
-                        const Expanded(child: Text('پیش‌نویس بانک', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                        const Expanded(child: Text('پیش‌نویس', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
@@ -9151,7 +9253,12 @@ Set<String> _words(String text) => text
     .where((w) => w.length >= 3 && !RegExp(r'^\d+$').hasMatch(w))
     .toSet();
 
-/// Scores how likely [x] is the same booking as the bank draft [d]: the
+/// Shop name and description of [t] for duplicate matching, without the
+/// generic note added to everything read from a bank statement.
+String _matchText(Transaction t) =>
+    '${t.merchant} ${t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '')}'.trim();
+
+/// Scores how likely [x] is the same booking as the draft [d]: the
 /// amount must be (almost) the same and the dates close; the same account
 /// and similar shop/booking text make it surer. Null when it's no match.
 DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = false}) {
@@ -9191,7 +9298,18 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
     score -= 0.1;
     reasons.add('حساب دیگر');
   }
-  final common = _words('${d.merchant} ${d.note}').intersection(_words('${x.merchant} ${x.note} ${x.items.map((i) => i.name).join(' ')}'));
+  final dText = _matchText(d);
+  final xText = '${_matchText(x)} ${x.items.map((i) => i.name).join(' ')}';
+  final dWords = _words(dText), xWords = _words(xText);
+  final common = dWords.intersection(xWords);
+  // Both have a name/description and they share nothing, not even part of a
+  // word (e.g. "REWE Markt" vs "Lidl"): two different bookings that just
+  // happen to have the same amount.
+  if (dWords.isNotEmpty && xWords.isNotEmpty && common.isEmpty) {
+    final dl = dText.toLowerCase(), xl = xText.toLowerCase();
+    final partial = dWords.any((w) => xl.contains(w)) || xWords.any((w) => dl.contains(w));
+    if (!partial) return null;
+  }
   if (common.isNotEmpty) {
     score += 0.15;
     reasons.add('نام/شرح مشابه');
@@ -9217,8 +9335,9 @@ List<DuplicateMatch> findDuplicateMatches(Transaction d, List<Transaction> pool,
 /// as duplicates of the single one recorded.
 Map<String, List<DuplicateMatch>> matchBankDrafts(List<Transaction> drafts, List<Transaction> all) {
   final recurring = dueRecurringPayments(all);
-  final draftIds = {for (final d in drafts) d.id};
-  final pool = all.where((x) => !draftIds.contains(x.id)).toList();
+  // Drafts are only compared with confirmed transactions (and due recurring
+  // payments), never with each other.
+  final pool = all.where((x) => !x.draft).toList();
   final perDraft = {for (final d in drafts) d.id: findDuplicateMatches(d, pool, recurring)};
   final pairs = [
     for (final e in perDraft.entries)
@@ -9242,7 +9361,7 @@ Map<String, List<DuplicateMatch>> matchBankDrafts(List<Transaction> drafts, List
 
 /// Kept for the import preview: whether [t] has any likely duplicate.
 List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) =>
-    findDuplicateMatches(t, all, dueRecurringPayments(all)).map((m) => m.t).toList();
+    findDuplicateMatches(t, all.where((x) => !x.draft).toList(), dueRecurringPayments(all)).map((m) => m.t).toList();
 
 /// Best guess of a category for a booking text: a known shop name first,
 /// then any of the person's category names that appears in the text.
@@ -13259,7 +13378,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               ),
             ),
           const SizedBox(height: 16),
-          TextField(controller: merchantCtrl, decoration: const InputDecoration(labelText: 'فروشگاه', border: OutlineInputBorder())),
+          MerchantField(controller: merchantCtrl, label: 'فروشگاه'),
           const SizedBox(height: 12),
           TextField(
             controller: totalCtrl,
@@ -15182,10 +15301,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ),
           const SizedBox(height: 16),
           if (type == TxType.expense) ...[
-            TextField(
-              controller: merchantCtrl,
-              decoration: const InputDecoration(labelText: 'نام فروشگاه', border: OutlineInputBorder()),
-            ),
+            MerchantField(controller: merchantCtrl, label: 'نام فروشگاه'),
             const SizedBox(height: 16),
           ],
           TextField(
