@@ -6433,49 +6433,179 @@ class DuplicateCompareScreen extends StatefulWidget {
 class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   int selected = 0;
   bool busy = false;
+  // Edited copies of the saved transactions (by candidate index), changed
+  // right in the comparison table.
+  final Map<int, Transaction> edited = {};
 
-  Transaction get other => widget.candidates[selected];
+  Transaction get other => edited[selected] ?? widget.candidates[selected];
+  bool get hasEdits => edited.isNotEmpty;
 
-  String _category(String id) => widget.categories.where((c) => c.id == id).firstOrNull?.name ?? 'بدون‌دسته';
+  List<Category> categories = [];
+
+  @override
+  void initState() {
+    super.initState();
+    categories = widget.categories;
+  }
+
+  String _category(String id) => categories.where((c) => c.id == id).firstOrNull?.name ?? 'بدون‌دسته';
   Account? _account(String id) => widget.accounts.where((a) => a.id == id).firstOrNull;
   String _money(Transaction t) => formatMoney(t.amount, _account(t.accountId)?.currency ?? 'IRT');
   String _note(Transaction t) => t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim();
 
+  bool savedAny = false;
+
+  Future<void> _saveEdits() async {
+    for (final t in edited.values) {
+      await Store.upsertTransaction(t);
+      savedAny = true;
+    }
+    edited.clear();
+  }
+
   Future<void> _deleteDraft() async {
     setState(() => busy = true);
+    await _saveEdits();
     await Store.deleteTransaction(widget.draft.id);
     if (mounted) Navigator.pop(context, true);
   }
 
   Future<void> _keepAsNew() async {
     setState(() => busy = true);
+    await _saveEdits();
     await Store.upsertTransaction(widget.draft.copyWith(draft: false));
     if (mounted) Navigator.pop(context, true);
   }
 
-  /// Copies what the saved transaction is missing (shop/payee, bank text)
-  /// from the draft, then removes the draft.
-  Future<void> _merge() async {
+  Future<void> _saveChanges() async {
     setState(() => busy = true);
-    final d = widget.draft;
-    final o = other;
-    final bankText = _note(d);
-    final merged = o.copyWith(
-      merchant: o.merchant.trim().isEmpty && d.merchant.trim().isNotEmpty ? d.merchant : null,
-      note: bankText.isNotEmpty && !o.note.contains(bankText)
-          ? (o.note.trim().isEmpty ? bankText : '${o.note}\n$bankText')
-          : null,
-    );
-    await Store.upsertTransaction(merged);
-    await Store.deleteTransaction(d.id);
-    if (mounted) Navigator.pop(context, true);
+    await _saveEdits();
+    if (!mounted) return;
+    setState(() => busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تغییرات تراکنش ثبت‌شده ذخیره شد.')));
   }
 
-  Widget _row(String label, String a, String b) {
+  void _setOther(Transaction t) => setState(() => edited[selected] = t);
+
+  /// Tapping a cell of the saved transaction: take the bank draft's value,
+  /// or type/pick a new one - all without leaving this table.
+  Future<void> _editField(String field) async {
+    final d = widget.draft;
+    final o = other;
+    final draftValue = switch (field) {
+      'date' => formatDate(d.date),
+      'amount' => _money(d),
+      'category' => _category(d.categoryId),
+      'account' => _account(d.accountId)?.name ?? '',
+      'merchant' => d.merchant,
+      _ => _note(d),
+    };
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (draftValue.trim().isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.south_west),
+                title: const Text('استفاده از مقدار پیش‌نویس بانک'),
+                subtitle: Text(draftValue, maxLines: 2, overflow: TextOverflow.ellipsis),
+                onTap: () => Navigator.pop(ctx, 'copy'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('وارد کردن مقدار جدید'),
+              onTap: () => Navigator.pop(ctx, 'input'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'copy') {
+      _setOther(switch (field) {
+        'date' => o.copyWith(date: d.date),
+        'amount' => o.copyWith(amount: d.amount),
+        'category' => o.copyWith(categoryId: d.categoryId),
+        'account' => o.copyWith(accountId: d.accountId),
+        'merchant' => o.copyWith(merchant: d.merchant),
+        _ => o.copyWith(note: o.note.trim().isEmpty ? _note(d) : '${o.note}\n${_note(d)}'),
+      });
+      return;
+    }
+    switch (field) {
+      case 'date':
+        final picked = await showAppDatePicker(context: context, initialDate: o.date, firstDate: DateTime(2000), lastDate: DateTime(2100));
+        if (picked != null) _setOther(o.copyWith(date: picked));
+        break;
+      case 'category':
+        final picked = await showModalBottomSheet<Category>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (ctx) => CategoryPicker(type: o.type, categories: categories),
+        );
+        categories = await Store.loadCategories();
+        if (picked != null) _setOther(o.copyWith(categoryId: picked.id));
+        break;
+      case 'account':
+        if (!mounted) return;
+        final picked = await showDialog<Account>(
+          context: context,
+          builder: (ctx) => SimpleDialog(
+            title: const Text('حساب'),
+            children: widget.accounts
+                .map((a) => SimpleDialogOption(onPressed: () => Navigator.pop(ctx, a), child: Text('${a.name} (${currencyLabel(a.currency)})')))
+                .toList(),
+          ),
+        );
+        if (picked != null) _setOther(o.copyWith(accountId: picked.id));
+        break;
+      default:
+        final isAmount = field == 'amount';
+        final ctrl = TextEditingController(
+          text: switch (field) {
+            'amount' => formatAmountInput(o.amount),
+            'merchant' => o.merchant,
+            _ => o.note,
+          },
+        );
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(switch (field) { 'amount' => 'مبلغ', 'merchant' => 'فروشنده', _ => 'توضیح' }),
+            content: TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLines: field == 'note' ? 3 : 1,
+              keyboardType: isAmount ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.text,
+              inputFormatters: isAmount ? const [AmountInputFormatter()] : null,
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('confirm'))),
+            ],
+          ),
+        );
+        if (ok != true) return;
+        if (isAmount) {
+          final v = parseAmount(ctrl.text);
+          if (v != null && v > 0) _setOther(o.copyWith(amount: v));
+        } else if (field == 'merchant') {
+          _setOther(o.copyWith(merchant: ctrl.text.trim()));
+        } else {
+          _setOther(o.copyWith(note: ctrl.text.trim()));
+        }
+    }
+  }
+
+  Widget _row(String label, String a, String b, {String? field}) {
     final differs = a.trim() != b.trim();
+    final changed = field != null && edited.containsKey(selected) && b != _originalValue(field);
     final style = TextStyle(fontSize: 13, color: differs ? Colors.orange.shade900 : null, fontWeight: differs ? FontWeight.w600 : null);
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
       decoration: BoxDecoration(
         color: differs ? Colors.orange.shade50 : null,
         border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
@@ -6483,20 +6613,65 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 72, child: Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade700))),
-          Expanded(child: Text(a.isEmpty ? '—' : a, style: style)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 10, 0, 10),
+            child: SizedBox(width: 72, child: Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade700))),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(a.isEmpty ? '—' : a, style: style),
+            ),
+          ),
           const SizedBox(width: 8),
-          Expanded(child: Text(b.isEmpty ? '—' : b, style: style)),
+          Expanded(
+            child: InkWell(
+              onTap: field == null || busy ? null : () => _editField(field),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(4, 10, 8, 10),
+                color: changed ? Colors.blue.shade50 : null,
+                child: Row(
+                  children: [
+                    Expanded(child: Text(b.isEmpty ? '—' : b, style: changed ? style.copyWith(color: Colors.blue.shade800) : style)),
+                    if (field != null) Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade500),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  String _originalValue(String field) {
+    final o = widget.candidates[selected];
+    return switch (field) {
+      'date' => formatDate(o.date),
+      'amount' => _money(o),
+      'category' => _category(o.categoryId),
+      'account' => _account(o.accountId)?.name ?? '',
+      'merchant' => o.merchant,
+      _ => o.note,
+    };
   }
 
   @override
   Widget build(BuildContext context) {
     final d = widget.draft;
     final o = other;
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (hasEdits) {
+          final choice = await askSaveChanges(context);
+          if (choice == null) return;
+          if (choice == 'save') await _saveEdits();
+        }
+        if (context.mounted) Navigator.pop(context, savedAny);
+      },
+      child: Scaffold(
       appBar: AppBar(title: const Text('مقایسه‌ی تراکنش مشابه')),
       bottomNavigationBar: pinnedBottomButtons(context, [
         OutlinedButton(
@@ -6551,26 +6726,27 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                     ],
                   ),
                 ),
-                _row('تاریخ', formatDate(d.date), formatDate(o.date)),
-                _row('مبلغ', _money(d), _money(o)),
+                _row('تاریخ', formatDate(d.date), formatDate(o.date), field: 'date'),
+                _row('مبلغ', _money(d), _money(o), field: 'amount'),
                 _row('نوع', d.type == TxType.income ? 'درآمد' : 'هزینه', o.type == TxType.income ? 'درآمد' : 'هزینه'),
-                _row('دسته‌بندی', _category(d.categoryId), _category(o.categoryId)),
-                _row('حساب', _account(d.accountId)?.name ?? '', _account(o.accountId)?.name ?? ''),
-                _row('فروشنده', d.merchant, o.merchant),
-                _row('توضیح', _note(d), o.note),
+                _row('دسته‌بندی', _category(d.categoryId), _category(o.categoryId), field: 'category'),
+                _row('حساب', _account(d.accountId)?.name ?? '', _account(o.accountId)?.name ?? '', field: 'account'),
+                _row('فروشنده', d.merchant, o.merchant, field: 'merchant'),
+                _row('توضیح', _note(d), o.note, field: 'note'),
               ],
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'ردیف‌های نارنجی با هم فرق دارند.',
+            'ردیف‌های نارنجی با هم فرق دارند. برای اصلاح تراکنش ثبت‌شده، روی خانه‌ی آن در ستون دوم بزن؛ '
+            'می‌توانی مقدار پیش‌نویس بانک را بگذاری یا مقدار تازه وارد کنی.',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: busy ? null : _merge,
-            icon: const Icon(Icons.merge_type),
-            label: const Text('تکراری است؛ اطلاعات بانک به تراکنش ثبت‌شده اضافه شود'),
+          FilledButton.tonalIcon(
+            onPressed: busy || !hasEdits ? null : _saveChanges,
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('ذخیره تغییرات تراکنش ثبت‌شده'),
           ),
           const SizedBox(height: 8),
           TextButton.icon(
@@ -6580,7 +6756,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                     final result = await Navigator.push<Object>(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => TransactionEditor(categories: widget.categories, accounts: widget.accounts, existing: d),
+                        builder: (_) => TransactionEditor(categories: categories, accounts: widget.accounts, existing: d),
                       ),
                     );
                     if (result is DeleteTransactionSignal) {
@@ -6590,6 +6766,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                     } else {
                       return;
                     }
+                    await _saveEdits();
                     if (context.mounted) Navigator.pop(context, true);
                   },
             icon: const Icon(Icons.edit_outlined),
@@ -6597,6 +6774,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }
@@ -8606,6 +8784,23 @@ const _csvDateFormats = ['dd.MM.yyyy', 'yyyy-MM-dd', 'dd/MM/yyyy', 'MM/dd/yyyy',
 /// negative for money leaving the account.
 typedef StatementRow = ({DateTime date, double amount, String desc, String? merchant, String? categoryHint});
 
+/// Identifies one bank booking (account, day, signed amount, text) so it is
+/// never imported twice.
+String bankRowFingerprint(StatementRow p, String accountId) =>
+    '$accountId|${p.date.year}-${p.date.month}-${p.date.day}|${p.amount.toStringAsFixed(2)}|${p.desc.trim().toLowerCase()}';
+
+const _importedFingerprintsKey = 'bank_imported_fingerprints';
+
+Future<Set<String>> loadImportedFingerprints() async {
+  final sp = await SharedPreferences.getInstance();
+  return {...(sp.getStringList(_importedFingerprintsKey) ?? const [])};
+}
+
+Future<void> saveImportedFingerprints(Set<String> all) async {
+  final sp = await SharedPreferences.getInstance();
+  await sp.setStringList(_importedFingerprintsKey, all.toList());
+}
+
 /// Transactions imported from a bank statement get ids with one of these
 /// prefixes, which is how the drafts screen keeps them in their own tab.
 bool isBankImportId(String id) => id.startsWith('csv_') || id.startsWith('bank_');
@@ -8930,6 +9125,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   String? aiError; // why the last AI attempt stopped
   PendingStatement? pendingEntry; // where this PDF's progress is kept
   List<PendingStatement> pending = [];
+  Set<String> importedFingerprints = {};
 
   bool get pdfAllDone => pdfPages.isNotEmpty && {...aiPageRows.keys, ...importedPages}.length >= pdfPages.length;
 
@@ -8948,6 +9144,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     categories = await Store.loadCategories();
     existingTx = await Store.loadTransactions();
     pending = await PendingStatement.load();
+    importedFingerprints = await loadImportedFingerprints();
     if (accounts.isNotEmpty) targetAccount = accounts.first;
     setState(() => loading = false);
   }
@@ -9160,8 +9357,11 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   }
 
   /// The very same booking was already imported earlier (same statement
-  /// read twice) - skipped instead of piling up copies.
+  /// read twice, or read again while continuing it) - skipped instead of
+  /// piling up copies. Bookings imported before are remembered, so ones the
+  /// person has since confirmed, edited or deleted never come back either.
   bool _alreadyImported(StatementRow p, String accountId) {
+    if (importedFingerprints.contains(bankRowFingerprint(p, accountId))) return true;
     return existingTx.any((t) =>
         isBankImportId(t.id) &&
         t.accountId == accountId &&
@@ -9222,6 +9422,8 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       await Store.upsertTransaction(d);
       imported++;
     }
+    importedFingerprints.addAll(preview!.map((p) => bankRowFingerprint(p, targetAccount!.id)));
+    await saveImportedFingerprints(importedFingerprints);
     // Pages read by the AI are done once imported; the saved statement is
     // removed when all its pages are, otherwise later attempts continue
     // with the remaining pages.
@@ -9358,12 +9560,9 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             Column(
               children: [
                 const Text(
-                  'فایل صورتحساب بانک را انتخاب کن: CSV (اکثر بانک‌ها امکان دانلودش را دارند) یا PDF.\n\n'
-                  'توجه: بارگذاری PDF فقط وقتی نتیجه‌ی درست و قابل‌اعتماد می‌دهد که اطلاعاتش با هوش مصنوعی خوانده شود '
-                  '(کلید Gemini در تنظیمات)؛ خواندن خودکار بدون هوش مصنوعی برای PDF معمولاً دقیق نیست. '
-                  'هوش مصنوعی صفحه به صفحه می‌خواند و هر صفحه‌ی خوانده‌شده همان لحظه ذخیره می‌شود؛ اگر سهمیه یا '
-                  'سرور اجازه‌ی خواندن همه‌ی صفحات را یک‌جا نداد، تراکنش‌های صفحه‌های خوانده‌شده را بارگذاری کن و '
-                  'بقیه را بعداً ادامه بده. دسته‌بندی و طرف حساب هم حدس زده می‌شود.',
+                  'فایل CSV یا PDF صورتحساب بانک را انتخاب کن.\n\n'
+                  'PDF فقط با هوش مصنوعی (کلید Gemini) درست خوانده می‌شود. صفحه به صفحه خوانده و ذخیره می‌شود؛ '
+                  'اگر همه‌ی صفحات یک‌جا خوانده نشد، صفحه‌های خوانده‌شده را بارگذاری کن و بقیه را بعداً ادامه بده.',
                   style: TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 16),
@@ -9478,7 +9677,14 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             if (pdfPath != null) _pdfStatusCard(),
             if (preview != null) ...[
               const SizedBox(height: 16),
-              Text('${persianDigits('${preview!.length}')} تراکنش قابل‌بارگذاری پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
+              Builder(builder: (context) {
+                final already = targetAccount == null ? 0 : preview!.where((p) => _alreadyImported(p, targetAccount!.id)).length;
+                return Text(
+                  '${persianDigits('${preview!.length - already}')} تراکنش جدید برای بارگذاری'
+                  '${already > 0 ? ' (${persianDigits('$already')} مورد قبلاً بارگذاری شده و دوباره اضافه نمی‌شود)' : ''}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                );
+              }),
               if (_possibleDuplicateCount() > 0)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -9546,7 +9752,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 icon: importing
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.download_done),
-                label: Text(importing ? 'در حال ذخیره...' : 'ذخیره ${preview!.length} تراکنش به‌صورت پیش‌نویس'),
+                label: Text(importing ? 'در حال ذخیره...' : 'ذخیره به‌صورت پیش‌نویس'),
               ),
             ],
           ],
@@ -10274,7 +10480,17 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
   bool? recurringFilter; // null = all, true = recurring only, false = non-recurring only
   String draftFilter = 'exclude'; // 'exclude' (default) | 'only' | 'all'
   bool? returnableFilter; // null = all, true = has an item with a return deadline, false = no such item
-  _TxSortMode sort = _TxSortMode.createdDesc;
+  _TxSortMode sort = _TxSortMode.dateDesc;
+  Timer? _searchDebounce;
+
+  // Every stored transaction plus each already-due occurrence of a
+  // recurring one (only its first date is stored, so the later payments
+  // used to be missing from this list), and per-entry search text built
+  // once instead of on every keystroke.
+  List<TxOccurrence> entries = [];
+  final Map<TxOccurrence, String> _searchText = {};
+  Map<String, String> _categoryNames = {};
+  Map<String, String> _accountCurrency = {};
 
   @override
   void initState() {
@@ -10282,22 +10498,68 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     tx = await Store.loadTransactions();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
+    _categoryNames = {for (final c in categories) c.id: c.name};
+    _accountCurrency = {for (final a in accounts) a.id: a.currency};
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    entries = [for (final t in tx) (date: t.date, t: t, isReal: true)];
+    for (final t in tx) {
+      if (!t.isRecurring || t.draft) continue;
+      final anchor = DateTime(t.date.year, t.date.month, t.date.day);
+      for (final d in computeRecurrenceOccurrences(t)) {
+        final dd = DateTime(d.year, d.month, d.day);
+        if (dd.isAfter(today)) break;
+        if (dd != anchor) entries.add((date: dd, t: t, isReal: false));
+      }
+    }
+    _searchText.clear();
+    final accountNames = {for (final a in accounts) a.id: a.name};
+    for (final e in entries) {
+      final t = e.t;
+      _searchText[e] = [
+        categoryName(t.categoryId),
+        t.merchant,
+        t.note,
+        accountNames[t.accountId] ?? '',
+        ...t.items.map((i) => i.name),
+        t.payslipDetails?.arbeitgeber ?? '',
+      ].join(' ').toLowerCase();
+    }
     setState(() => loading = false);
   }
 
-  String categoryName(String id) {
-    final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+  String categoryName(String id) => _categoryNames[id] ?? 'بدون‌دسته';
+
+  /// The search text as a number (Persian/Arabic digits and thousands
+  /// separators allowed), or null when it isn't one.
+  static String? _amountQuery(String q) {
+    var s = q;
+    const fa = '۰۱۲۳۴۵۶۷۸۹', ar = '٠١٢٣٤٥٦٧٨٩';
+    for (var i = 0; i < 10; i++) {
+      s = s.replaceAll(fa[i], '$i').replaceAll(ar[i], '$i');
+    }
+    s = s.replaceAll(RegExp(r'[,٬\s]'), '').replaceAll('٫', '.');
+    return RegExp(r'^\d+(\.\d+)?$').hasMatch(s) ? s : null;
   }
 
-  String currencyOf(String accountId) {
-    final m = accounts.where((a) => a.id == accountId).toList();
-    return m.isEmpty ? 'IRT' : m.first.currency;
+  /// An amount matches when its digits contain the searched number, e.g.
+  /// "1250" finds 1,250.00 and 31,250; "12.5" finds 12.50.
+  static bool _amountMatches(double amount, String digits) {
+    if (digits.contains('.')) return amount.toStringAsFixed(2).contains(digits);
+    return amount.toStringAsFixed(2).replaceAll('.', '').contains(digits) || amount.round().toString().contains(digits);
   }
+
+  String currencyOf(String accountId) => _accountCurrency[accountId] ?? 'IRT';
 
   Future<void> _openEditor(Transaction t) async {
     final result = await Navigator.push<Object>(
@@ -10540,7 +10802,9 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final q = query.trim().toLowerCase();
-    var filtered = tx.where((t) {
+    final amountQ = q.isEmpty ? null : _amountQuery(q);
+    var filtered = entries.where((e) {
+      final t = e.t;
       if (typeFilter != null && t.type != typeFilter) return false;
       if (categoryFilter != null && !categoryMatchesFilter(t.categoryId, categoryFilter!, categories)) return false;
       if (accountFilter != null && t.accountId != accountFilter) return false;
@@ -10552,17 +10816,22 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         if (hasReturnable != returnableFilter) return false;
       }
       if (q.isNotEmpty) {
-        final hay = [
-          categoryName(t.categoryId),
-          t.note,
-          ...t.items.map((i) => i.name),
-        ].join(' ').toLowerCase();
-        if (!hay.contains(q)) return false;
+        final textHit = (_searchText[e] ?? '').contains(q);
+        final amountHit = amountQ != null && _amountMatches(t.amount, amountQ);
+        if (!textHit && !amountHit) return false;
       }
       return true;
     }).toList();
 
-    int createdAtOf(Transaction t) => int.tryParse(t.id) ?? 0;
+    // Creation time is the number in the id (plain or after a prefix such as
+    // "bank_"); ids without one used to sort as 0 and end up at the very
+    // bottom, which made those transactions look missing.
+    int createdAtOf(TxOccurrence e) {
+      final m = RegExp(r'\d{10,}').firstMatch(e.t.id);
+      final base = m == null ? e.t.date.microsecondsSinceEpoch : int.parse(m.group(0)!);
+      return e.isReal ? base : e.date.microsecondsSinceEpoch;
+    }
+
     switch (sort) {
       case _TxSortMode.dateDesc:
         filtered.sort((a, b) => b.date.compareTo(a.date));
@@ -10577,10 +10846,10 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         filtered.sort((a, b) => createdAtOf(a).compareTo(createdAtOf(b)));
         break;
       case _TxSortMode.amountDesc:
-        filtered.sort((a, b) => b.amount.compareTo(a.amount));
+        filtered.sort((a, b) => b.t.amount.compareTo(a.t.amount));
         break;
       case _TxSortMode.amountAsc:
-        filtered.sort((a, b) => a.amount.compareTo(b.amount));
+        filtered.sort((a, b) => a.t.amount.compareTo(b.t.amount));
         break;
     }
 
@@ -10598,13 +10867,20 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
             child: TextField(
               controller: queryCtrl,
               decoration: const InputDecoration(
-                hintText: 'جستجو در دسته‌بندی، توضیحات یا اقلام...',
+                hintText: 'جستجو در فروشگاه، دسته‌بندی، توضیحات، اقلام یا مبلغ...',
                 prefixIcon: Icon(Icons.search),
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: EdgeInsets.symmetric(vertical: 14),
               ),
-              onChanged: (v) => setState(() => query = v),
+              // Wait for a short pause in typing before filtering, so long
+              // lists don't re-filter on every key press.
+              onChanged: (v) {
+                _searchDebounce?.cancel();
+                _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+                  if (mounted) setState(() => query = v);
+                });
+              },
             ),
           ),
           const SizedBox(height: 10),
@@ -10681,7 +10957,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Align(
               alignment: Alignment.centerRight,
-              child: Text('${filtered.length} تراکنش', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+              child: Text('${persianDigits('${filtered.length}')} تراکنش', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
             ),
           ),
           const SizedBox(height: 8),
@@ -10692,7 +10968,8 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     padding: const EdgeInsets.all(16),
                     itemCount: filtered.length,
                     itemBuilder: (context, i) {
-                      final t = filtered[i];
+                      final e = filtered[i];
+                      final t = e.t;
                       return Card(
                         child: ListTile(
                           leading: CircleAvatar(
@@ -10706,7 +10983,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '${categoryName(t.categoryId)} • ${formatDate(t.date)}${txExtraDetail(t)}'
+                                '${categoryName(t.categoryId)} • ${formatDate(e.date)}${txExtraDetail(t)}'
                                 '${t.isRecurring ? ' • تکرارشونده' : ''}'
                                 '${t.draft ? ' • پیش‌نویس' : ''}',
                                 style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
