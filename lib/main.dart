@@ -868,6 +868,9 @@ class Account {
   // already shares its currency). Lets the home screen show one combined
   // total across accounts with different currencies.
   final double exchangeRateToMain;
+  // When the "day rate" above was last set (typed in, or taken from a
+  // currency transfer). Null = never set, the 1.0 default is a placeholder.
+  final DateTime? rateUpdatedAt;
   const Account({
     required this.id,
     required this.name,
@@ -875,15 +878,25 @@ class Account {
     required this.currency,
     this.initialBalance = 0,
     this.exchangeRateToMain = 1.0,
+    this.rateUpdatedAt,
   });
 
-  Account copyWith({String? name, AccountType? type, String? currency, double? initialBalance, double? exchangeRateToMain}) => Account(
+  Account copyWith({
+    String? name,
+    AccountType? type,
+    String? currency,
+    double? initialBalance,
+    double? exchangeRateToMain,
+    DateTime? rateUpdatedAt,
+  }) =>
+      Account(
         id: id,
         name: name ?? this.name,
         type: type ?? this.type,
         currency: currency ?? this.currency,
         initialBalance: initialBalance ?? this.initialBalance,
         exchangeRateToMain: exchangeRateToMain ?? this.exchangeRateToMain,
+        rateUpdatedAt: rateUpdatedAt ?? this.rateUpdatedAt,
       );
 
   Map<String, dynamic> toJson() => {
@@ -893,6 +906,7 @@ class Account {
         'currency': currency,
         'initialBalance': initialBalance,
         'exchangeRateToMain': exchangeRateToMain,
+        'rateUpdatedAt': rateUpdatedAt?.toIso8601String(),
       };
   factory Account.fromJson(Map<String, dynamic> j) => Account(
         id: j['id'],
@@ -901,7 +915,81 @@ class Account {
         currency: j['currency'] ?? 'EUR',
         initialBalance: (j['initialBalance'] as num?)?.toDouble() ?? 0,
         exchangeRateToMain: (j['exchangeRateToMain'] as num?)?.toDouble() ?? 1.0,
+        rateUpdatedAt: j['rateUpdatedAt'] != null ? DateTime.tryParse(j['rateUpdatedAt']) : null,
       );
+}
+
+// ------------------------------------------------------------ day rate
+
+/// Whether an account's rate to the main currency reads better turned
+/// around: "1 Euro = 600,000 Toman" instead of "1 Toman = 0.0000016 Euro".
+bool dayRateInverted(String currency, String mainCurrency) =>
+    isWholeNumberCurrency(currency) && !isWholeNumberCurrency(mainCurrency);
+
+/// Label of the day-rate field, in the readable direction.
+String dayRateLabel(String currency, String mainCurrency) => dayRateInverted(currency, mainCurrency)
+    ? '۱ ${currencyLabel(mainCurrency)} = ? ${currencyLabel(currency)}'
+    : '۱ ${currencyLabel(currency)} = ? ${currencyLabel(mainCurrency)}';
+
+/// The stored rate (1 account unit = ? main units) as the person reads it.
+double dayRateForDisplay(Account a, String mainCurrency) =>
+    dayRateInverted(a.currency, mainCurrency) && a.exchangeRateToMain > 0 ? 1 / a.exchangeRateToMain : a.exchangeRateToMain;
+
+/// A rate typed in the readable direction, back to the stored direction.
+double dayRateFromInput(double typed, String currency, String mainCurrency) =>
+    dayRateInverted(currency, mainCurrency) ? 1 / typed : typed;
+
+/// "1 Euro = 600,000 Toman" for an account.
+String dayRateText(Account a, String mainCurrency) {
+  final v = dayRateForDisplay(a, mainCurrency);
+  final shown = formatAmountInput(v, maxDecimals: v >= 100 ? 0 : 6);
+  return dayRateInverted(a.currency, mainCurrency)
+      ? '۱ ${currencyLabel(mainCurrency)} = ${ltr(shown)} ${currencyLabel(a.currency)}'
+      : '۱ ${currencyLabel(a.currency)} = ${ltr(shown)} ${currencyLabel(mainCurrency)}';
+}
+
+/// Asks for a new day rate for [a] (in the readable direction) and saves it.
+/// Returns the updated account, or null if nothing changed.
+Future<Account?> editDayRate(BuildContext context, Account a, String mainCurrency) async {
+  final ctrl = TextEditingController(
+    text: a.rateUpdatedAt == null && a.exchangeRateToMain == 1.0 ? '' : formatAmountInput(dayRateForDisplay(a, mainCurrency), maxDecimals: 6),
+  );
+  final typed = await showDialog<double>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('نرخ روز ${a.name}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: ctrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: const [AmountInputFormatter()],
+            decoration: InputDecoration(labelText: dayRateLabel(a.currency, mainCurrency), border: const OutlineInputBorder()),
+            autofocus: true,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'فقط برای نمایش موجودی کل به ${currencyLabel(mainCurrency)} استفاده می‌شود؛ مبلغ تراکنش‌ها تغییری نمی‌کند.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+        FilledButton(onPressed: () => Navigator.pop(ctx, parseAmount(ctrl.text)), child: Text(tr('save'))),
+      ],
+    ),
+  );
+  if (typed == null || typed <= 0) return null;
+  final updated = a.copyWith(
+    exchangeRateToMain: dayRateFromInput(typed, a.currency, mainCurrency),
+    rateUpdatedAt: DateTime.now(),
+  );
+  final accounts = await Store.loadAccounts();
+  await Store.saveAccounts([for (final x in accounts) x.id == a.id ? updated : x]);
+  return updated;
 }
 
 class ReceiptItemEntry {
@@ -2908,10 +2996,15 @@ class _MoneyAppState extends State<MoneyApp> {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      builder: (context, child) => Directionality(textDirection: currentLanguage.value.direction, child: child!),
+      // The lock wraps the whole navigator (not just the home route), so it
+      // covers whatever screen was open.
+      builder: (context, child) => Directionality(
+        textDirection: currentLanguage.value.direction,
+        child: AppLockGate(child: child!),
+      ),
       navigatorKey: rootNavigatorKey,
       navigatorObservers: [appRouteObserver],
-      home: const AppLockGate(child: HomeScreen()),
+      home: const HomeScreen(),
     );
   }
 }
@@ -2935,10 +3028,24 @@ Future<void> openTransactionFromNotification(String? payload) async {
   if (match.isEmpty) return;
   final categories = await Store.loadCategories();
   final accounts = await Store.loadAccounts();
+  // Never open anything on top of the lock screen - wait until unlocked.
+  while (appLocked.value) {
+    final done = Completer<void>();
+    void listener() {
+      if (!appLocked.value && !done.isCompleted) done.complete();
+    }
+
+    appLocked.addListener(listener);
+    await done.future;
+    appLocked.removeListener(listener);
+  }
   nav.push(MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: match.first, categories: categories, accounts: accounts)));
 }
 
 // ============================== App lock ==============================
+
+/// True while the lock screen is shown.
+final appLocked = ValueNotifier<bool>(false);
 
 class AppLockGate extends StatefulWidget {
   final Widget child;
@@ -2950,7 +3057,6 @@ class AppLockGate extends StatefulWidget {
 class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   bool _loading = true;
   bool _lockEnabled = false;
-  bool _unlocked = false;
   DateTime? _pausedAt;
   static const _graceDuration = Duration(minutes: 5);
 
@@ -2970,16 +3076,62 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   Future<void> _init() async {
     final enabled = await Store.loadAppLockEnabled();
     if (!mounted) return;
-    setState(() {
-      _lockEnabled = enabled;
-      _unlocked = !enabled;
-      _loading = false;
+    _lockEnabled = enabled;
+    if (enabled) {
+      // Keep the cover up until the lock screen is showing.
+      _obscured = true;
+      _showLock();
+    }
+    setState(() => _loading = false);
+  }
+
+  // True while the app is in the background (or about to go there) and until
+  // the lock screen is up, so the last screen isn't readable in the
+  // recent-apps list or while coming back.
+  bool _obscured = false;
+
+  /// Puts the lock screen on top of whatever screen is open (keeping it
+  /// underneath), with no animation so nothing shows through on the way.
+  void _showLock() {
+    if (appLocked.value) return;
+    final nav = rootNavigatorKey.currentState;
+    if (nav == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _showLock());
+      return;
+    }
+    appLocked.value = true;
+    nav.push(PageRouteBuilder<void>(
+      opaque: true,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (ctx, _, __) => PopScope(
+        // Back on the lock screen leaves the app instead of reaching the
+        // screens underneath.
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) SystemNavigator.pop();
+        },
+        child: PinLockScreen(onUnlocked: () {
+          // Only once - a second call (fingerprint and PIN both succeeding)
+          // must not pop the screen underneath.
+          if (!appLocked.value) return;
+          appLocked.value = false;
+          nav.pop();
+        }),
+      ),
+    ));
+    // Drop the cover once the lock screen itself is showing.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _obscured = false);
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!_lockEnabled) return;
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.hidden || state == AppLifecycleState.paused) {
+      if (!_obscured && !appLocked.value) setState(() => _obscured = true);
+    }
     // The app also goes to "paused" for brief in-app interruptions (camera,
     // gallery/file picker, share sheet, permission dialogs) - only actually
     // re-lock if it's been away long enough to look like a real backgrounding.
@@ -2989,18 +3141,41 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
       final pausedAt = _pausedAt;
       _pausedAt = null;
       if (pausedAt != null && DateTime.now().difference(pausedAt) >= _graceDuration) {
-        setState(() => _unlocked = false);
+        _showLock(); // the cover stays until the lock screen is up
+      } else if (_obscured) {
+        setState(() => _obscured = false);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (!_unlocked) {
-      return PinLockScreen(onUnlocked: () => setState(() => _unlocked = true));
-    }
-    return widget.child;
+    final hidden = _loading || _obscured;
+    // The open screen is blurred and covered while the app is in the
+    // background or the lock is about to show - it used to stay readable in
+    // the recent-apps list and behind the fingerprint prompt.
+    return Stack(
+      children: [
+        ImageFiltered(
+          enabled: hidden,
+          imageFilter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: widget.child,
+        ),
+        if (hidden)
+          Positioned.fill(
+            child: AbsorbPointer(
+              child: ColoredBox(
+                color: Theme.of(context).colorScheme.surface.withValues(alpha: _loading ? 1 : 0.85),
+                child: Center(
+                  child: _loading
+                      ? const CircularProgressIndicator()
+                      : Icon(Icons.lock_outline, size: 56, color: Theme.of(context).colorScheme.primary),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -4881,6 +5056,55 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     return balances;
   }
 
+  /// One line per account in another currency than the main one, showing
+  /// the day rate used for the combined total and how old it is - tap to
+  /// update it (the rate moves often, e.g. Euro to Toman).
+  List<Widget> _dayRateLines() {
+    final mainCur = mainCurrencyOf(accounts);
+    final now = DateTime.now();
+    final shown = <String>{};
+    final lines = <Widget>[];
+    for (final a in accounts) {
+      if (a.currency == mainCur || !shown.add(a.currency)) continue;
+      final notSet = a.rateUpdatedAt == null && a.exchangeRateToMain == 1.0;
+      final age = a.rateUpdatedAt == null ? null : now.difference(a.rateUpdatedAt!).inDays;
+      final stale = age != null && age > 7;
+      final String text;
+      if (notSet) {
+        text = 'نرخ روز ${currencyLabel(a.currency)} تنظیم نشده (جمع کل دقیق نیست) - برای تنظیم بزن';
+      } else {
+        final when = age == null ? '' : (age == 0 ? ' • امروز' : ' • ${persianDigits('$age')} روز پیش');
+        text = 'نرخ روز: ${dayRateText(a, mainCur)}$when${stale ? ' (به‌روز نیست)' : ''}';
+      }
+      lines.add(InkWell(
+        onTap: () async {
+          final updated = await editDayRate(context, a, mainCur);
+          if (updated == null || !mounted) return;
+          accounts = await Store.loadAccounts();
+          _memo.clear();
+          if (mounted) setState(() {});
+        },
+        child: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Row(
+            children: [
+              Icon(Icons.currency_exchange, size: 14, color: notSet || stale ? Colors.orange.shade800 : Colors.grey.shade600),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  text,
+                  style: TextStyle(fontSize: 12, color: notSet || stale ? Colors.orange.shade800 : Colors.grey.shade600),
+                ),
+              ),
+              Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade500),
+            ],
+          ),
+        ),
+      ));
+    }
+    return lines;
+  }
+
   Map<String, Map<String, double>> get periodStatsByCurrency =>
       _memoized('period|$dashboardAccountFilter|$_dayKey|$_calKey', _computePeriodStats);
   Map<String, Map<String, double>> _computePeriodStats() {
@@ -5137,6 +5361,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                         'جمع کل (به ${currencyLabel(primaryCurrency)}): ${formatMoney(_combinedBalanceInMainCurrency, primaryCurrency)}',
                         style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                       ),
+                      ..._dayRateLines(),
                     ],
                     if (safeToSpend.isNotEmpty) ...[
                       const SizedBox(height: 4),
@@ -9722,6 +9947,34 @@ class _TransferScreenState extends State<TransferScreen> {
     if (picked != null) setState(() => date = picked);
   }
 
+  bool useAsDayRate = true;
+
+  /// The account whose day rate (to the main currency) a cross-currency
+  /// transfer's rate can set: the side that isn't in the main currency, when
+  /// the other side is.
+  Account? _dayRateTarget() {
+    final from = fromAccount, to = toAccount;
+    if (from == null || to == null || from.currency == to.currency) return null;
+    final mainCur = mainCurrencyOf(accounts);
+    if (from.currency == mainCur) return to;
+    if (to.currency == mainCur) return from;
+    return null;
+  }
+
+  /// Saves the transfer's rate (1 from-unit = [rate] to-units) as the day
+  /// rate of the non-main account - unless that account already has a rate
+  /// from a later date.
+  Future<void> _applyDayRate(double rate) async {
+    final target = _dayRateTarget();
+    if (target == null) return;
+    if (target.rateUpdatedAt != null && target.rateUpdatedAt!.isAfter(date.add(const Duration(days: 1)))) return;
+    final perMain = target.id == toAccount!.id ? 1 / rate : rate; // 1 target unit = ? main units
+    final all = await Store.loadAccounts();
+    await Store.saveAccounts([
+      for (final a in all) a.id == target.id ? a.copyWith(exchangeRateToMain: perMain, rateUpdatedAt: date) : a,
+    ]);
+  }
+
   Future<void> _save() async {
     final amount = parseAmount(amountCtrl.text);
     if (amount == null || amount <= 0) {
@@ -9746,6 +9999,7 @@ class _TransferScreenState extends State<TransferScreen> {
         return;
       }
       convertedAmount = amount * rate;
+      if (useAsDayRate) await _applyDayRate(rate);
     }
     int? recDay;
     int? recWeekday;
@@ -9884,6 +10138,18 @@ class _TransferScreenState extends State<TransferScreen> {
                 ),
               );
             }),
+            if (_dayRateTarget() != null)
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: useAsDayRate,
+                onChanged: (v) => setState(() => useAsDayRate = v ?? false),
+                title: const Text('این نرخ، نرخ روز برای محاسبه‌ی موجودی کل باشد', style: TextStyle(fontSize: 13)),
+                subtitle: Text(
+                  'نرخ روز ${_dayRateTarget()!.name} با این نرخ به‌روز می‌شود.',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
           ],
           const SizedBox(height: 16),
           ListTile(
@@ -14723,7 +14989,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     // which can be freely toggled between each other (a fixed x10 / x0.1
     // relationship, so no rate needs to be typed in for that swap).
     final currencyLocked = existing != null && !(existing.currency == 'IRR' || existing.currency == 'IRT');
-    final rateCtrl = TextEditingController(text: existing != null && existing.exchangeRateToMain != 1.0 ? formatAmountInput(existing.exchangeRateToMain, maxDecimals: 6) : '');
+    final rateCtrl = TextEditingController();
     final result = await showDialog<Account>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
@@ -14777,9 +15043,10 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: const [AmountInputFormatter()],
                     decoration: InputDecoration(
-                      labelText: '۱ ${currencyLabel(currency)} = ? ${currencyLabel(mainCur)}',
-                      helperText: 'برای نمایش موجودی کل به واحد حساب اصلی در صفحه‌ی اصلی لازمه.',
-                      helperMaxLines: 2,
+                      labelText: 'نرخ روز (اختیاری): ${dayRateLabel(currency, mainCur)}',
+                      helperText: 'فقط برای نمایش موجودی کل در صفحه‌ی اصلی. می‌تونی خالی بذاری و بعداً از صفحه‌ی اصلی '
+                          'یا هنگام انتقال پول به این حساب تنظیمش کنی.',
+                      helperMaxLines: 4,
                     ),
                   ),
                 ],
@@ -14805,8 +15072,14 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   currency: currency,
                   initialBalance: parseAmount(balanceCtrl.text) ?? 0,
                   exchangeRateToMain: needsRate
-                      ? (parseAmount(rateCtrl.text) ?? 1.0)
+                      ? (() {
+                          final typed = parseAmount(rateCtrl.text);
+                          return typed == null || typed <= 0 ? 1.0 : dayRateFromInput(typed, currency, mainCur);
+                        })()
                       : (existing?.exchangeRateToMain ?? 1.0),
+                  rateUpdatedAt: needsRate
+                      ? ((parseAmount(rateCtrl.text) ?? 0) > 0 ? DateTime.now() : null)
+                      : existing?.rateUpdatedAt,
                 );
                 Navigator.pop(ctx, acc);
               },
@@ -14839,31 +15112,12 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   /// thing about a non-main account's currency that can change after it's
   /// created.
   Future<void> _editExchangeRate(Account a) async {
-    final mainCur = mainCurrencyOf(accounts);
-    final rateCtrl = TextEditingController(text: formatAmountInput(a.exchangeRateToMain, maxDecimals: 6));
-    final rate = await showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('ویرایش ضریب تبدیل'),
-        content: TextField(
-          controller: rateCtrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          inputFormatters: const [AmountInputFormatter()],
-          decoration: InputDecoration(labelText: '۱ ${currencyLabel(a.currency)} = ? ${currencyLabel(mainCur)}', border: const OutlineInputBorder()),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, parseAmount(rateCtrl.text)), child: Text(tr('save'))),
-        ],
-      ),
-    );
-    if (rate == null || rate <= 0) return;
+    final updated = await editDayRate(context, a, mainCurrencyOf(accounts));
+    if (updated == null || !mounted) return;
     setState(() {
       final idx = accounts.indexWhere((x) => x.id == a.id);
-      if (idx >= 0) accounts[idx] = accounts[idx].copyWith(exchangeRateToMain: rate);
+      if (idx >= 0) accounts[idx] = updated;
     });
-    await Store.saveAccounts(accounts);
   }
 
   /// Rial <-> Toman is the only currency swap allowed on an existing
@@ -15016,7 +15270,8 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                     title: Text(a.name),
                     subtitle: Text(
                       a.currency != mainCur
-                          ? '${a.type.label} • ${currencyLabel(a.currency)} • نرخ به ${currencyLabel(mainCur)}: ${formatAmountInput(a.exchangeRateToMain, maxDecimals: 6)}'
+                          ? '${a.type.label} • ${currencyLabel(a.currency)} • نرخ روز: '
+                              '${a.rateUpdatedAt == null && a.exchangeRateToMain == 1.0 ? 'تنظیم نشده' : dayRateText(a, mainCur)}'
                           : (a.initialBalance != 0
                               ? '${a.type.label} • ${currencyLabel(a.currency)} • موجودی اولیه: ${ltr(formatMoney(a.initialBalance, a.currency))}'
                               : '${a.type.label} • ${currencyLabel(a.currency)}'),
@@ -15027,7 +15282,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                         if (a.currency != mainCur)
                           IconButton(
                             icon: const Icon(Icons.currency_exchange, size: 20),
-                            tooltip: 'ویرایش ضریب تبدیل',
+                            tooltip: 'ویرایش نرخ روز',
                             onPressed: () => _editExchangeRate(a),
                           ),
                         IconButton(icon: const Icon(Icons.edit_outlined), onPressed: () => _editAccount(existing: a)),
