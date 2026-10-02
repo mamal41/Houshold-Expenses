@@ -5968,13 +5968,17 @@ class ReceiptImageScreen extends StatelessWidget {
 }
 
 class DraftsScreen extends StatefulWidget {
-  const DraftsScreen({super.key});
+  /// 0 = scanned/manual drafts, 1 = drafts imported from a bank statement.
+  final int initialTab;
+  const DraftsScreen({this.initialTab = 0, super.key});
   @override
   State<DraftsScreen> createState() => _DraftsScreenState();
 }
 
 class _DraftsScreenState extends State<DraftsScreen> {
-  List<Transaction> tx = [];
+  List<Transaction> all = [];
+  List<Transaction> tx = []; // drafts other than bank-statement ones
+  List<Transaction> bankTx = []; // drafts imported from a bank statement
   List<Category> categories = [];
   List<Account> accounts = [];
   bool loading = true;
@@ -5986,12 +5990,19 @@ class _DraftsScreenState extends State<DraftsScreen> {
   }
 
   Future<void> _load() async {
-    final all = await Store.loadTransactions();
-    tx = all.where((t) => t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+    all = await Store.loadTransactions();
+    final drafts = all.where((t) => t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+    tx = drafts.where((t) => !isBankImportId(t.id)).toList();
+    bankTx = drafts.where((t) => isBankImportId(t.id)).toList();
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
-    setState(() => loading = false);
+    if (mounted) setState(() => loading = false);
   }
+
+  /// Saved transactions (and other drafts) that may be the same booking as
+  /// the bank-statement draft [t].
+  List<Transaction> _duplicatesOf(Transaction t) =>
+      possibleDuplicatesOf(t, all.where((x) => !(x.draft && isBankImportId(x.id) && x.id.compareTo(t.id) > 0)).toList());
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
@@ -6017,71 +6028,350 @@ class _DraftsScreenState extends State<DraftsScreen> {
     await _load();
   }
 
+  Future<void> _compare(Transaction t, List<Transaction> candidates) async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DuplicateCompareScreen(draft: t, candidates: candidates, categories: categories, accounts: accounts),
+      ),
+    );
+    if (changed == true) await _load();
+  }
+
   Future<void> _delete(Transaction t) async {
     await NotificationService.instance.cancelForTransaction(t.id);
     await Store.deleteTransaction(t.id);
     await _load();
   }
 
+  Widget _tile(Transaction t, {List<Transaction> duplicates = const []}) {
+    return Dismissible(
+      key: ValueKey(t.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        color: Colors.red.shade400,
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (_) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('حذف پیش‌نویس'),
+          content: const Text('این پیش‌نویس حذف شود؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
+          ],
+        ),
+      ),
+      onDismissed: (_) => _delete(t),
+      child: Card(
+        child: Column(
+          children: [
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+                child: Icon(
+                  iconForCategory(
+                    categories.where((c) => c.id == t.categoryId).isEmpty
+                        ? Category(id: t.categoryId, name: '', type: t.type)
+                        : categories.firstWhere((c) => c.id == t.categoryId),
+                    categories,
+                  ),
+                  color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+                ),
+              ),
+              title: Text(t.merchant.isNotEmpty ? '${categoryName(t.categoryId)} • ${t.merchant}' : categoryName(t.categoryId)),
+              subtitle: Text(
+                isBankImportId(t.id) && t.note.isNotEmpty
+                    ? '${formatDate(t.date)} • ${t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim()}'
+                    : formatDate(t.date),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Text(
+                ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
+                ),
+              ),
+              onTap: () => _openEditor(t),
+            ),
+            if (duplicates.isNotEmpty)
+              InkWell(
+                onTap: () => _compare(t, duplicates),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.content_copy_outlined, size: 16, color: Colors.orange.shade800),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'احتمالاً تکراری است (${persianDigits('${duplicates.length}')} تراکنش مشابه)',
+                          style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
+                        ),
+                      ),
+                      Text('مقایسه', style: TextStyle(color: Colors.orange.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
+                      Icon(Icons.chevron_left, size: 18, color: Colors.orange.shade900),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final bankWithDup = [for (final t in bankTx) (t: t, dups: _duplicatesOf(t))];
+    final dupCount = bankWithDup.where((e) => e.dups.isNotEmpty).length;
+    return DefaultTabController(
+      length: 2,
+      initialIndex: widget.initialTab,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(tr('drafts')),
+          bottom: TabBar(
+            tabs: [
+              Tab(text: 'اسکن و دستی (${persianDigits('${tx.length}')})'),
+              Tab(text: 'صورتحساب بانک (${persianDigits('${bankTx.length}')})'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            tx.isEmpty
+                ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
+                : ListView(padding: const EdgeInsets.all(16), children: tx.map((t) => _tile(t)).toList()),
+            bankTx.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'تراکنشی از صورتحساب بانک منتظر بررسی نیست.\nاز منوی «بارگذاری صورتحساب بانکی» فایل CSV یا PDF را وارد کن.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      if (dupCount > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            '${persianDigits('$dupCount')} مورد احتمالاً قبلاً ثبت شده‌اند؛ روی «مقایسه» بزن تا کنار تراکنش ثبت‌شده ببینی و تصمیم بگیری.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                          ),
+                        ),
+                      ...bankWithDup.map((e) => _tile(e.t, duplicates: e.dups)),
+                    ],
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A bank-statement draft side by side with a saved transaction that may be
+/// the same booking, with what to do about it: drop the draft as a
+/// duplicate, keep it as a new transaction, or fill in what the saved one
+/// is missing from it and drop the draft.
+class DuplicateCompareScreen extends StatefulWidget {
+  final Transaction draft;
+  final List<Transaction> candidates;
+  final List<Category> categories;
+  final List<Account> accounts;
+  const DuplicateCompareScreen({
+    required this.draft,
+    required this.candidates,
+    required this.categories,
+    required this.accounts,
+    super.key,
+  });
+  @override
+  State<DuplicateCompareScreen> createState() => _DuplicateCompareScreenState();
+}
+
+class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
+  int selected = 0;
+  bool busy = false;
+
+  Transaction get other => widget.candidates[selected];
+
+  String _category(String id) => widget.categories.where((c) => c.id == id).firstOrNull?.name ?? 'بدون‌دسته';
+  Account? _account(String id) => widget.accounts.where((a) => a.id == id).firstOrNull;
+  String _money(Transaction t) => formatMoney(t.amount, _account(t.accountId)?.currency ?? 'IRT');
+  String _note(Transaction t) => t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim();
+
+  Future<void> _deleteDraft() async {
+    setState(() => busy = true);
+    await Store.deleteTransaction(widget.draft.id);
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  Future<void> _keepAsNew() async {
+    setState(() => busy = true);
+    await Store.upsertTransaction(widget.draft.copyWith(draft: false));
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  /// Copies what the saved transaction is missing (shop/payee, bank text)
+  /// from the draft, then removes the draft.
+  Future<void> _merge() async {
+    setState(() => busy = true);
+    final d = widget.draft;
+    final o = other;
+    final bankText = _note(d);
+    final merged = o.copyWith(
+      merchant: o.merchant.trim().isEmpty && d.merchant.trim().isNotEmpty ? d.merchant : null,
+      note: bankText.isNotEmpty && !o.note.contains(bankText)
+          ? (o.note.trim().isEmpty ? bankText : '${o.note}\n$bankText')
+          : null,
+    );
+    await Store.upsertTransaction(merged);
+    await Store.deleteTransaction(d.id);
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  Widget _row(String label, String a, String b) {
+    final differs = a.trim() != b.trim();
+    final style = TextStyle(fontSize: 13, color: differs ? Colors.orange.shade900 : null, fontWeight: differs ? FontWeight.w600 : null);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: differs ? Colors.orange.shade50 : null,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 72, child: Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade700))),
+          Expanded(child: Text(a.isEmpty ? '—' : a, style: style)),
+          const SizedBox(width: 8),
+          Expanded(child: Text(b.isEmpty ? '—' : b, style: style)),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.draft;
+    final o = other;
     return Scaffold(
-      appBar: AppBar(title: Text(tr('drafts'))),
-      body: tx.isEmpty
-          ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: tx.map((t) => Dismissible(
-                    key: ValueKey(t.id),
-                    direction: DismissDirection.endToStart,
-                    background: Container(
-                      alignment: Alignment.centerLeft,
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      color: Colors.red.shade400,
-                      child: const Icon(Icons.delete, color: Colors.white),
-                    ),
-                    confirmDismiss: (_) => showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('حذف پیش‌نویس'),
-                        content: const Text('این پیش‌نویس حذف شود؟'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
-                        ],
-                      ),
-                    ),
-                    onDismissed: (_) => _delete(t),
-                    child: Card(
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
-                          child: Icon(
-                            iconForCategory(
-                              categories.where((c) => c.id == t.categoryId).isEmpty
-                                  ? Category(id: t.categoryId, name: '', type: t.type)
-                                  : categories.firstWhere((c) => c.id == t.categoryId),
-                              categories,
-                            ),
-                            color: t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
-                          ),
-                        ),
-                        title: Text(categoryName(t.categoryId)),
-                        subtitle: Text(formatDate(t.date)),
-                        trailing: Text(
-                          ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
-                          ),
-                        ),
-                        onTap: () => _openEditor(t),
-                      ),
-                    ),
-                  ))
-                  .toList(),
+      appBar: AppBar(title: const Text('مقایسه‌ی تراکنش مشابه')),
+      bottomNavigationBar: pinnedBottomButtons(context, [
+        OutlinedButton(
+          onPressed: busy ? null : _keepAsNew,
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          child: const Text('تکراری نیست، ثبت شود', textAlign: TextAlign.center),
+        ),
+        FilledButton(
+          onPressed: busy ? null : _deleteDraft,
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: Colors.red.shade600),
+          child: const Text('تکراری است، حذف شود', textAlign: TextAlign.center),
+        ),
+      ]),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (widget.candidates.length > 1) ...[
+            const Text('چند تراکنش مشابه پیدا شد؛ یکی را برای مقایسه انتخاب کن:', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (var i = 0; i < widget.candidates.length; i++)
+                  ChoiceChip(
+                    label: Text('${formatDate(widget.candidates[i].date)}${widget.candidates[i].draft ? ' (پیش‌نویس)' : ''}'),
+                    selected: selected == i,
+                    onSelected: (_) => setState(() => selected = i),
+                  ),
+              ],
             ),
+            const SizedBox(height: 12),
+          ],
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                Container(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 72),
+                      const Expanded(child: Text('از صورتحساب بانک', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          o.draft ? 'پیش‌نویس موجود' : 'ثبت‌شده‌ی قبلی',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _row('تاریخ', formatDate(d.date), formatDate(o.date)),
+                _row('مبلغ', _money(d), _money(o)),
+                _row('نوع', d.type == TxType.income ? 'درآمد' : 'هزینه', o.type == TxType.income ? 'درآمد' : 'هزینه'),
+                _row('دسته‌بندی', _category(d.categoryId), _category(o.categoryId)),
+                _row('حساب', _account(d.accountId)?.name ?? '', _account(o.accountId)?.name ?? ''),
+                _row('فروشنده', d.merchant, o.merchant),
+                _row('توضیح', _note(d), o.note),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'ردیف‌های نارنجی با هم فرق دارند.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: busy ? null : _merge,
+            icon: const Icon(Icons.merge_type),
+            label: const Text('تکراری است؛ اطلاعات بانک به تراکنش ثبت‌شده اضافه شود'),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: busy
+                ? null
+                : () async {
+                    final result = await Navigator.push<Object>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TransactionEditor(categories: widget.categories, accounts: widget.accounts, existing: d),
+                      ),
+                    );
+                    if (result is DeleteTransactionSignal) {
+                      await Store.deleteTransaction(result.id);
+                    } else if (result is Transaction) {
+                      await Store.upsertTransaction(result);
+                    } else {
+                      return;
+                    }
+                    if (context.mounted) Navigator.pop(context, true);
+                  },
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('ویرایش پیش‌نویس بانک'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -8087,6 +8377,160 @@ String _detectDelimiter(String firstLine) {
 
 const _csvDateFormats = ['dd.MM.yyyy', 'yyyy-MM-dd', 'dd/MM/yyyy', 'MM/dd/yyyy', 'dd-MM-yyyy'];
 
+/// One booking read from a bank statement (CSV or PDF). [amount] is
+/// negative for money leaving the account.
+typedef StatementRow = ({DateTime date, double amount, String desc, String? merchant, String? categoryHint});
+
+/// Transactions imported from a bank statement get ids with one of these
+/// prefixes, which is how the drafts screen keeps them in their own tab.
+bool isBankImportId(String id) => id.startsWith('csv_') || id.startsWith('bank_');
+
+/// Already saved transactions that look like the same booking as [t]: same
+/// account, type and amount, dated within 3 days of it.
+List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) {
+  return all
+      .where((x) =>
+          x.id != t.id &&
+          x.accountId == t.accountId &&
+          x.type == t.type &&
+          (x.amount - t.amount).abs() < 0.01 &&
+          x.date.difference(t.date).inDays.abs() <= 3)
+      .toList()
+    ..sort((a, b) => a.date.difference(t.date).inDays.abs().compareTo(b.date.difference(t.date).inDays.abs()));
+}
+
+/// Best guess of a category for a booking text: a known shop name first,
+/// then any of the person's category names that appears in the text.
+Category? guessCategoryForText(String text, TxType type, List<Category> categories) {
+  final lower = text.toLowerCase();
+  for (final e in _knownMerchants.entries) {
+    if (lower.contains(e.key.toLowerCase())) {
+      final c = categories.where((c) => c.id == e.value && c.type == type).firstOrNull;
+      if (c != null) return c;
+    }
+  }
+  final candidates = categories.where((c) => c.type == type && c.name.trim().length >= 3).toList()
+    ..sort((a, b) => b.name.length.compareTo(a.name.length));
+  for (final c in candidates) {
+    if (lower.contains(c.name.toLowerCase())) return c;
+  }
+  return null;
+}
+
+/// Known shop name found in a booking text, used as the merchant.
+String? merchantInText(String text) {
+  final lower = text.toLowerCase();
+  for (final k in _knownMerchants.keys) {
+    if (lower.contains(k.toLowerCase())) return k;
+  }
+  return null;
+}
+
+String _bankStatementPrompt(List<Category> categories) =>
+    'You are reading one page of a bank account statement (any country or language). Extract every booked '
+    'transaction on this page. Respond ONLY with compact JSON, no markdown, in exactly this shape: '
+    '{"currency": string or null, "transactions": [{"date": "YYYY-MM-DD", "amount": number, "description": '
+    'string, "counterparty": string or null, "category": string or null}]}. "amount" is negative for money '
+    'leaving the account (payments, card purchases, debits, Soll, برداشت) and positive for money coming in '
+    '(salary, refunds, credits, Haben, واریز). Use the booking date; if dates are in the Persian (Jalali/Shamsi) '
+    'calendar, convert them to Gregorian. Ignore opening/closing balances, page totals and summaries. '
+    '"description" is the booking text as printed, at most 120 characters. "counterparty" is the merchant, payee '
+    'or payer name if shown. "currency" is the ISO 4217 code of the amounts ("IRR" for ریال, "IRT" for تومان). '
+    '"category" is the best fitting one of these categories of the person, copied exactly, or null if none fits: '
+    '${categories.where((c) => !c.id.startsWith('_')).map((c) => c.name).toSet().join(', ')}. '
+    'Numbers must be plain (no currency symbols, no thousands separators). If the page has no transactions, '
+    'return an empty list.';
+
+List<StatementRow> _statementRowsFromJson(Map<String, dynamic> json) {
+  final list = json['transactions'];
+  if (list is! List) return [];
+  final result = <StatementRow>[];
+  for (final e in list.whereType<Map>()) {
+    final date = DateTime.tryParse((e['date'] ?? '').toString());
+    final amount = (e['amount'] is num) ? (e['amount'] as num).toDouble() : double.tryParse('${e['amount']}');
+    if (date == null || amount == null || amount == 0) continue;
+    final counterparty = e['counterparty']?.toString().trim();
+    result.add((
+      date: DateTime(date.year, date.month, date.day),
+      amount: amount,
+      desc: (e['description'] ?? '').toString().trim(),
+      merchant: (counterparty == null || counterparty.isEmpty || counterparty == 'null') ? null : counterparty,
+      categoryHint: e['category']?.toString(),
+    ));
+  }
+  return result;
+}
+
+/// Offline fallback for a statement page read by on-device OCR: every line
+/// with a date and an amount becomes a booking. Amounts marked with a minus
+/// sign (before or after), "S"/"Soll" or "-" are outgoing; "+"/"H" incoming;
+/// unmarked amounts are treated as outgoing.
+List<StatementRow> parseStatementText(String text) {
+  final dateRe = RegExp(r'(\d{1,2})[./](\d{1,2})[./](\d{2,4})|(\d{4})-(\d{1,2})-(\d{1,2})');
+  final amountRe = RegExp(r'([+-]?)\s?(\d{1,3}(?:[.,\s]\d{3})*[.,]\d{2})\s?([+-]|S\b|H\b)?');
+  final result = <StatementRow>[];
+  for (final raw in text.split('\n')) {
+    final line = raw.trim();
+    final dm = dateRe.firstMatch(line);
+    if (dm == null) continue;
+    final rest = line.substring(dm.end);
+    final amounts = amountRe.allMatches(rest).toList();
+    if (amounts.isEmpty) continue;
+    final am = amounts.first;
+    final value = _parseAmountToken(am.group(2)!.replaceAll(' ', ''));
+    if (value == null || value == 0) continue;
+    int y, m, d;
+    if (dm.group(4) != null) {
+      y = int.parse(dm.group(4)!);
+      m = int.parse(dm.group(5)!);
+      d = int.parse(dm.group(6)!);
+    } else {
+      d = int.parse(dm.group(1)!);
+      m = int.parse(dm.group(2)!);
+      y = int.parse(dm.group(3)!);
+      if (y < 100) y += 2000;
+    }
+    if (m < 1 || m > 12 || d < 1 || d > 31) continue;
+    final incoming = am.group(1) == '+' || am.group(3) == '+' || am.group(3) == 'H';
+    final desc = rest.replaceRange(am.start, am.end, ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    result.add((
+      date: DateTime(y, m, d),
+      amount: incoming ? value : -value,
+      desc: desc,
+      merchant: merchantInText(desc),
+      categoryHint: null,
+    ));
+  }
+  return result;
+}
+
+/// Renders each page of a PDF (up to [maxPages]) to its own temporary JPEG,
+/// for reading bank statements page by page.
+Future<List<String>> renderPdfPagesToImages(String path, {int maxPages = 12}) async {
+  final doc = await PdfDocument.openFile(path);
+  try {
+    final dir = await getTemporaryDirectory();
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final out = <String>[];
+    final count = min(doc.pagesCount, maxPages);
+    for (var i = 1; i <= count; i++) {
+      final page = await doc.getPage(i);
+      const maxDim = 1800.0;
+      var scale = 2.0;
+      final longest = page.width > page.height ? page.width : page.height;
+      if (longest * scale > maxDim) scale = maxDim / longest;
+      final rendered = await page.render(width: page.width * scale, height: page.height * scale, format: PdfPageImageFormat.jpeg);
+      await page.close();
+      final outPath = '${dir.path}/statement_${stamp}_$i.jpg';
+      await File(outPath).writeAsBytes(rendered!.bytes);
+      out.add(outPath);
+    }
+    return out;
+  } finally {
+    await doc.close();
+  }
+}
+
 class CsvImportScreen extends StatefulWidget {
   const CsvImportScreen({super.key});
   @override
@@ -8108,8 +8552,11 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   Category? defaultExpenseCategory;
   Category? defaultIncomeCategory;
 
-  List<({DateTime date, double amount, String desc})>? preview;
+  List<StatementRow>? preview;
   bool importing = false;
+  bool readingPdf = false;
+  String pdfProgress = '';
+  String? detectedCurrency;
 
   @override
   void initState() {
@@ -8126,8 +8573,12 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   }
 
   Future<void> _pickFile() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'pdf']);
     if (result == null || result.files.single.path == null) return;
+    if (result.files.single.path!.toLowerCase().endsWith('.pdf')) {
+      await _readPdf(result.files.single.path!);
+      return;
+    }
     final content = await File(result.files.single.path!).readAsString();
     final detectedDelimiter = _detectDelimiter(content.split('\n').first);
     final parsed = _parseCsv(content, detectedDelimiter);
@@ -8147,12 +8598,68 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     });
   }
 
+  /// Reads a PDF statement page by page - with the AI when a Gemini key is
+  /// set (it also suggests a category and the shop/payee), otherwise with
+  /// on-device text recognition and a simpler line-by-line reading.
+  Future<void> _readPdf(String path) async {
+    setState(() {
+      readingPdf = true;
+      pdfProgress = 'در حال آماده‌سازی صفحات...';
+      rows = null;
+      preview = null;
+      detectedCurrency = null;
+    });
+    try {
+      final pages = await renderPdfPagesToImages(path);
+      final key = (await Store.loadGeminiKey())?.trim();
+      final result = <StatementRow>[];
+      String? currency;
+      Object? aiError;
+      for (var i = 0; i < pages.length; i++) {
+        if (!mounted) return;
+        setState(() => pdfProgress = 'در حال خواندن صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pages.length}')}...');
+        List<StatementRow>? pageRows;
+        if (key != null && key.isNotEmpty && aiError == null) {
+          try {
+            final json = await _geminiRequest(key, pages[i], _bankStatementPrompt(categories));
+            if (json != null) {
+              currency ??= normalizeCurrency(json['currency']);
+              pageRows = _statementRowsFromJson(json);
+            }
+          } catch (e) {
+            aiError = e;
+          }
+        }
+        pageRows ??= parseStatementText(await extractTextFromImage(pages[i]));
+        result.addAll(pageRows);
+      }
+      if (!mounted) return;
+      result.sort((a, b) => a.date.compareTo(b.date));
+      setState(() {
+        readingPdf = false;
+        preview = result;
+        detectedCurrency = currency;
+      });
+      if (aiError != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${aiError is GeminiException ? aiError.friendlyMessage : 'خواندن هوشمند ممکن نشد.'} '
+              'بقیه‌ی صفحات با خواندن خودکار ساده خوانده شد؛ نتیجه را با دقت بررسی کنید.'),
+          duration: const Duration(seconds: 6),
+        ));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => readingPdf = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خواندن فایل PDF ممکن نشد.')));
+    }
+  }
+
   void _buildPreview() {
     if (rows == null || dateCol == null || descCol == null) return;
     if (!useSeparateDebitCredit && amountCol == null) return;
     if (useSeparateDebitCredit && (debitCol == null || creditCol == null)) return;
     final format = DateFormat(dateFormat);
-    final result = <({DateTime date, double amount, String desc})>[];
+    final result = <StatementRow>[];
     for (var i = 1; i < rows!.length; i++) {
       final row = rows![i];
       if (row.length <= dateCol!) continue;
@@ -8186,61 +8693,97 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       }
       if (amount == null || amount == 0) continue;
       final desc = descCol! < row.length ? row[descCol!].trim() : '';
-      result.add((date: date, amount: amount, desc: desc));
+      result.add((date: date, amount: amount, desc: desc, merchant: merchantInText(desc), categoryHint: null));
     }
     setState(() => preview = result);
   }
 
-  bool _isDuplicate(DateTime date, double amount, String accountId) {
+  /// The very same booking was already imported earlier (same statement
+  /// read twice) - skipped instead of piling up copies.
+  bool _alreadyImported(StatementRow p, String accountId) {
     return existingTx.any((t) =>
+        isBankImportId(t.id) &&
         t.accountId == accountId &&
-        t.date.year == date.year &&
-        t.date.month == date.month &&
-        t.date.day == date.day &&
-        (t.amount - amount.abs()).abs() < 0.01);
+        t.date.year == p.date.year &&
+        t.date.month == p.date.month &&
+        t.date.day == p.date.day &&
+        (t.amount - p.amount.abs()).abs() < 0.01 &&
+        (p.desc.isEmpty || t.note.contains(p.desc)));
+  }
+
+  Transaction _toDraft(StatementRow p, int index) {
+    final type = p.amount >= 0 ? TxType.income : TxType.expense;
+    final cat = _matchCategoryHint(p.categoryHint, categories, type) ??
+        guessCategoryForText('${p.merchant ?? ''} ${p.desc}', type, categories) ??
+        (type == TxType.income ? defaultIncomeCategory : defaultExpenseCategory);
+    return Transaction(
+      id: 'bank_${DateTime.now().microsecondsSinceEpoch}_$index',
+      type: type,
+      amount: p.amount.abs(),
+      categoryId: cat?.id ?? (type == TxType.income ? 'i_misc' : 'e_misc'),
+      accountId: targetAccount!.id,
+      date: p.date,
+      merchant: type == TxType.expense ? (p.merchant ?? '') : '',
+      note: 'از صورتحساب بانکی خوانده شده است.${p.desc.isNotEmpty ? ' ${p.desc}' : ''}',
+      // Bank-statement rows aren't registered directly - they land in their
+      // own drafts tab so each one can be reviewed (and compared with a
+      // possible duplicate) before it counts toward any totals.
+      draft: true,
+    );
+  }
+
+  int _possibleDuplicateCount() {
+    if (preview == null || targetAccount == null) return 0;
+    final confirmed = existingTx.where((t) => !isBankImportId(t.id) || !t.draft).toList();
+    var n = 0;
+    for (var i = 0; i < preview!.length; i++) {
+      if (possibleDuplicatesOf(_toDraft(preview![i], i), confirmed).isNotEmpty) n++;
+    }
+    return n;
   }
 
   Future<void> _import() async {
     if (preview == null || targetAccount == null) return;
     setState(() => importing = true);
-    var imported = 0, skipped = 0;
-    for (final p in preview!) {
-      if (_isDuplicate(p.date, p.amount, targetAccount!.id)) {
+    var imported = 0, skipped = 0, possibleDup = 0;
+    final drafts = <Transaction>[];
+    for (var i = 0; i < preview!.length; i++) {
+      final p = preview![i];
+      if (_alreadyImported(p, targetAccount!.id)) {
         skipped++;
         continue;
       }
-      final type = p.amount >= 0 ? TxType.income : TxType.expense;
-      final cat = type == TxType.income ? defaultIncomeCategory : defaultExpenseCategory;
-      final bankNote = 'از صورتحساب بانکی خوانده شده است.${p.desc.isNotEmpty ? ' ${p.desc}' : ''}';
-      await Store.upsertTransaction(Transaction(
-        id: 'csv_${DateTime.now().microsecondsSinceEpoch}_$imported',
-        type: type,
-        amount: p.amount.abs(),
-        categoryId: cat?.id ?? (type == TxType.income ? 'i_misc' : 'e_misc'),
-        accountId: targetAccount!.id,
-        date: p.date,
-        note: bankNote,
-        // Bank-statement rows aren't registered directly - they land in
-        // drafts so the person can review/categorize each one before it
-        // counts toward any totals.
-        draft: true,
-      ));
+      final d = _toDraft(p, i);
+      if (possibleDuplicatesOf(d, existingTx).isNotEmpty) possibleDup++;
+      drafts.add(d);
+    }
+    for (final d in drafts) {
+      await Store.upsertTransaction(d);
       imported++;
     }
     if (!mounted) return;
     setState(() => importing = false);
-    await showDialog<void>(
+    final open = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('نتیجه‌ی بارگذاری'),
         content: Text(
-          '$imported تراکنش به‌صورت پیش‌نویس ذخیره شد (برای بررسی نهایی به «پیش‌نویس‌ها» سر بزن).'
-          '${skipped > 0 ? ' $skipped مورد چون تکراری به نظر می‌رسیدند رد شدند.' : ''}',
+          '${persianDigits('$imported')} تراکنش به‌صورت پیش‌نویس در بخش «صورتحساب بانک» پیش‌نویس‌ها ذخیره شد.'
+          '${possibleDup > 0 ? '\n${persianDigits('$possibleDup')} مورد احتمالاً تکراری است؛ آن‌جا می‌توانی با تراکنش ثبت‌شده مقایسه‌اش کنی.' : ''}'
+          '${skipped > 0 ? '\n${persianDigits('$skipped')} مورد قبلاً از صورتحساب بارگذاری شده بود و دوباره اضافه نشد.' : ''}',
         ),
-        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('confirm')))],
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('confirm'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('مشاهده‌ی پیش‌نویس‌ها')),
+        ],
       ),
     );
-    if (mounted) Navigator.pop(context);
+    if (!mounted) return;
+    if (open == true) {
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DraftsScreen(initialTab: 1)));
+    } else {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -8252,18 +8795,31 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (rows == null)
+          if (readingPdf)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Column(
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(pdfProgress, textAlign: TextAlign.center),
+                ],
+              ),
+            )
+          else if (rows == null && preview == null)
             Column(
               children: [
                 const Text(
-                  'فایل CSV صادرشده از بانکت رو انتخاب کن. اکثر بانک‌ها امکان دانلود صورتحساب به‌صورت CSV دارن.',
+                  'فایل صورتحساب بانک را انتخاب کن: CSV (اکثر بانک‌ها امکان دانلودش را دارند) یا PDF. '
+                  'PDF با هوش مصنوعی خوانده می‌شود (اگر کلید Gemini وارد شده باشد) و دسته‌بندی و طرف حساب هم حدس زده می‌شود.',
                   style: TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 16),
-                FilledButton.icon(onPressed: _pickFile, icon: const Icon(Icons.upload_file), label: const Text('انتخاب فایل CSV')),
+                FilledButton.icon(onPressed: _pickFile, icon: const Icon(Icons.upload_file), label: const Text('انتخاب فایل CSV یا PDF')),
               ],
             )
           else ...[
+            if (rows != null) ...[
             Text('${rows!.length - 1} ردیف پیدا شد. ستون‌های مربوطه رو مشخص کن:', style: const TextStyle(fontSize: 13)),
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
@@ -8338,9 +8894,20 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             ],
             const SizedBox(height: 16),
             OutlinedButton(onPressed: _buildPreview, child: const Text('پیش‌نمایش')),
+            ],
             if (preview != null) ...[
               const SizedBox(height: 16),
-              Text('${preview!.length} تراکنش قابل‌بارگذاری پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text('${persianDigits('${preview!.length}')} تراکنش قابل‌بارگذاری پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
+              if (_possibleDuplicateCount() > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '${persianDigits('${_possibleDuplicateCount()}')} مورد احتمالاً قبلاً ثبت شده؛ بعد از ذخیره می‌توانی مقایسه‌شان کنی.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+                  ),
+                ),
+              if (detectedCurrency != null && targetAccount != null && detectedCurrency != targetAccount!.currency)
+                currencyMismatchWarning(detectedCurrency!, targetAccount!.currency),
               const SizedBox(height: 12),
               DropdownButtonFormField<Account>(
                 initialValue: targetAccount,
@@ -8367,13 +8934,20 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 onChanged: (v) => setState(() => defaultIncomeCategory = v),
               ),
               const SizedBox(height: 8),
-              const Text('می‌تونی بعداً دسته‌بندی هرکدوم رو جدا اصلاح کنی.', style: TextStyle(fontSize: 11, color: Colors.grey)),
+              const Text(
+                'هر تراکنش در صورت امکان دسته‌بندی حدس‌زده‌ی خودش را می‌گیرد؛ این‌ها فقط برای بقیه است. بعداً هم می‌توانی هرکدام را اصلاح کنی.',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
+              ),
               const SizedBox(height: 12),
               ...preview!.take(5).map((p) => Card(
                     child: ListTile(
                       dense: true,
-                      title: Text(p.desc.isEmpty ? '(بدون توضیح)' : p.desc, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(formatDate(p.date)),
+                      title: Text(
+                        p.merchant ?? (p.desc.isEmpty ? '(بدون توضیح)' : p.desc),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text('${formatDate(p.date)}${p.categoryHint != null ? ' • ${p.categoryHint}' : ''}'),
                       trailing: Text(
                         ltr(persianDigits(p.amount.toStringAsFixed(2))),
                         style: TextStyle(color: p.amount >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.w600),
