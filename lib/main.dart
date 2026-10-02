@@ -8504,28 +8504,95 @@ List<StatementRow> parseStatementText(String text) {
   return result;
 }
 
-/// A PDF bank statement kept on the device to be read with the AI later
-/// (e.g. after the AI was busy or out of quota).
+Map<String, dynamic> _rowToJson(StatementRow r) => {
+      'date': r.date.toIso8601String(),
+      'amount': r.amount,
+      'desc': r.desc,
+      'merchant': r.merchant,
+      'categoryHint': r.categoryHint,
+    };
+
+StatementRow _rowFromJson(Map<String, dynamic> j) => (
+      date: DateTime.parse(j['date']),
+      amount: (j['amount'] as num).toDouble(),
+      desc: (j['desc'] ?? '').toString(),
+      merchant: j['merchant']?.toString(),
+      categoryHint: j['categoryHint']?.toString(),
+    );
+
+/// A PDF bank statement kept on the device while it's read with the AI
+/// page by page: free/limited AI quota rarely covers a whole statement in
+/// one go, so every page read is stored right away, its bookings can be
+/// imported, and later attempts continue with the remaining pages only.
 class PendingStatement {
   final String id;
   final String path; // copy in the app's own storage
   final String name; // original file name
   final DateTime addedAt;
-  const PendingStatement({required this.id, required this.path, required this.name, required this.addedAt});
+  final int? pageCount;
+  final Map<int, List<StatementRow>> pageRows; // read by the AI, not imported yet
+  final Set<int> importedPages; // bookings already imported as drafts
+  final String? currency;
+  const PendingStatement({
+    required this.id,
+    required this.path,
+    required this.name,
+    required this.addedAt,
+    this.pageCount,
+    this.pageRows = const {},
+    this.importedPages = const {},
+    this.currency,
+  });
 
-  Map<String, dynamic> toJson() => {'id': id, 'path': path, 'name': name, 'addedAt': addedAt.toIso8601String()};
+  int get pagesDone => {...pageRows.keys, ...importedPages}.length;
+
+  PendingStatement copyWith({
+    int? pageCount,
+    Map<int, List<StatementRow>>? pageRows,
+    Set<int>? importedPages,
+    String? currency,
+  }) =>
+      PendingStatement(
+        id: id,
+        path: path,
+        name: name,
+        addedAt: addedAt,
+        pageCount: pageCount ?? this.pageCount,
+        pageRows: pageRows ?? this.pageRows,
+        importedPages: importedPages ?? this.importedPages,
+        currency: currency ?? this.currency,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'path': path,
+        'name': name,
+        'addedAt': addedAt.toIso8601String(),
+        'pageCount': pageCount,
+        'pageRows': {for (final e in pageRows.entries) '${e.key}': e.value.map(_rowToJson).toList()},
+        'importedPages': importedPages.toList(),
+        'currency': currency,
+      };
+
   factory PendingStatement.fromJson(Map<String, dynamic> j) => PendingStatement(
         id: j['id'],
         path: j['path'],
         name: j['name'] ?? 'statement.pdf',
         addedAt: DateTime.tryParse(j['addedAt'] ?? '') ?? DateTime.now(),
+        pageCount: j['pageCount'],
+        pageRows: {
+          for (final e in ((j['pageRows'] as Map?) ?? const {}).entries)
+            int.parse(e.key.toString()): (e.value as List).map((r) => _rowFromJson(Map<String, dynamic>.from(r))).toList(),
+        },
+        importedPages: {...((j['importedPages'] as List?) ?? const []).map((e) => e as int)},
+        currency: j['currency'],
       );
 
   static const _key = 'pending_statements';
 
   static Future<List<PendingStatement>> load() async {
     final sp = await SharedPreferences.getInstance();
-    final list = (sp.getStringList(_key) ?? [])
+    return (sp.getStringList(_key) ?? [])
         .map((e) {
           try {
             return PendingStatement.fromJson(jsonDecode(e));
@@ -8536,7 +8603,6 @@ class PendingStatement {
         .whereType<PendingStatement>()
         .where((p) => File(p.path).existsSync())
         .toList();
-    return list;
   }
 
   static Future<void> _save(List<PendingStatement> list) async {
@@ -8545,16 +8611,21 @@ class PendingStatement {
   }
 
   /// Copies [sourcePath] into the app's storage and remembers it.
-  static Future<PendingStatement> add(String sourcePath, String name) async {
+  static Future<PendingStatement> add(String sourcePath, String name, {int? pageCount}) async {
     final dir = await getApplicationDocumentsDirectory();
     final folder = Directory('${dir.path}/pending_statements');
     if (!await folder.exists()) await folder.create(recursive: true);
     final id = DateTime.now().microsecondsSinceEpoch.toString();
     final dest = '${folder.path}/$id.pdf';
     await File(sourcePath).copy(dest);
-    final entry = PendingStatement(id: id, path: dest, name: name, addedAt: DateTime.now());
+    final entry = PendingStatement(id: id, path: dest, name: name, addedAt: DateTime.now(), pageCount: pageCount);
     await _save([...await load(), entry]);
     return entry;
+  }
+
+  static Future<void> update(PendingStatement entry) async {
+    final list = await load();
+    await _save([for (final p in list) p.id == entry.id ? entry : p]);
   }
 
   static Future<void> remove(String id) async {
@@ -8628,11 +8699,18 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   String? pdfPath;
   String pdfName = '';
   List<String> pdfPages = [];
-  final Map<int, List<StatementRow>> aiPageRows = {}; // pages already read by the AI
+  final Map<int, List<StatementRow>> aiPageRows = {}; // read by the AI, not imported yet
+  final Set<int> importedPages = {}; // pages whose bookings were already imported
   bool readOffline = false; // preview comes from the simple on-device reading
   String? aiError; // why the last AI attempt stopped
-  String? pendingId; // set when this PDF was saved earlier for reading later
+  PendingStatement? pendingEntry; // where this PDF's progress is kept
   List<PendingStatement> pending = [];
+
+  bool get pdfAllDone => pdfPages.isNotEmpty && {...aiPageRows.keys, ...importedPages}.length >= pdfPages.length;
+
+  /// Rows the AI read that are still to be imported, in page order.
+  List<StatementRow> get _aiRows => [for (final i in aiPageRows.keys.toList()..sort()) ...aiPageRows[i]!]
+    ..sort((a, b) => a.date.compareTo(b.date));
 
   @override
   void initState() {
@@ -8675,23 +8753,28 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     });
   }
 
-  /// Opens a PDF statement: renders its pages, then reads them with the AI
-  /// when a Gemini key is set, otherwise with the simple on-device reading
-  /// (the AI can still be started from the button afterwards).
-  Future<void> _openPdf(String path, String name, {String? fromPendingId}) async {
+  /// Opens a PDF statement (a new file, or one saved earlier with its
+  /// progress): renders its pages, then reads the remaining ones with the AI
+  /// when a Gemini key is set, otherwise with the simple on-device reading.
+  Future<void> _openPdf(String path, String name, {PendingStatement? entry}) async {
     setState(() {
       readingPdf = true;
       pdfProgress = 'در حال آماده‌سازی صفحات...';
       rows = null;
       preview = null;
-      detectedCurrency = null;
+      detectedCurrency = entry?.currency;
       pdfPath = path;
       pdfName = name;
       pdfPages = [];
-      aiPageRows.clear();
+      aiPageRows
+        ..clear()
+        ..addAll(entry?.pageRows ?? const {});
+      importedPages
+        ..clear()
+        ..addAll(entry?.importedPages ?? const {});
       aiError = null;
       readOffline = false;
-      pendingId = fromPendingId;
+      pendingEntry = entry;
     });
     try {
       pdfPages = await renderPdfPagesToImages(path);
@@ -8707,6 +8790,11 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     final key = (await Store.loadGeminiKey())?.trim();
     if (key != null && key.isNotEmpty) {
       await _readPdfWithAi();
+    } else if (aiPageRows.isNotEmpty) {
+      setState(() {
+        readingPdf = false;
+        preview = _aiRows;
+      });
     } else {
       await _readPdfOffline();
     }
@@ -8735,20 +8823,42 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     });
   }
 
-  /// Reads the pages the AI hasn't read yet, so after a failure (busy
-  /// servers, quota) trying again continues where it stopped.
+  /// Keeps this PDF and its progress in the saved statements list, so the
+  /// pages read so far are never lost.
+  Future<void> _ensurePending() async {
+    if (pendingEntry != null || pdfPath == null) return;
+    pendingEntry = await PendingStatement.add(pdfPath!, pdfName, pageCount: pdfPages.length);
+  }
+
+  Future<void> _persistProgress() async {
+    final e = pendingEntry;
+    if (e == null) return;
+    pendingEntry = e.copyWith(
+      pageCount: pdfPages.length,
+      pageRows: Map.of(aiPageRows),
+      importedPages: Set.of(importedPages),
+      currency: detectedCurrency,
+    );
+    await PendingStatement.update(pendingEntry!);
+  }
+
+  /// Reads the pages that haven't been read yet. Each page's bookings are
+  /// saved as soon as it's read, so when the AI stops (busy, quota used up)
+  /// the next attempt - now or later - continues with the remaining pages.
   Future<void> _readPdfWithAi() async {
     final key = (await Store.loadGeminiKey())?.trim();
     if (key == null || key.isEmpty) {
       if (mounted) await promptForGeminiKey(context);
       return;
     }
+    await _ensurePending();
+    if (!mounted) return;
     setState(() {
       readingPdf = true;
       aiError = null;
     });
     for (var i = 0; i < pdfPages.length; i++) {
-      if (aiPageRows.containsKey(i)) continue;
+      if (aiPageRows.containsKey(i) || importedPages.contains(i)) continue;
       if (!mounted) return;
       setState(() => pdfProgress =
           'خواندن صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pdfPages.length}')} با هوش مصنوعی...');
@@ -8756,33 +8866,23 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
         final json = await _geminiRequest(key, pdfPages[i], _bankStatementPrompt(categories));
         detectedCurrency ??= normalizeCurrency(json?['currency']);
         aiPageRows[i] = json == null ? [] : _statementRowsFromJson(json);
+        await _persistProgress();
       } catch (e) {
         aiError = e is GeminiException ? e.friendlyMessage : 'خواندن با هوش مصنوعی ممکن نشد.';
         break;
       }
     }
     if (!mounted) return;
-    final done = aiPageRows.length == pdfPages.length;
     setState(() {
       readingPdf = false;
-      if (done) {
-        readOffline = false;
-        preview = [for (final i in aiPageRows.keys.toList()..sort()) ...aiPageRows[i]!]
-          ..sort((a, b) => a.date.compareTo(b.date));
-      }
+      readOffline = false;
+      preview = _aiRows;
     });
-    // Nothing usable yet - fall back to the simple reading so there's at
-    // least something to look at, while the AI can be retried or the file
-    // saved for later.
-    if (!done && preview == null) await _readPdfOffline();
   }
 
   Future<void> _saveForLater() async {
-    final path = pdfPath;
-    if (path == null) return;
-    if (pendingId == null) {
-      await PendingStatement.add(path, pdfName);
-    }
+    if (pdfPath == null) return;
+    await _ensurePending();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
       content: Text('صورتحساب ذخیره شد. بعداً از همین صفحه می‌توانی آن را با هوش مصنوعی بخوانی.'),
@@ -8897,8 +8997,18 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       await Store.upsertTransaction(d);
       imported++;
     }
-    // A statement saved for later reading is done once it's imported.
-    if (pendingId != null) await PendingStatement.remove(pendingId!);
+    // Pages read by the AI are done once imported; the saved statement is
+    // removed when all its pages are, otherwise later attempts continue
+    // with the remaining pages.
+    if (pendingEntry != null && !readOffline) {
+      importedPages.addAll(aiPageRows.keys);
+      aiPageRows.clear();
+      if (importedPages.length >= pdfPages.length) {
+        await PendingStatement.remove(pendingEntry!.id);
+      } else {
+        await _persistProgress();
+      }
+    }
     if (!mounted) return;
     setState(() => importing = false);
     final open = await showDialog<bool>(
@@ -8927,18 +9037,23 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   /// How the open PDF was read, with the AI button (start, continue after a
   /// failure, or read again) and saving the file to read it later.
   Widget _pdfStatusCard() {
-    final aiDone = pdfPages.isNotEmpty && aiPageRows.length == pdfPages.length && !readOffline;
+    final aiDone = pdfAllDone && !readOffline;
+    final total = pdfPages.length;
+    final done = {...aiPageRows.keys, ...importedPages}.length;
+    final progress = '${persianDigits('$done')} از ${persianDigits('$total')} صفحه با هوش مصنوعی خوانده شده'
+        '${importedPages.isNotEmpty ? ' (${persianDigits('${importedPages.length}')} صفحه قبلاً بارگذاری شده)' : ''}.';
     final String status;
     final Color color;
-    if (aiError != null) {
-      status = '$aiError\n${persianDigits('${aiPageRows.length}')} از ${persianDigits('${pdfPages.length}')} صفحه با هوش مصنوعی خوانده شد'
-          '${readOffline ? '؛ پیش‌نمایش زیر از خواندن خودکار ساده است و ممکن است دقیق نباشد.' : '.'}';
+    if (readOffline) {
+      status = 'این پیش‌نمایش از خواندن خودکار ساده است و برای PDF معمولاً دقیق نیست. برای نتیجه‌ی درست با هوش مصنوعی بخوان.';
       color = Colors.orange;
     } else if (aiDone) {
-      status = 'همه‌ی ${persianDigits('${pdfPages.length}')} صفحه با هوش مصنوعی خوانده شد.';
+      status = 'همه‌ی صفحات با هوش مصنوعی خوانده شد. $progress';
       color = Colors.green;
     } else {
-      status = 'این پیش‌نمایش از خواندن خودکار ساده است و برای PDF معمولاً دقیق نیست. برای نتیجه‌ی درست با هوش مصنوعی بخوان.';
+      status = '${aiError != null ? '$aiError\n' : ''}$progress\n'
+          'تراکنش‌های صفحه‌های خوانده‌شده ذخیره شده‌اند و همین حالا قابل بارگذاری‌اند؛ '
+          'بقیه‌ی صفحات را با «ادامه با هوش مصنوعی» یا بعداً از فهرست صورتحساب‌های ذخیره‌شده بخوان.';
       color = Colors.orange;
     }
     return Card(
@@ -8965,17 +9080,18 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                     onPressed: readingPdf
                         ? null
                         : () {
+                            // Reading again re-reads the pages not imported yet.
                             if (aiDone) aiPageRows.clear();
                             _readPdfWithAi();
                           },
                     icon: const Icon(Icons.auto_awesome, size: 18),
                     label: Text(
-                      aiDone ? 'خواندن دوباره با هوش مصنوعی' : (aiPageRows.isNotEmpty ? 'ادامه با هوش مصنوعی' : 'خواندن با هوش مصنوعی'),
+                      aiDone ? 'خواندن دوباره با هوش مصنوعی' : (done > 0 ? 'ادامه با هوش مصنوعی' : 'خواندن با هوش مصنوعی'),
                       textAlign: TextAlign.center,
                     ),
                   ),
                 ),
-                if (!aiDone && pendingId == null) ...[
+                if (!aiDone && pendingEntry == null) ...[
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
@@ -9017,8 +9133,12 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             Column(
               children: [
                 const Text(
-                  'فایل صورتحساب بانک را انتخاب کن: CSV (اکثر بانک‌ها امکان دانلودش را دارند) یا PDF. '
-                  'PDF با هوش مصنوعی خوانده می‌شود (اگر کلید Gemini وارد شده باشد) و دسته‌بندی و طرف حساب هم حدس زده می‌شود.',
+                  'فایل صورتحساب بانک را انتخاب کن: CSV (اکثر بانک‌ها امکان دانلودش را دارند) یا PDF.\n\n'
+                  'توجه: بارگذاری PDF فقط وقتی نتیجه‌ی درست و قابل‌اعتماد می‌دهد که اطلاعاتش با هوش مصنوعی خوانده شود '
+                  '(کلید Gemini در تنظیمات)؛ خواندن خودکار بدون هوش مصنوعی برای PDF معمولاً دقیق نیست. '
+                  'هوش مصنوعی صفحه به صفحه می‌خواند و هر صفحه‌ی خوانده‌شده همان لحظه ذخیره می‌شود؛ اگر سهمیه یا '
+                  'سرور اجازه‌ی خواندن همه‌ی صفحات را یک‌جا نداد، تراکنش‌های صفحه‌های خوانده‌شده را بارگذاری کن و '
+                  'بقیه را بعداً ادامه بده. دسته‌بندی و طرف حساب هم حدس زده می‌شود.',
                   style: TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 16),
@@ -9027,14 +9147,17 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                   const SizedBox(height: 24),
                   const Align(
                     alignment: AlignmentDirectional.centerStart,
-                    child: Text('صورتحساب‌های ذخیره‌شده برای خواندن با هوش مصنوعی', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: Text('صورتحساب‌های در حال خواندن با هوش مصنوعی', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                   const SizedBox(height: 8),
                   ...pending.map((p) => Card(
                         child: ListTile(
                           leading: const Icon(Icons.picture_as_pdf_outlined),
                           title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          subtitle: Text('ذخیره در ${formatDate(p.addedAt)}'),
+                          subtitle: Text(
+                            'ذخیره در ${formatDate(p.addedAt)}'
+                            '${p.pageCount != null ? ' • ${persianDigits('${p.pagesDone}')} از ${persianDigits('${p.pageCount}')} صفحه خوانده شده' : ''}',
+                          ),
                           trailing: IconButton(
                             icon: const Icon(Icons.delete_outline),
                             tooltip: 'حذف',
@@ -9044,7 +9167,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                               if (mounted) setState(() => pending = list);
                             },
                           ),
-                          onTap: () => _openPdf(p.path, p.name, fromPendingId: p.id),
+                          onTap: () => _openPdf(p.path, p.name, entry: p),
                         ),
                       )),
                 ],
@@ -9194,7 +9317,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 ),
               const SizedBox(height: 16),
               FilledButton.icon(
-                onPressed: (targetAccount == null || importing) ? null : _import,
+                onPressed: (targetAccount == null || importing || preview!.isEmpty) ? null : _import,
                 icon: importing
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.download_done),
