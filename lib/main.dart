@@ -5056,6 +5056,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     return balances;
   }
 
+  Widget _balanceText(double value, String currency) => Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(
+          formatMoney(value, currency),
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: value >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+          ),
+        ),
+      );
+
   /// One line per account in another currency than the main one, showing
   /// the day rate used for the combined total and how old it is - tap to
   /// update it (the rate moves often, e.g. Euro to Toman).
@@ -5344,23 +5356,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                     ),
                     const SizedBox(height: 8),
                     if (balances.isEmpty) const Text('هنوز تراکنشی ثبت نشده.'),
-                    ...balances.entries.map((e) => Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            formatMoney(e.value, e.key),
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: e.value >= 0 ? Colors.green.shade700 : Colors.red.shade700,
-                            ),
-                          ),
-                        )),
-                    if (balances.length > 1) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'جمع کل (به ${currencyLabel(primaryCurrency)}): ${formatMoney(_combinedBalanceInMainCurrency, primaryCurrency)}',
-                        style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                      ),
+                    // One number: with accounts in several currencies, all of
+                    // them converted to the main currency at their day rate.
+                    if (balances.length == 1)
+                      ...balances.entries.map((e) => _balanceText(e.value, e.key))
+                    else if (balances.length > 1) ...[
+                      _balanceText(_combinedBalanceInMainCurrency, mainCurrencyOf(accounts)),
                       ..._dayRateLines(),
                     ],
                     if (safeToSpend.isNotEmpty) ...[
@@ -6407,7 +6408,27 @@ class _DraftsScreenState extends State<DraftsScreen> {
                   children: [
                     Icon(Icons.check_circle_outline, size: 16, color: Colors.green.shade800),
                     const SizedBox(width: 8),
-                    Text('جدید - با هیچ تراکنش ثبت‌شده‌ای جور نیست', style: TextStyle(color: Colors.green.shade900, fontSize: 12)),
+                    Expanded(
+                      child: Text('جدید - با هیچ تراکنش ثبت‌شده‌ای جور نیست', style: TextStyle(color: Colors.green.shade900, fontSize: 12)),
+                    ),
+                    // A bank booking that's really money moved between the
+                    // person's own accounts.
+                    InkWell(
+                      onTap: () async {
+                        if (await convertDraftToTransfer(context, t, accounts)) await _load();
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.swap_horiz, size: 16, color: Colors.green.shade900),
+                            const SizedBox(width: 2),
+                            Text('انتقال است', style: TextStyle(color: Colors.green.shade900, fontSize: 12, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -6524,17 +6545,132 @@ class DuplicateCompareScreen extends StatefulWidget {
   State<DuplicateCompareScreen> createState() => _DuplicateCompareScreenState();
 }
 
+/// Short description of a transaction's repeat pattern ("ماهانه (روز ۱)").
+String recurrenceLabelOf(Transaction t) {
+  switch (t.recurrence) {
+    case RecurrenceFrequency.monthly:
+      return 'ماهانه (روز ${persianDigits('${t.recurrenceDay ?? '?'}')})';
+    case RecurrenceFrequency.weekly:
+      return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
+    case RecurrenceFrequency.custom:
+      return 'هر ${persianDigits('${t.recurrenceIntervalDays ?? '?'}')} روز';
+    case RecurrenceFrequency.quarterly:
+      return 'فصلی (روز ${persianDigits('${t.recurrenceDay ?? '?'}')})';
+    case RecurrenceFrequency.yearly:
+      return 'سالانه (${formatDayMonth(t.date)})';
+    case RecurrenceFrequency.none:
+      return '';
+  }
+}
+
+/// Turns a bank-statement draft into a transfer between two of the
+/// person's accounts (e.g. money moved from the Euro account into the Rial
+/// one): asks for the other account (and its amount when the currencies
+/// differ), saves both sides of the transfer and removes the draft.
+Future<bool> convertDraftToTransfer(BuildContext context, Transaction draft, List<Account> accounts) async {
+  final incoming = draft.type == TxType.income;
+  final here = accounts.where((a) => a.id == draft.accountId).firstOrNull;
+  final others = accounts.where((a) => a.id != draft.accountId).toList();
+  if (here == null || others.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای انتقال، حساب دیگری لازم است.')));
+    return false;
+  }
+  Account other = others.first;
+  final otherAmountCtrl = TextEditingController();
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) {
+        final sameCurrency = other.currency == here.currency;
+        return AlertDialog(
+          title: const Text('تبدیل به انتقال بین حساب‌ها'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                incoming
+                    ? '${formatMoney(draft.amount, here.currency)} به «${here.name}» واریز شده؛ از کدام حساب آمده؟'
+                    : '${formatMoney(draft.amount, here.currency)} از «${here.name}» برداشت شده؛ به کدام حساب رفته؟',
+                style: const TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<Account>(
+                initialValue: other,
+                decoration: InputDecoration(labelText: incoming ? 'از حساب' : 'به حساب', border: const OutlineInputBorder()),
+                items: others.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
+                onChanged: (v) => setLocal(() => other = v ?? other),
+              ),
+              if (!sameCurrency) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: otherAmountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: const [AmountInputFormatter()],
+                  decoration: InputDecoration(
+                    labelText: incoming ? 'مبلغ برداشت‌شده از «${other.name}» (${currencyLabel(other.currency)})' : 'مبلغ واریزشده به «${other.name}» (${currencyLabel(other.currency)})',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تبدیل')),
+          ],
+        );
+      },
+    ),
+  );
+  if (ok != true) return false;
+  final otherAmount = other.currency == here.currency ? draft.amount : parseAmount(otherAmountCtrl.text);
+  if (otherAmount == null || otherAmount <= 0) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ حساب دیگر را وارد کنید.')));
+    }
+    return false;
+  }
+  final baseId = DateTime.now().microsecondsSinceEpoch.toString();
+  final from = incoming ? other : here;
+  final to = incoming ? here : other;
+  final bankText = draft.note.trim();
+  await Store.upsertTransaction(Transaction(
+    id: '${baseId}_out',
+    type: TxType.expense,
+    amount: incoming ? otherAmount : draft.amount,
+    categoryId: '_transfer_out_',
+    accountId: from.id,
+    date: draft.date,
+    note: bankText.isNotEmpty ? bankText : 'انتقال به ${to.name}',
+  ));
+  await Store.upsertTransaction(Transaction(
+    id: '${baseId}_in',
+    type: TxType.income,
+    amount: incoming ? draft.amount : otherAmount,
+    categoryId: '_transfer_in_',
+    accountId: to.id,
+    date: draft.date,
+    note: bankText.isNotEmpty ? bankText : 'انتقال از ${from.name}',
+  ));
+  await Store.deleteTransaction(draft.id);
+  return true;
+}
+
 class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   int selected = 0;
   bool busy = false;
-  // Edited copies of the saved transactions (by candidate index), changed
-  // right in the comparison table.
+  bool savedAny = false;
+  // Edits made right in the table: to the bank draft, and to the saved
+  // transactions (by candidate index).
+  Transaction? editedDraft;
   final Map<int, Transaction> edited = {};
-
-  Transaction get other => edited[selected] ?? widget.candidates[selected];
-  bool get hasEdits => edited.isNotEmpty;
-
   List<Category> categories = [];
+
+  Transaction get draft => editedDraft ?? widget.draft;
+  Transaction get other => edited[selected] ?? widget.candidates[selected];
+  bool get hasEdits => edited.isNotEmpty || editedDraft != null;
+  bool get _selectedIsRecurring => widget.matches[selected].recurring;
 
   @override
   void initState() {
@@ -6547,9 +6683,61 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   String _money(Transaction t) => formatMoney(t.amount, _account(t.accountId)?.currency ?? 'IRT');
   String _note(Transaction t) => t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim();
 
-  bool savedAny = false;
+  /// Every field shown in the table, as text.
+  String _value(Transaction t, String field) {
+    switch (field) {
+      case 'date':
+        return formatDate(t.date);
+      case 'amount':
+        return _money(t);
+      case 'type':
+        return t.type == TxType.income ? 'درآمد' : 'هزینه';
+      case 'category':
+        return _category(t.categoryId);
+      case 'account':
+        return _account(t.accountId)?.name ?? '';
+      case 'merchant':
+        return t.merchant.trim();
+      case 'note':
+        return _note(t);
+      case 'items':
+        return t.items.map((i) => i.name).join('، ');
+      case 'recurrence':
+        return t.isRecurring ? recurrenceLabelOf(t) : '';
+      case 'payslip':
+        final p = t.payslipDetails;
+        if (p == null) return '';
+        final cur = _account(t.accountId)?.currency ?? 'IRT';
+        return [
+          if (p.brutto != null) 'ناخالص ${formatMoney(p.brutto!, cur)}',
+          if (p.netto != null) 'خالص ${formatMoney(p.netto!, cur)}',
+          if (p.arbeitgeber != null) p.arbeitgeber!,
+        ].join(' • ');
+      case 'image':
+        return t.imagePath != null ? 'دارد' : '';
+      case 'status':
+        return t.draft ? 'پیش‌نویس' : 'ثبت نهایی';
+    }
+    return '';
+  }
 
-  Future<void> _saveEdits() async {
+  static const _labels = {
+    'date': 'تاریخ',
+    'amount': 'مبلغ',
+    'type': 'نوع',
+    'category': 'دسته‌بندی',
+    'account': 'حساب',
+    'merchant': 'فروشنده',
+    'note': 'توضیح',
+    'items': 'اقلام',
+    'recurrence': 'تکرار',
+    'payslip': 'فیش حقوقی',
+    'image': 'تصویر',
+    'status': 'وضعیت',
+  };
+  static const _editable = {'date', 'amount', 'category', 'account', 'merchant', 'note'};
+
+  Future<void> _saveOtherEdits() async {
     for (final t in edited.values) {
       await Store.upsertTransaction(t);
       savedAny = true;
@@ -6557,51 +6745,67 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
     edited.clear();
   }
 
+  Future<void> _saveDraftEdits() async {
+    final d = editedDraft;
+    if (d == null) return;
+    await Store.upsertTransaction(d);
+    savedAny = true;
+    editedDraft = null;
+  }
+
   Future<void> _deleteDraft() async {
     setState(() => busy = true);
-    await _saveEdits();
+    await _saveOtherEdits();
     await Store.deleteTransaction(widget.draft.id);
     if (mounted) Navigator.pop(context, true);
   }
 
   Future<void> _keepAsNew() async {
     setState(() => busy = true);
-    await _saveEdits();
-    await Store.upsertTransaction(widget.draft.copyWith(draft: false));
+    await _saveOtherEdits();
+    await Store.upsertTransaction(draft.copyWith(draft: false));
     if (mounted) Navigator.pop(context, true);
   }
 
-  Future<void> _saveChanges() async {
+  Future<void> _save({required bool draftSide}) async {
     setState(() => busy = true);
-    await _saveEdits();
+    if (draftSide) {
+      await _saveDraftEdits();
+    } else {
+      await _saveOtherEdits();
+    }
     if (!mounted) return;
     setState(() => busy = false);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تغییرات تراکنش ثبت‌شده ذخیره شد.')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
   }
 
-  void _setOther(Transaction t) => setState(() => edited[selected] = t);
+  Future<void> _toTransfer() async {
+    final done = await convertDraftToTransfer(context, draft, widget.accounts);
+    if (!done || !mounted) return;
+    await _saveOtherEdits();
+    if (mounted) Navigator.pop(context, true);
+  }
 
-  bool get _selectedIsRecurring => widget.matches[selected].recurring;
+  void _set(bool draftSide, Transaction t) => setState(() {
+        if (draftSide) {
+          editedDraft = t;
+        } else {
+          edited[selected] = t;
+        }
+      });
 
-  /// Tapping a cell of the saved transaction: take the bank draft's value,
-  /// or type/pick a new one - all without leaving this table.
-  Future<void> _editField(String field) async {
-    if (_selectedIsRecurring) {
+  /// Tapping a cell: take the value from the other column, or type/pick a
+  /// new one - right in the table.
+  Future<void> _editField(String field, {required bool draftSide}) async {
+    if (!draftSide && _selectedIsRecurring) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('این یک پرداخت از تراکنش تکرارشونده است؛ برای تغییرش خود تراکنش تکرارشونده را ویرایش کن.'),
       ));
       return;
     }
-    final d = widget.draft;
-    final o = other;
-    final draftValue = switch (field) {
-      'date' => formatDate(d.date),
-      'amount' => _money(d),
-      'category' => _category(d.categoryId),
-      'account' => _account(d.accountId)?.name ?? '',
-      'merchant' => d.merchant,
-      _ => _note(d),
-    };
+    final target = draftSide ? draft : other;
+    final source = draftSide ? other : draft;
+    final sourceValue = _value(source, field);
     final choice = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -6609,11 +6813,11 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (draftValue.trim().isNotEmpty)
+            if (sourceValue.trim().isNotEmpty)
               ListTile(
-                leading: const Icon(Icons.south_west),
-                title: const Text('استفاده از مقدار پیش‌نویس بانک'),
-                subtitle: Text(draftValue, maxLines: 2, overflow: TextOverflow.ellipsis),
+                leading: const Icon(Icons.swap_horiz),
+                title: Text(draftSide ? 'استفاده از مقدار تراکنش ثبت‌شده' : 'استفاده از مقدار پیش‌نویس بانک'),
+                subtitle: Text(sourceValue, maxLines: 2, overflow: TextOverflow.ellipsis),
                 onTap: () => Navigator.pop(ctx, 'copy'),
               ),
             ListTile(
@@ -6627,30 +6831,32 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
     );
     if (choice == null || !mounted) return;
     if (choice == 'copy') {
-      _setOther(switch (field) {
-        'date' => o.copyWith(date: d.date),
-        'amount' => o.copyWith(amount: d.amount),
-        'category' => o.copyWith(categoryId: d.categoryId),
-        'account' => o.copyWith(accountId: d.accountId),
-        'merchant' => o.copyWith(merchant: d.merchant),
-        _ => o.copyWith(note: o.note.trim().isEmpty ? _note(d) : '${o.note}\n${_note(d)}'),
+      _set(draftSide, switch (field) {
+        'date' => target.copyWith(date: source.date),
+        'amount' => target.copyWith(amount: source.amount),
+        'category' => target.copyWith(categoryId: source.categoryId),
+        'account' => target.copyWith(accountId: source.accountId),
+        'merchant' => target.copyWith(merchant: source.merchant),
+        _ => target.copyWith(
+            note: _note(target).isEmpty ? _note(source) : '${_note(target)}\n${_note(source)}',
+          ),
       });
       return;
     }
     switch (field) {
       case 'date':
-        final picked = await showAppDatePicker(context: context, initialDate: o.date, firstDate: DateTime(2000), lastDate: DateTime(2100));
-        if (picked != null) _setOther(o.copyWith(date: picked));
+        final picked = await showAppDatePicker(context: context, initialDate: target.date, firstDate: DateTime(2000), lastDate: DateTime(2100));
+        if (picked != null) _set(draftSide, target.copyWith(date: picked));
         break;
       case 'category':
         final picked = await showModalBottomSheet<Category>(
           context: context,
           isScrollControlled: true,
           showDragHandle: true,
-          builder: (ctx) => CategoryPicker(type: o.type, categories: categories),
+          builder: (ctx) => CategoryPicker(type: target.type, categories: categories),
         );
         categories = await Store.loadCategories();
-        if (picked != null) _setOther(o.copyWith(categoryId: picked.id));
+        if (picked != null) _set(draftSide, target.copyWith(categoryId: picked.id));
         break;
       case 'account':
         if (!mounted) return;
@@ -6663,21 +6869,21 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                 .toList(),
           ),
         );
-        if (picked != null) _setOther(o.copyWith(accountId: picked.id));
+        if (picked != null) _set(draftSide, target.copyWith(accountId: picked.id));
         break;
       default:
         final isAmount = field == 'amount';
         final ctrl = TextEditingController(
           text: switch (field) {
-            'amount' => formatAmountInput(o.amount),
-            'merchant' => o.merchant,
-            _ => o.note,
+            'amount' => formatAmountInput(target.amount),
+            'merchant' => target.merchant,
+            _ => _note(target),
           },
         );
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: Text(switch (field) { 'amount' => 'مبلغ', 'merchant' => 'فروشنده', _ => 'توضیح' }),
+            title: Text(_labels[field] ?? ''),
             content: TextField(
               controller: ctrl,
               autofocus: true,
@@ -6694,19 +6900,39 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         if (ok != true) return;
         if (isAmount) {
           final v = parseAmount(ctrl.text);
-          if (v != null && v > 0) _setOther(o.copyWith(amount: v));
+          if (v != null && v > 0) _set(draftSide, target.copyWith(amount: v));
         } else if (field == 'merchant') {
-          _setOther(o.copyWith(merchant: ctrl.text.trim()));
+          _set(draftSide, target.copyWith(merchant: ctrl.text.trim()));
         } else {
-          _setOther(o.copyWith(note: ctrl.text.trim()));
+          _set(draftSide, target.copyWith(note: ctrl.text.trim()));
         }
     }
   }
 
-  Widget _row(String label, String a, String b, {String? field}) {
+  Widget _cell(String text, {required bool editable, required bool changed, required TextStyle style, VoidCallback? onTap}) {
+    return Expanded(
+      child: InkWell(
+        onTap: editable && !busy ? onTap : null,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
+          color: changed ? Colors.blue.shade50 : null,
+          child: Row(
+            children: [
+              Expanded(child: Text(text.isEmpty ? '—' : text, style: changed ? style.copyWith(color: Colors.blue.shade800) : style)),
+              if (editable) Icon(Icons.edit_outlined, size: 13, color: Colors.grey.shade500),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _row(String field) {
+    final a = _value(draft, field);
+    final b = _value(other, field);
     final differs = a.trim() != b.trim();
-    final changed = field != null && edited.containsKey(selected) && b != _originalValue(field);
     final style = TextStyle(fontSize: 13, color: differs ? Colors.orange.shade900 : null, fontWeight: differs ? FontWeight.w600 : null);
+    final editable = _editable.contains(field);
     return Container(
       decoration: BoxDecoration(
         color: differs ? Colors.orange.shade50 : null,
@@ -6717,51 +6943,35 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 10, 0, 10),
-            child: SizedBox(width: 72, child: Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade700))),
+            child: SizedBox(width: 64, child: Text(_labels[field] ?? '', style: TextStyle(fontSize: 12, color: Colors.grey.shade700))),
           ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Text(a.isEmpty ? '—' : a, style: style),
-            ),
+          _cell(
+            a,
+            editable: editable,
+            changed: editedDraft != null && a != _value(widget.draft, field),
+            style: style,
+            onTap: () => _editField(field, draftSide: true),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: InkWell(
-              onTap: field == null || busy ? null : () => _editField(field),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(4, 10, 8, 10),
-                color: changed ? Colors.blue.shade50 : null,
-                child: Row(
-                  children: [
-                    Expanded(child: Text(b.isEmpty ? '—' : b, style: changed ? style.copyWith(color: Colors.blue.shade800) : style)),
-                    if (field != null) Icon(Icons.edit_outlined, size: 14, color: Colors.grey.shade500),
-                  ],
-                ),
-              ),
-            ),
+          const SizedBox(width: 4),
+          _cell(
+            b,
+            editable: editable && !_selectedIsRecurring,
+            changed: edited.containsKey(selected) && b != _value(widget.candidates[selected], field),
+            style: style,
+            onTap: () => _editField(field, draftSide: false),
           ),
         ],
       ),
     );
   }
 
-  String _originalValue(String field) {
-    final o = widget.candidates[selected];
-    return switch (field) {
-      'date' => formatDate(o.date),
-      'amount' => _money(o),
-      'category' => _category(o.categoryId),
-      'account' => _account(o.accountId)?.name ?? '',
-      'merchant' => o.merchant,
-      _ => o.note,
-    };
-  }
-
   @override
   Widget build(BuildContext context) {
-    final d = widget.draft;
+    final d = draft;
     final o = other;
+    // Every field that has a value on either side.
+    final fields = _labels.keys.where((f) => _value(d, f).isNotEmpty || _value(o, f).isNotEmpty).toList();
+    final match = widget.matches[selected];
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
@@ -6769,131 +6979,124 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         if (hasEdits) {
           final choice = await askSaveChanges(context);
           if (choice == null) return;
-          if (choice == 'save') await _saveEdits();
+          if (choice == 'save') {
+            await _saveDraftEdits();
+            await _saveOtherEdits();
+          }
         }
         if (context.mounted) Navigator.pop(context, savedAny);
       },
       child: Scaffold(
-      appBar: AppBar(title: const Text('مقایسه‌ی تراکنش مشابه')),
-      bottomNavigationBar: pinnedBottomButtons(context, [
-        OutlinedButton(
-          onPressed: busy ? null : _keepAsNew,
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          child: const Text('تکراری نیست، ثبت شود', textAlign: TextAlign.center),
-        ),
-        FilledButton(
-          onPressed: busy ? null : _deleteDraft,
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: Colors.red.shade600),
-          child: const Text('تکراری است، حذف شود', textAlign: TextAlign.center),
-        ),
-      ]),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (widget.candidates.length > 1) ...[
-            const Text('چند تراکنش مشابه پیدا شد؛ یکی را برای مقایسه انتخاب کن:', style: TextStyle(fontSize: 12)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (var i = 0; i < widget.candidates.length; i++)
-                  ChoiceChip(
-                    label: Text(
-                      '${formatDate(widget.candidates[i].date)}'
-                      '${widget.matches[i].recurring ? ' (تکرارشونده)' : widget.candidates[i].draft ? ' (پیش‌نویس)' : ''}'
-                      '${widget.matches[i].strong ? ' ✓' : ''}',
+        appBar: AppBar(title: const Text('مقایسه‌ی تراکنش مشابه')),
+        bottomNavigationBar: pinnedBottomButtons(context, [
+          OutlinedButton(
+            onPressed: busy ? null : _keepAsNew,
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: const Text('تکراری نیست، ثبت شود', textAlign: TextAlign.center),
+          ),
+          FilledButton(
+            onPressed: busy ? null : _deleteDraft,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: Colors.red.shade600),
+            child: const Text('تکراری است، حذف شود', textAlign: TextAlign.center),
+          ),
+        ]),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (widget.candidates.length > 1) ...[
+              const Text('چند تراکنش مشابه پیدا شد؛ یکی را برای مقایسه انتخاب کن:', style: TextStyle(fontSize: 12)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (var i = 0; i < widget.candidates.length; i++)
+                    ChoiceChip(
+                      label: Text(
+                        '${formatDate(widget.candidates[i].date)}'
+                        '${widget.matches[i].recurring ? ' (تکرارشونده)' : widget.candidates[i].draft ? ' (پیش‌نویس)' : ''}'
+                        '${widget.matches[i].strong ? ' ✓' : ''}',
+                      ),
+                      selected: selected == i,
+                      onSelected: (_) => setState(() => selected = i),
                     ),
-                    selected: selected == i,
-                    onSelected: (_) => setState(() => selected = i),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  Container(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 64),
+                        const Expanded(child: Text('پیش‌نویس بانک', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            _selectedIsRecurring ? 'پرداخت تکرارشونده' : (o.draft ? 'پیش‌نویس موجود' : 'ثبت‌شده‌ی قبلی'),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-              ],
+                  ...fields.map(_row),
+                  // Each column's own save button, under that column.
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 64),
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: busy || editedDraft == null ? null : () => _save(draftSide: true),
+                            child: const Text('ذخیره'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.tonal(
+                            onPressed: busy || !edited.containsKey(selected) ? null : () => _save(draftSide: false),
+                            child: const Text('ذخیره'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: (match.strong ? Colors.red : Colors.orange).shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${match.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'} - ${match.reasons.join('، ')}',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'ردیف‌های نارنجی با هم فرق دارند. با لمس هر خانه می‌توانی مقدار ستون دیگر را بگذاری یا مقدار تازه وارد کنی.',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: busy ? null : _toTransfer,
+              icon: const Icon(Icons.swap_horiz),
+              label: const Text('این پیش‌نویس انتقال بین حساب‌هاست'),
+            ),
           ],
-          Card(
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              children: [
-                Container(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  child: Row(
-                    children: [
-                      const SizedBox(width: 72),
-                      const Expanded(child: Text('از صورتحساب بانک', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _selectedIsRecurring ? 'پرداخت تکرارشونده' : (o.draft ? 'پیش‌نویس موجود' : 'ثبت‌شده‌ی قبلی'),
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                _row('تاریخ', formatDate(d.date), formatDate(o.date), field: 'date'),
-                _row('مبلغ', _money(d), _money(o), field: 'amount'),
-                _row('نوع', d.type == TxType.income ? 'درآمد' : 'هزینه', o.type == TxType.income ? 'درآمد' : 'هزینه'),
-                _row('دسته‌بندی', _category(d.categoryId), _category(o.categoryId), field: 'category'),
-                _row('حساب', _account(d.accountId)?.name ?? '', _account(o.accountId)?.name ?? '', field: 'account'),
-                _row('فروشنده', d.merchant, o.merchant, field: 'merchant'),
-                _row('توضیح', _note(d), o.note, field: 'note'),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: (widget.matches[selected].strong ? Colors.red : Colors.orange).shade50,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '${widget.matches[selected].strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'} - '
-              '${widget.matches[selected].reasons.join('، ')}',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'ردیف‌های نارنجی با هم فرق دارند. برای اصلاح تراکنش ثبت‌شده، روی خانه‌ی آن در ستون دوم بزن؛ '
-            'می‌توانی مقدار پیش‌نویس بانک را بگذاری یا مقدار تازه وارد کنی.',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-          ),
-          const SizedBox(height: 16),
-          FilledButton.tonalIcon(
-            onPressed: busy || !hasEdits ? null : _saveChanges,
-            icon: const Icon(Icons.save_outlined),
-            label: const Text('ذخیره تغییرات تراکنش ثبت‌شده'),
-          ),
-          const SizedBox(height: 8),
-          TextButton.icon(
-            onPressed: busy
-                ? null
-                : () async {
-                    final result = await Navigator.push<Object>(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => TransactionEditor(categories: categories, accounts: widget.accounts, existing: d),
-                      ),
-                    );
-                    if (result is DeleteTransactionSignal) {
-                      await Store.deleteTransaction(result.id);
-                    } else if (result is Transaction) {
-                      await Store.upsertTransaction(result);
-                    } else {
-                      return;
-                    }
-                    await _saveEdits();
-                    if (context.mounted) Navigator.pop(context, true);
-                  },
-            icon: const Icon(Icons.edit_outlined),
-            label: const Text('ویرایش پیش‌نویس بانک'),
-          ),
-        ],
+        ),
       ),
-    ),
     );
   }
 }
@@ -6936,22 +7139,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
     return a.isEmpty ? 'IRT' : a.first.currency;
   }
 
-  String _recurrenceLabel(Transaction t) {
-    switch (t.recurrence) {
-      case RecurrenceFrequency.monthly:
-        return 'ماهانه (روز ${t.recurrenceDay ?? '?'})';
-      case RecurrenceFrequency.weekly:
-        return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
-      case RecurrenceFrequency.custom:
-        return 'هر ${t.recurrenceIntervalDays ?? '?'} روز';
-      case RecurrenceFrequency.quarterly:
-        return 'فصلی (روز ${t.recurrenceDay ?? '?'})';
-      case RecurrenceFrequency.yearly:
-        return 'سالانه (${formatDayMonth(t.date)})';
-      case RecurrenceFrequency.none:
-        return '';
-    }
-  }
+  String _recurrenceLabel(Transaction t) => recurrenceLabelOf(t);
 
   Future<void> _openEditor(Transaction t) async {
     final result = await Navigator.push<Object>(
