@@ -8506,7 +8506,7 @@ List<StatementRow> parseStatementText(String text) {
 
 /// Renders each page of a PDF (up to [maxPages]) to its own temporary JPEG,
 /// for reading bank statements page by page.
-Future<List<String>> renderPdfPagesToImages(String path, {int maxPages = 12}) async {
+Future<List<String>> renderPdfPagesToImages(String path, {int maxPages = 24}) async {
   final doc = await PdfDocument.openFile(path);
   try {
     final dir = await getTemporaryDirectory();
