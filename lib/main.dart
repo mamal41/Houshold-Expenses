@@ -6219,15 +6219,13 @@ class _DraftsScreenState extends State<DraftsScreen> {
     final drafts = all.where((t) => t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
     tx = drafts.where((t) => !isBankImportId(t.id)).toList();
     bankTx = drafts.where((t) => isBankImportId(t.id)).toList();
+    matches = matchBankDrafts(bankTx, all);
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     if (mounted) setState(() => loading = false);
   }
 
-  /// Saved transactions (and other drafts) that may be the same booking as
-  /// the bank-statement draft [t].
-  List<Transaction> _duplicatesOf(Transaction t) =>
-      possibleDuplicatesOf(t, all.where((x) => !(x.draft && isBankImportId(x.id) && x.id.compareTo(t.id) > 0)).toList());
+  Map<String, List<DuplicateMatch>> matches = {};
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
@@ -6253,14 +6251,57 @@ class _DraftsScreenState extends State<DraftsScreen> {
     await _load();
   }
 
-  Future<void> _compare(Transaction t, List<Transaction> candidates) async {
+  Future<void> _compare(Transaction t, List<DuplicateMatch> found) async {
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => DuplicateCompareScreen(draft: t, candidates: candidates, categories: categories, accounts: accounts),
+        builder: (_) => DuplicateCompareScreen(draft: t, matches: found, categories: categories, accounts: accounts),
       ),
     );
     if (changed == true) await _load();
+  }
+
+  /// Confirms every bank draft that matches nothing already recorded.
+  Future<void> _confirmAllNew(List<Transaction> fresh) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('ثبت نهایی موارد جدید'),
+        content: Text('${persianDigits('${fresh.length}')} تراکنش بانکی که با هیچ تراکنش ثبت‌شده‌ای جور نیست، ثبت نهایی شود؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ثبت نهایی')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final t in fresh) {
+      await Store.upsertTransaction(t.copyWith(draft: false));
+    }
+    await _load();
+  }
+
+  /// Deletes every bank draft that is almost certainly already recorded.
+  Future<void> _deleteAllSure(List<Transaction> sure) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف موارد قطعاً تکراری'),
+        content: Text(
+          '${persianDigits('${sure.length}')} پیش‌نویس بانکی که مبلغ، تاریخ و حسابشان با یک تراکنش ثبت‌شده جور است حذف شود؟ '
+          'تراکنش‌های ثبت‌شده دست نمی‌خورند.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final t in sure) {
+      await Store.deleteTransaction(t.id);
+    }
+    await _load();
   }
 
   Future<void> _delete(Transaction t) async {
@@ -6269,7 +6310,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
     await _load();
   }
 
-  Widget _tile(Transaction t, {List<Transaction> duplicates = const []}) {
+  Widget _tile(Transaction t, {List<DuplicateMatch> duplicates = const [], bool bank = false}) {
     return Dismissible(
       key: ValueKey(t.id),
       direction: DismissDirection.endToStart,
@@ -6325,29 +6366,49 @@ class _DraftsScreenState extends State<DraftsScreen> {
               onTap: () => _openEditor(t),
             ),
             if (duplicates.isNotEmpty)
-              InkWell(
-                onTap: () => _compare(t, duplicates),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.shade50,
-                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.content_copy_outlined, size: 16, color: Colors.orange.shade800),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'احتمالاً تکراری است (${persianDigits('${duplicates.length}')} تراکنش مشابه)',
-                          style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
+              Builder(builder: (context) {
+                final best = duplicates.first;
+                final color = best.strong ? Colors.red : Colors.orange;
+                return InkWell(
+                  onTap: () => _compare(t, duplicates),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: color.shade50,
+                      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.content_copy_outlined, size: 16, color: color.shade800),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '${best.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'}: ${best.reasons.join('، ')}',
+                            style: TextStyle(color: color.shade900, fontSize: 12),
+                          ),
                         ),
-                      ),
-                      Text('مقایسه', style: TextStyle(color: Colors.orange.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
-                      Icon(Icons.chevron_left, size: 18, color: Colors.orange.shade900),
-                    ],
+                        Text('مقایسه', style: TextStyle(color: color.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
+                        Icon(Icons.chevron_left, size: 18, color: color.shade900),
+                      ],
+                    ),
                   ),
+                );
+              })
+            else if (bank)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle_outline, size: 16, color: Colors.green.shade800),
+                    const SizedBox(width: 8),
+                    Text('جدید - با هیچ تراکنش ثبت‌شده‌ای جور نیست', style: TextStyle(color: Colors.green.shade900, fontSize: 12)),
+                  ],
                 ),
               ),
           ],
@@ -6359,8 +6420,10 @@ class _DraftsScreenState extends State<DraftsScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final bankWithDup = [for (final t in bankTx) (t: t, dups: _duplicatesOf(t))];
+    final bankWithDup = [for (final t in bankTx) (t: t, dups: matches[t.id] ?? const <DuplicateMatch>[])];
     final dupCount = bankWithDup.where((e) => e.dups.isNotEmpty).length;
+    final fresh = [for (final e in bankWithDup) if (e.dups.isEmpty) e.t];
+    final sure = [for (final e in bankWithDup) if (e.dups.isNotEmpty && e.dups.first.strong) e.t];
     return DefaultTabController(
       length: 2,
       initialIndex: widget.initialTab,
@@ -6392,15 +6455,45 @@ class _DraftsScreenState extends State<DraftsScreen> {
                 : ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
-                      if (dupCount > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            '${persianDigits('$dupCount')} مورد احتمالاً قبلاً ثبت شده‌اند؛ روی «مقایسه» بزن تا کنار تراکنش ثبت‌شده ببینی و تصمیم بگیری.',
-                            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                '${persianDigits('${fresh.length}')} جدید • ${persianDigits('${sure.length}')} تقریباً قطعاً تکراری • '
+                                '${persianDigits('${dupCount - sure.length}')} احتمالاً تکراری',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'هر پیش‌نویس با همه‌ی تراکنش‌های ثبت‌شده و پرداخت‌های سررسیدشده‌ی تراکنش‌های تکرارشونده مقایسه می‌شود '
+                                '(مبلغ، تاریخ، حساب و نام/شرح). فقط موارد نارنجی نیاز به بررسی دارند.',
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                              ),
+                              if (fresh.isNotEmpty || sure.isNotEmpty) const SizedBox(height: 8),
+                              if (fresh.isNotEmpty)
+                                FilledButton.tonalIcon(
+                                  onPressed: () => _confirmAllNew(fresh),
+                                  icon: const Icon(Icons.done_all, size: 18),
+                                  label: Text('ثبت نهایی ${persianDigits('${fresh.length}')} مورد جدید'),
+                                ),
+                              if (sure.isNotEmpty)
+                                TextButton.icon(
+                                  onPressed: () => _deleteAllSure(sure),
+                                  icon: Icon(Icons.delete_sweep_outlined, size: 18, color: Colors.red.shade700),
+                                  label: Text(
+                                    'حذف ${persianDigits('${sure.length}')} مورد تقریباً قطعاً تکراری',
+                                    style: TextStyle(color: Colors.red.shade700),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                      ...bankWithDup.map((e) => _tile(e.t, duplicates: e.dups)),
+                      ),
+                      const SizedBox(height: 8),
+                      ...bankWithDup.map((e) => _tile(e.t, duplicates: e.dups, bank: true)),
                     ],
                   ),
           ],
@@ -6416,12 +6509,13 @@ class _DraftsScreenState extends State<DraftsScreen> {
 /// is missing from it and drop the draft.
 class DuplicateCompareScreen extends StatefulWidget {
   final Transaction draft;
-  final List<Transaction> candidates;
+  final List<DuplicateMatch> matches;
   final List<Category> categories;
   final List<Account> accounts;
+  List<Transaction> get candidates => matches.map((m) => m.t).toList();
   const DuplicateCompareScreen({
     required this.draft,
-    required this.candidates,
+    required this.matches,
     required this.categories,
     required this.accounts,
     super.key,
@@ -6487,9 +6581,17 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
 
   void _setOther(Transaction t) => setState(() => edited[selected] = t);
 
+  bool get _selectedIsRecurring => widget.matches[selected].recurring;
+
   /// Tapping a cell of the saved transaction: take the bank draft's value,
   /// or type/pick a new one - all without leaving this table.
   Future<void> _editField(String field) async {
+    if (_selectedIsRecurring) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('این یک پرداخت از تراکنش تکرارشونده است؛ برای تغییرش خود تراکنش تکرارشونده را ویرایش کن.'),
+      ));
+      return;
+    }
     final d = widget.draft;
     final o = other;
     final draftValue = switch (field) {
@@ -6697,7 +6799,11 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
               children: [
                 for (var i = 0; i < widget.candidates.length; i++)
                   ChoiceChip(
-                    label: Text('${formatDate(widget.candidates[i].date)}${widget.candidates[i].draft ? ' (پیش‌نویس)' : ''}'),
+                    label: Text(
+                      '${formatDate(widget.candidates[i].date)}'
+                      '${widget.matches[i].recurring ? ' (تکرارشونده)' : widget.candidates[i].draft ? ' (پیش‌نویس)' : ''}'
+                      '${widget.matches[i].strong ? ' ✓' : ''}',
+                    ),
                     selected: selected == i,
                     onSelected: (_) => setState(() => selected = i),
                   ),
@@ -6719,7 +6825,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          o.draft ? 'پیش‌نویس موجود' : 'ثبت‌شده‌ی قبلی',
+                          _selectedIsRecurring ? 'پرداخت تکرارشونده' : (o.draft ? 'پیش‌نویس موجود' : 'ثبت‌شده‌ی قبلی'),
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                       ),
@@ -6734,6 +6840,19 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                 _row('فروشنده', d.merchant, o.merchant, field: 'merchant'),
                 _row('توضیح', _note(d), o.note, field: 'note'),
               ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: (widget.matches[selected].strong ? Colors.red : Colors.orange).shade50,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '${widget.matches[selected].strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'} - '
+              '${widget.matches[selected].reasons.join('، ')}',
+              style: const TextStyle(fontSize: 12),
             ),
           ),
           const SizedBox(height: 8),
@@ -8805,19 +8924,137 @@ Future<void> saveImportedFingerprints(Set<String> all) async {
 /// prefixes, which is how the drafts screen keeps them in their own tab.
 bool isBankImportId(String id) => id.startsWith('csv_') || id.startsWith('bank_');
 
-/// Already saved transactions that look like the same booking as [t]: same
-/// account, type and amount, dated within 3 days of it.
-List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) {
-  return all
-      .where((x) =>
-          x.id != t.id &&
-          x.accountId == t.accountId &&
-          x.type == t.type &&
-          (x.amount - t.amount).abs() < 0.01 &&
-          x.date.difference(t.date).inDays.abs() <= 3)
-      .toList()
-    ..sort((a, b) => a.date.difference(t.date).inDays.abs().compareTo(b.date.difference(t.date).inDays.abs()));
+/// A saved transaction (or a due payment of a recurring one) that may be
+/// the same booking as a bank-statement draft, with how sure that is.
+class DuplicateMatch {
+  final Transaction t; // for a recurring payment: the series, dated on that payment
+  final bool recurring; // a due payment of a recurring transaction (not stored on its own)
+  final double score;
+  final List<String> reasons;
+  const DuplicateMatch({required this.t, required this.recurring, required this.score, required this.reasons});
+
+  /// Same amount, within a few days, same account (or equally convincing).
+  bool get strong => score >= 0.85;
+  String get key => '${t.id}@${t.date.toIso8601String()}';
 }
+
+/// Already-due payments of recurring transactions (only the first one is
+/// stored), dated on their own day - so a bank booking of this month's rent
+/// is matched against this month's rent payment.
+List<Transaction> dueRecurringPayments(List<Transaction> all, {DateTime? until}) {
+  final now = DateTime.now();
+  final limit = until ?? DateTime(now.year, now.month, now.day);
+  final result = <Transaction>[];
+  for (final t in all) {
+    if (!t.isRecurring || t.draft) continue;
+    final anchor = DateTime(t.date.year, t.date.month, t.date.day);
+    for (final d in computeRecurrenceOccurrences(t)) {
+      final dd = DateTime(d.year, d.month, d.day);
+      if (dd.isAfter(limit)) break;
+      if (dd != anchor) result.add(t.copyWith(date: dd));
+    }
+  }
+  return result;
+}
+
+Set<String> _words(String text) => text
+    .toLowerCase()
+    .split(RegExp(r'[^\p{L}\p{N}]+', unicode: true))
+    .where((w) => w.length >= 3 && !RegExp(r'^\d+$').hasMatch(w))
+    .toSet();
+
+/// Scores how likely [x] is the same booking as the bank draft [d]: the
+/// amount must be (almost) the same and the dates close; the same account
+/// and similar shop/booking text make it surer. Null when it's no match.
+DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = false}) {
+  if (x.type != d.type) return null;
+  final reasons = <String>[];
+  var score = 0.0;
+  final diff = (x.amount - d.amount).abs();
+  if (diff < 0.01) {
+    score += 0.5;
+    reasons.add('مبلغ یکسان');
+  } else if (diff / (d.amount == 0 ? 1 : d.amount) <= 0.02) {
+    score += 0.3;
+    reasons.add('مبلغ تقریباً یکسان');
+  } else {
+    return null;
+  }
+  final days = DateTime(x.date.year, x.date.month, x.date.day).difference(DateTime(d.date.year, d.date.month, d.date.day)).inDays.abs();
+  if (days == 0) {
+    score += 0.3;
+    reasons.add('همان روز');
+  } else if (days <= 3) {
+    score += 0.25;
+    reasons.add('${persianDigits('$days')} روز فاصله');
+  } else if (days <= 7) {
+    score += 0.15;
+    reasons.add('${persianDigits('$days')} روز فاصله');
+  } else if (days <= 10 && recurring) {
+    score += 0.1;
+    reasons.add('${persianDigits('$days')} روز فاصله');
+  } else {
+    return null;
+  }
+  if (x.accountId == d.accountId) {
+    score += 0.15;
+    reasons.add('همان حساب');
+  } else {
+    score -= 0.1;
+    reasons.add('حساب دیگر');
+  }
+  final common = _words('${d.merchant} ${d.note}').intersection(_words('${x.merchant} ${x.note} ${x.items.map((i) => i.name).join(' ')}'));
+  if (common.isNotEmpty) {
+    score += 0.15;
+    reasons.add('نام/شرح مشابه');
+  }
+  if (recurring) reasons.add('پرداخت تکرارشونده');
+  if (score < 0.6) return null;
+  return DuplicateMatch(t: x, recurring: recurring, score: score, reasons: reasons);
+}
+
+/// Possible duplicates of the bank draft [d] among [pool] (saved and other
+/// transactions) and [recurringPayments], best first.
+List<DuplicateMatch> findDuplicateMatches(Transaction d, List<Transaction> pool, List<Transaction> recurringPayments) {
+  final result = <DuplicateMatch>[
+    ...pool.where((x) => x.id != d.id).map((x) => scoreDuplicate(d, x)).whereType<DuplicateMatch>(),
+    ...recurringPayments.map((x) => scoreDuplicate(d, x, recurring: true)).whereType<DuplicateMatch>(),
+  ]..sort((a, b) => b.score.compareTo(a.score));
+  return result;
+}
+
+/// Matches bank drafts to saved transactions one to one: the surest pairs
+/// first, and a saved transaction can only "be" one booking - so two
+/// genuinely identical bookings (two coffees on one day) aren't both marked
+/// as duplicates of the single one recorded.
+Map<String, List<DuplicateMatch>> matchBankDrafts(List<Transaction> drafts, List<Transaction> all) {
+  final recurring = dueRecurringPayments(all);
+  final draftIds = {for (final d in drafts) d.id};
+  final pool = all.where((x) => !draftIds.contains(x.id)).toList();
+  final perDraft = {for (final d in drafts) d.id: findDuplicateMatches(d, pool, recurring)};
+  final pairs = [
+    for (final e in perDraft.entries)
+      for (final m in e.value) (draftId: e.key, m: m),
+  ]..sort((a, b) => b.m.score.compareTo(a.m.score));
+  final takenBy = <String, String>{}; // candidate key -> draft id
+  final assigned = <String>{};
+  for (final p in pairs) {
+    if (assigned.contains(p.draftId) || takenBy.containsKey(p.m.key)) continue;
+    takenBy[p.m.key] = p.draftId;
+    assigned.add(p.draftId);
+  }
+  return {
+    for (final e in perDraft.entries)
+      e.key: assigned.contains(e.key)
+          ? (e.value.where((m) => (takenBy[m.key] ?? e.key) == e.key).toList()
+            ..sort((a, b) => (takenBy[b.key] == e.key ? 1 : 0).compareTo(takenBy[a.key] == e.key ? 1 : 0)))
+          : const <DuplicateMatch>[],
+  };
+}
+
+/// Kept for the import preview: whether [t] has any likely duplicate.
+List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) =>
+    findDuplicateMatches(t, all, dueRecurringPayments(all)).map((m) => m.t).toList();
 
 /// Best guess of a category for a booking text: a known shop name first,
 /// then any of the person's category names that appears in the text.
