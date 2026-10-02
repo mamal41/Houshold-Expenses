@@ -8504,6 +8504,72 @@ List<StatementRow> parseStatementText(String text) {
   return result;
 }
 
+/// A PDF bank statement kept on the device to be read with the AI later
+/// (e.g. after the AI was busy or out of quota).
+class PendingStatement {
+  final String id;
+  final String path; // copy in the app's own storage
+  final String name; // original file name
+  final DateTime addedAt;
+  const PendingStatement({required this.id, required this.path, required this.name, required this.addedAt});
+
+  Map<String, dynamic> toJson() => {'id': id, 'path': path, 'name': name, 'addedAt': addedAt.toIso8601String()};
+  factory PendingStatement.fromJson(Map<String, dynamic> j) => PendingStatement(
+        id: j['id'],
+        path: j['path'],
+        name: j['name'] ?? 'statement.pdf',
+        addedAt: DateTime.tryParse(j['addedAt'] ?? '') ?? DateTime.now(),
+      );
+
+  static const _key = 'pending_statements';
+
+  static Future<List<PendingStatement>> load() async {
+    final sp = await SharedPreferences.getInstance();
+    final list = (sp.getStringList(_key) ?? [])
+        .map((e) {
+          try {
+            return PendingStatement.fromJson(jsonDecode(e));
+          } catch (_) {
+            return null;
+          }
+        })
+        .whereType<PendingStatement>()
+        .where((p) => File(p.path).existsSync())
+        .toList();
+    return list;
+  }
+
+  static Future<void> _save(List<PendingStatement> list) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList(_key, list.map((p) => jsonEncode(p.toJson())).toList());
+  }
+
+  /// Copies [sourcePath] into the app's storage and remembers it.
+  static Future<PendingStatement> add(String sourcePath, String name) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/pending_statements');
+    if (!await folder.exists()) await folder.create(recursive: true);
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+    final dest = '${folder.path}/$id.pdf';
+    await File(sourcePath).copy(dest);
+    final entry = PendingStatement(id: id, path: dest, name: name, addedAt: DateTime.now());
+    await _save([...await load(), entry]);
+    return entry;
+  }
+
+  static Future<void> remove(String id) async {
+    final list = await load();
+    for (final p in list.where((p) => p.id == id)) {
+      try {
+        await File(p.path).delete();
+      } catch (_) {
+        // already gone
+      }
+    }
+    await _save(list.where((p) => p.id != id).toList());
+  }
+}
+
 /// Renders each page of a PDF (up to [maxPages]) to its own temporary JPEG,
 /// for reading bank statements page by page.
 Future<List<String>> renderPdfPagesToImages(String path, {int maxPages = 24}) async {
@@ -8558,6 +8624,16 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   String pdfProgress = '';
   String? detectedCurrency;
 
+  // PDF statement being read
+  String? pdfPath;
+  String pdfName = '';
+  List<String> pdfPages = [];
+  final Map<int, List<StatementRow>> aiPageRows = {}; // pages already read by the AI
+  bool readOffline = false; // preview comes from the simple on-device reading
+  String? aiError; // why the last AI attempt stopped
+  String? pendingId; // set when this PDF was saved earlier for reading later
+  List<PendingStatement> pending = [];
+
   @override
   void initState() {
     super.initState();
@@ -8568,6 +8644,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     accounts = await Store.loadAccounts();
     categories = await Store.loadCategories();
     existingTx = await Store.loadTransactions();
+    pending = await PendingStatement.load();
     if (accounts.isNotEmpty) targetAccount = accounts.first;
     setState(() => loading = false);
   }
@@ -8576,7 +8653,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv', 'pdf']);
     if (result == null || result.files.single.path == null) return;
     if (result.files.single.path!.toLowerCase().endsWith('.pdf')) {
-      await _readPdf(result.files.single.path!);
+      await _openPdf(result.files.single.path!, result.files.single.name);
       return;
     }
     final content = await File(result.files.single.path!).readAsString();
@@ -8598,60 +8675,119 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     });
   }
 
-  /// Reads a PDF statement page by page - with the AI when a Gemini key is
-  /// set (it also suggests a category and the shop/payee), otherwise with
-  /// on-device text recognition and a simpler line-by-line reading.
-  Future<void> _readPdf(String path) async {
+  /// Opens a PDF statement: renders its pages, then reads them with the AI
+  /// when a Gemini key is set, otherwise with the simple on-device reading
+  /// (the AI can still be started from the button afterwards).
+  Future<void> _openPdf(String path, String name, {String? fromPendingId}) async {
     setState(() {
       readingPdf = true;
       pdfProgress = 'در حال آماده‌سازی صفحات...';
       rows = null;
       preview = null;
       detectedCurrency = null;
+      pdfPath = path;
+      pdfName = name;
+      pdfPages = [];
+      aiPageRows.clear();
+      aiError = null;
+      readOffline = false;
+      pendingId = fromPendingId;
     });
     try {
-      final pages = await renderPdfPagesToImages(path);
-      final key = (await Store.loadGeminiKey())?.trim();
-      final result = <StatementRow>[];
-      String? currency;
-      Object? aiError;
-      for (var i = 0; i < pages.length; i++) {
-        if (!mounted) return;
-        setState(() => pdfProgress = 'در حال خواندن صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pages.length}')}...');
-        List<StatementRow>? pageRows;
-        if (key != null && key.isNotEmpty && aiError == null) {
-          try {
-            final json = await _geminiRequest(key, pages[i], _bankStatementPrompt(categories));
-            if (json != null) {
-              currency ??= normalizeCurrency(json['currency']);
-              pageRows = _statementRowsFromJson(json);
-            }
-          } catch (e) {
-            aiError = e;
-          }
-        }
-        pageRows ??= parseStatementText(await extractTextFromImage(pages[i]));
-        result.addAll(pageRows);
-      }
-      if (!mounted) return;
-      result.sort((a, b) => a.date.compareTo(b.date));
-      setState(() {
-        readingPdf = false;
-        preview = result;
-        detectedCurrency = currency;
-      });
-      if (aiError != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${aiError is GeminiException ? aiError.friendlyMessage : 'خواندن هوشمند ممکن نشد.'} '
-              'بقیه‌ی صفحات با خواندن خودکار ساده خوانده شد؛ نتیجه را با دقت بررسی کنید.'),
-          duration: const Duration(seconds: 6),
-        ));
-      }
+      pdfPages = await renderPdfPagesToImages(path);
     } catch (_) {
       if (!mounted) return;
-      setState(() => readingPdf = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خواندن فایل PDF ممکن نشد.')));
+      setState(() {
+        readingPdf = false;
+        pdfPath = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('باز کردن فایل PDF ممکن نشد.')));
+      return;
     }
+    final key = (await Store.loadGeminiKey())?.trim();
+    if (key != null && key.isNotEmpty) {
+      await _readPdfWithAi();
+    } else {
+      await _readPdfOffline();
+    }
+  }
+
+  Future<void> _readPdfOffline() async {
+    final result = <StatementRow>[];
+    for (var i = 0; i < pdfPages.length; i++) {
+      if (!mounted) return;
+      setState(() {
+        readingPdf = true;
+        pdfProgress = 'خواندن خودکار صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pdfPages.length}')}...';
+      });
+      try {
+        result.addAll(parseStatementText(await extractTextFromImage(pdfPages[i])));
+      } catch (_) {
+        // skip an unreadable page
+      }
+    }
+    if (!mounted) return;
+    result.sort((a, b) => a.date.compareTo(b.date));
+    setState(() {
+      readingPdf = false;
+      readOffline = true;
+      preview = result;
+    });
+  }
+
+  /// Reads the pages the AI hasn't read yet, so after a failure (busy
+  /// servers, quota) trying again continues where it stopped.
+  Future<void> _readPdfWithAi() async {
+    final key = (await Store.loadGeminiKey())?.trim();
+    if (key == null || key.isEmpty) {
+      if (mounted) await promptForGeminiKey(context);
+      return;
+    }
+    setState(() {
+      readingPdf = true;
+      aiError = null;
+    });
+    for (var i = 0; i < pdfPages.length; i++) {
+      if (aiPageRows.containsKey(i)) continue;
+      if (!mounted) return;
+      setState(() => pdfProgress =
+          'خواندن صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pdfPages.length}')} با هوش مصنوعی...');
+      try {
+        final json = await _geminiRequest(key, pdfPages[i], _bankStatementPrompt(categories));
+        detectedCurrency ??= normalizeCurrency(json?['currency']);
+        aiPageRows[i] = json == null ? [] : _statementRowsFromJson(json);
+      } catch (e) {
+        aiError = e is GeminiException ? e.friendlyMessage : 'خواندن با هوش مصنوعی ممکن نشد.';
+        break;
+      }
+    }
+    if (!mounted) return;
+    final done = aiPageRows.length == pdfPages.length;
+    setState(() {
+      readingPdf = false;
+      if (done) {
+        readOffline = false;
+        preview = [for (final i in aiPageRows.keys.toList()..sort()) ...aiPageRows[i]!]
+          ..sort((a, b) => a.date.compareTo(b.date));
+      }
+    });
+    // Nothing usable yet - fall back to the simple reading so there's at
+    // least something to look at, while the AI can be retried or the file
+    // saved for later.
+    if (!done && preview == null) await _readPdfOffline();
+  }
+
+  Future<void> _saveForLater() async {
+    final path = pdfPath;
+    if (path == null) return;
+    if (pendingId == null) {
+      await PendingStatement.add(path, pdfName);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('صورتحساب ذخیره شد. بعداً از همین صفحه می‌توانی آن را با هوش مصنوعی بخوانی.'),
+    ));
+    Navigator.pop(context);
   }
 
   void _buildPreview() {
@@ -8724,7 +8860,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       accountId: targetAccount!.id,
       date: p.date,
       merchant: type == TxType.expense ? (p.merchant ?? '') : '',
-      note: 'از صورتحساب بانکی خوانده شده است.${p.desc.isNotEmpty ? ' ${p.desc}' : ''}',
+      note: p.desc,
       // Bank-statement rows aren't registered directly - they land in their
       // own drafts tab so each one can be reviewed (and compared with a
       // possible duplicate) before it counts toward any totals.
@@ -8761,6 +8897,8 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       await Store.upsertTransaction(d);
       imported++;
     }
+    // A statement saved for later reading is done once it's imported.
+    if (pendingId != null) await PendingStatement.remove(pendingId!);
     if (!mounted) return;
     setState(() => importing = false);
     final open = await showDialog<bool>(
@@ -8784,6 +8922,75 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     } else {
       Navigator.pop(context);
     }
+  }
+
+  /// How the open PDF was read, with the AI button (start, continue after a
+  /// failure, or read again) and saving the file to read it later.
+  Widget _pdfStatusCard() {
+    final aiDone = pdfPages.isNotEmpty && aiPageRows.length == pdfPages.length && !readOffline;
+    final String status;
+    final Color color;
+    if (aiError != null) {
+      status = '$aiError\n${persianDigits('${aiPageRows.length}')} از ${persianDigits('${pdfPages.length}')} صفحه با هوش مصنوعی خوانده شد'
+          '${readOffline ? '؛ پیش‌نمایش زیر از خواندن خودکار ساده است و ممکن است دقیق نباشد.' : '.'}';
+      color = Colors.orange;
+    } else if (aiDone) {
+      status = 'همه‌ی ${persianDigits('${pdfPages.length}')} صفحه با هوش مصنوعی خوانده شد.';
+      color = Colors.green;
+    } else {
+      status = 'این پیش‌نمایش از خواندن خودکار ساده است و برای PDF معمولاً دقیق نیست. برای نتیجه‌ی درست با هوش مصنوعی بخوان.';
+      color = Colors.orange;
+    }
+    return Card(
+      color: color == Colors.green ? Colors.green.shade50 : Colors.orange.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.picture_as_pdf_outlined, size: 20),
+                const SizedBox(width: 8),
+                Expanded(child: Text(pdfName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold))),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(status, style: TextStyle(fontSize: 12, color: color == Colors.green ? Colors.green.shade900 : Colors.orange.shade900)),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: readingPdf
+                        ? null
+                        : () {
+                            if (aiDone) aiPageRows.clear();
+                            _readPdfWithAi();
+                          },
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: Text(
+                      aiDone ? 'خواندن دوباره با هوش مصنوعی' : (aiPageRows.isNotEmpty ? 'ادامه با هوش مصنوعی' : 'خواندن با هوش مصنوعی'),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+                if (!aiDone && pendingId == null) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: readingPdf ? null : _saveForLater,
+                      icon: const Icon(Icons.schedule, size: 18),
+                      label: const Text('ذخیره برای بعد', textAlign: TextAlign.center),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -8816,6 +9023,31 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 ),
                 const SizedBox(height: 16),
                 FilledButton.icon(onPressed: _pickFile, icon: const Icon(Icons.upload_file), label: const Text('انتخاب فایل CSV یا PDF')),
+                if (pending.isNotEmpty) ...[
+                  const SizedBox(height: 24),
+                  const Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text('صورتحساب‌های ذخیره‌شده برای خواندن با هوش مصنوعی', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(height: 8),
+                  ...pending.map((p) => Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.picture_as_pdf_outlined),
+                          title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text('ذخیره در ${formatDate(p.addedAt)}'),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'حذف',
+                            onPressed: () async {
+                              await PendingStatement.remove(p.id);
+                              final list = await PendingStatement.load();
+                              if (mounted) setState(() => pending = list);
+                            },
+                          ),
+                          onTap: () => _openPdf(p.path, p.name, fromPendingId: p.id),
+                        ),
+                      )),
+                ],
               ],
             )
           else ...[
@@ -8895,6 +9127,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             const SizedBox(height: 16),
             OutlinedButton(onPressed: _buildPreview, child: const Text('پیش‌نمایش')),
             ],
+            if (pdfPath != null) _pdfStatusCard(),
             if (preview != null) ...[
               const SizedBox(height: 16),
               Text('${persianDigits('${preview!.length}')} تراکنش قابل‌بارگذاری پیدا شد.', style: const TextStyle(fontWeight: FontWeight.bold)),
