@@ -2073,6 +2073,34 @@ Future<({IconData icon, bool isFallback})> suggestIconForCategory(String name, T
   return (icon: fallback, isFallback: true);
 }
 
+/// Icon available right away for a new category: a keyword match, else the
+/// generic one (flagged so Gemini picks a better one in the background).
+({IconData icon, bool isFallback}) quickIconForCategory(String name, TxType type) {
+  for (final entry in _iconKeywordHints.entries) {
+    if (name.contains(entry.key)) return (icon: entry.value, isFallback: false);
+  }
+  return (icon: type == TxType.expense ? Icons.category_outlined : Icons.attach_money_outlined, isFallback: true);
+}
+
+/// Saves [cat] right away and, if it only got the generic icon, asks Gemini
+/// for a better one afterwards - waiting for Gemini first (slow, or failing
+/// once the daily quota is used up) left the new category missing from the
+/// list for a long time, or lost when the screen was closed meanwhile.
+/// [onIconUpdated] gets the category with its new icon.
+Future<void> addCategoryAndRefineIcon(List<Category> all, Category cat, void Function(Category updated) onIconUpdated) async {
+  await Store.saveCategories(all);
+  if (!cat.iconNeedsRetry) return;
+  final ai = await _suggestIconViaGemini(cat.name);
+  if (ai == null) return; // stays flagged; retried on a later launch
+  final stored = await Store.loadCategories();
+  final i = stored.indexWhere((c) => c.id == cat.id);
+  if (i < 0) return;
+  final updated = stored[i].copyWith(iconCodePoint: ai.codePoint, iconNeedsRetry: false);
+  stored[i] = updated;
+  await Store.saveCategories(stored);
+  onIconUpdated(updated);
+}
+
 /// Retries choosing a real icon (via Gemini) for any category still stuck
 /// with the generic fallback icon. Meant to be called once per app launch,
 /// but throttled to at most once per calendar day - this shares the same
@@ -15466,7 +15494,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
       }
       return;
     }
-    final iconResult = await suggestIconForCategory(name, widget.type);
+    final iconResult = quickIconForCategory(name, widget.type);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
@@ -15476,7 +15504,9 @@ class _CategoryPickerState extends State<CategoryPicker> {
       iconNeedsRetry: iconResult.isFallback,
     );
     setState(() => categories = [...categories, newCat]..sort((a, b) => persianCompare(a.name, b.name)));
-    await Store.saveCategories(categories);
+    await addCategoryAndRefineIcon(categories, newCat, (updated) {
+      if (mounted) setState(() => categories = categories.map((c) => c.id == updated.id ? updated : c).toList());
+    });
   }
 
   @override
@@ -15606,7 +15636,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       }
       return;
     }
-    final iconResult = await suggestIconForCategory(name, selectedType);
+    final iconResult = quickIconForCategory(name, selectedType);
     final newCat = Category(
       id: 'c_${DateTime.now().microsecondsSinceEpoch}',
       name: name,
@@ -15615,8 +15645,14 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       iconCodePoint: iconResult.icon.codePoint,
       iconNeedsRetry: iconResult.isFallback,
     );
-    setState(() => categories = [...categories, newCat]..sort((a, b) => persianCompare(a.name, b.name)));
-    await Store.saveCategories(categories);
+    setState(() {
+      categories = [...categories, newCat]..sort((a, b) => persianCompare(a.name, b.name));
+      // Show it: open the group it was added to.
+      if (parentId != null) collapsed.remove(parentId);
+    });
+    await addCategoryAndRefineIcon(categories, newCat, (updated) {
+      if (mounted) setState(() => categories = categories.map((c) => c.id == updated.id ? updated : c).toList());
+    });
   }
 
   Future<void> _rename(Category c) async {
