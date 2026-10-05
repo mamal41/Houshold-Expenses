@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
-    show SystemNavigator, SystemChrome, SystemUiMode, SystemUiOverlay, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
+    show SystemNavigator, SystemChrome, SystemUiMode, SystemUiOverlay, SystemUiOverlayStyle, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -30,6 +30,10 @@ void main() async {
   // Keep Android's status bar and navigation buttons (back/home/recents)
   // always visible; the app lays itself out between them.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    systemNavigationBarColor: Colors.black,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
   await NotificationService.instance.init();
   currentLanguage.value = await Store.loadLanguage();
   currentThemeMode.value = await Store.loadThemeMode();
@@ -3113,10 +3117,31 @@ class _MoneyAppState extends State<MoneyApp> {
       ],
       // The lock wraps the whole navigator (not just the home route), so it
       // covers whatever screen was open.
-      builder: (context, child) => Directionality(
-        textDirection: currentLanguage.value.direction,
-        child: AppLockGate(child: child!),
-      ),
+      builder: (context, child) {
+        // Android's navigation buttons get their own strip at the bottom
+        // instead of being drawn over the app (newer Android versions draw
+        // apps edge to edge): every screen, sheet and dialog ends above it,
+        // so nothing at the end of a list sits behind the buttons.
+        final mq = MediaQuery.of(context);
+        final navBar = mq.viewPadding.bottom;
+        return ColoredBox(
+          color: Colors.black,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: navBar),
+            child: MediaQuery(
+              data: mq.copyWith(
+                padding: mq.padding.copyWith(bottom: 0),
+                viewPadding: mq.viewPadding.copyWith(bottom: 0),
+                viewInsets: mq.viewInsets.copyWith(bottom: max(0.0, mq.viewInsets.bottom - navBar)),
+              ),
+              child: Directionality(
+                textDirection: currentLanguage.value.direction,
+                child: AppLockGate(child: child!),
+              ),
+            ),
+          ),
+        );
+      },
       navigatorKey: rootNavigatorKey,
       navigatorObservers: [appRouteObserver],
       home: const HomeScreen(),
@@ -3441,6 +3466,7 @@ class AppDrawer extends StatelessWidget {
             sectionLabel(tr('section_transactions')),
             item(12, Icons.list_alt, tr('all_transactions'), () => const AllTransactionsScreen()),
             item(21, Icons.edit_note_outlined, 'تراکنش‌های پیش‌نویس', () => const DraftsScreen()),
+            item(22, Icons.content_copy_outlined, 'تراکنش‌های تکراری', () => const DraftsScreen(initialTab: 2)),
             item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
             item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
             item(20, Icons.shopping_cart_outlined, tr('shopping_lists_title'), () => const ShoppingListsScreen()),
@@ -4922,13 +4948,26 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  List<Transaction> tx = [];
+  List<Transaction> _txAll = [];
+  /// Confirmed transactions shown on this screen: all of them, or only the
+  /// chosen account's - the account filter applies to every number here.
+  List<Transaction> get tx => dashboardAccountFilter == null
+      ? _txAll
+      : _memoized('tx', () => _txAll.where((t) => t.accountId == dashboardAccountFilter).toList());
+  List<Account> get _viewAccounts =>
+      dashboardAccountFilter == null ? accounts : accounts.where((a) => a.id == dashboardAccountFilter).toList();
   List<Category> categories = [];
   List<Account> accounts = [];
   bool loading = true;
   String? dashboardAccountFilter;
   final Map<String, bool> _monthShowNotDue = {}; // "y-m" -> true shows the not-yet-due list instead of the due one
   int shoppingPending = 0; // items not yet ticked off across all shopping lists
+  int confirmedDuplicates = 0; // likely double-entered confirmed transactions
+
+  Future<void> _countConfirmedDuplicates() async {
+    final n = findConfirmedDuplicatePairs(await Store.loadTransactions(), await loadDismissedDuplicatePairs()).length;
+    if (mounted && n != confirmedDuplicates) setState(() => confirmedDuplicates = n);
+  }
   late final AnimationController _draftHintController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1300));
   bool _draftHintPlayed = false; // only nudge the person once per time the app is opened
   Timer? _draftHintStopTimer;
@@ -5017,6 +5056,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       _memo.clear();
       shoppingPending = await _loadShoppingPending();
       if (mounted) setState(() {});
+      unawaited(_countConfirmedDuplicates());
     } finally {
       _lastRefresh = DateTime.now();
       _refreshing = false;
@@ -5041,6 +5081,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     // Best-effort background retry for categories that only got a generic
     // icon last time (e.g. Gemini was unavailable); does nothing if none
     // are pending.
+    unawaited(_countConfirmedDuplicates());
     unawaited(retryPendingCategoryIcons());
     unawaited(checkBudgetGoals());
     unawaited(checkSpendingAnomalies());
@@ -5073,7 +5114,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   // recurring projections), reused until the data or the day changes. Without
   // this every rebuild - e.g. expanding a month - recomputed them all.
   final Map<String, Object> _memo = {};
-  T _memoized<T extends Object>(String key, T Function() compute) => (_memo[key] ??= compute()) as T;
+  T _memoized<T extends Object>(String key, T Function() compute) =>
+      (_memo['${dashboardAccountFilter ?? '*'}|$key'] ??= compute()) as T;
   String get _dayKey {
     final n = DateTime.now();
     return '${n.year}-${n.month}-${n.day}';
@@ -5085,7 +5127,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     final all = await Store.loadTransactions();
     if (seq != _reloadSeq) return; // a newer reload is already in flight; let it win
     _draftCount = all.where((t) => t.draft).length;
-    tx = all.where((t) => !t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
+    _txAll = all.where((t) => !t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
     _memo.clear();
     _lastRefresh = DateTime.now();
   }
@@ -5121,7 +5163,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   Map<String, double> get totalBalanceByCurrency => _memoized('balances|$_dayKey|$_calKey', _computeTotalBalance);
   Map<String, double> _computeTotalBalance() {
     final map = <String, double>{};
-    for (final a in accounts) {
+    for (final a in _viewAccounts) {
       if (a.initialBalance != 0) {
         map[a.currency] = (map[a.currency] ?? 0) + a.initialBalance;
       }
@@ -5138,49 +5180,111 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   /// only meaningful when more than one currency is actually in use.
   double get _combinedBalanceInMainCurrency {
     final byAccount = <String, double>{};
-    for (final a in accounts) {
+    for (final a in _viewAccounts) {
       byAccount[a.id] = a.initialBalance;
     }
     for (final t in _effectiveTx) {
       byAccount[t.accountId] = (byAccount[t.accountId] ?? 0) + (t.type == TxType.income ? t.amount : -t.amount);
     }
     var total = 0.0;
-    for (final a in accounts) {
+    for (final a in _viewAccounts) {
       total += (byAccount[a.id] ?? 0) * a.exchangeRateToMain;
     }
     return total;
   }
 
-  /// "Safe to spend" until the end of this month: current
-  /// balance minus every not-yet-due expense (real future-dated
-  /// transactions, plus projected recurring occurrences) still expected
-  /// before the month ends - a PocketGuard/Simplifi-style guardrail so a
+  /// Expenses (and incoming transfers) still to come from tomorrow to the
+  /// end of this calendar month: future-dated transactions and the coming
+  /// payments of recurring ones - only this month, not later months.
+  List<TxOccurrence> get upcomingThisMonth => _memoized('upcoming|$_dayKey|$_calKey', () {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final endOfMonth = calendarMonthOf(today).end;
+        return occurrencesWithRecurringProjections(tx, horizonDays: 40)
+            .where((e) => e.date.isAfter(today) && !e.date.isAfter(endOfMonth))
+            .where((e) => e.t.type == TxType.expense || e.t.categoryId == '_transfer_in_')
+            .toList()
+          ..sort((x, y) => x.date.compareTo(y.date));
+      });
+
+  /// "Safe to spend" until the end of this month: today's balance minus
+  /// every expense still expected before the month ends - a guardrail so a
   /// healthy-looking balance doesn't hide bills that are already spoken for.
-  Map<String, double> get safeToSpendByCurrency => _memoized('safe|$_dayKey', _computeSafeToSpend);
+  /// With several currencies it's one figure in the main currency.
+  Map<String, double> get safeToSpendByCurrency => _memoized('safe|$_dayKey|$_calKey', _computeSafeToSpend);
   Map<String, double> _computeSafeToSpend() {
-    final balances = Map<String, double>.from(totalBalanceByCurrency);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final endOfMonth = calendarMonthOf(today).end;
-    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 40)) {
-      if (e.t.type != TxType.expense) continue;
-      if (!e.date.isAfter(today) || e.date.isAfter(endOfMonth)) continue;
-      final cur = currencyOf(e.t.accountId);
-      balances[cur] = (balances[cur] ?? 0) - e.t.amount;
+    final byAccount = {for (final a in _viewAccounts) a.id: a.initialBalance};
+    // Today's balance: future-dated transactions are counted below, as
+    // upcoming - counting them in the balance too took them off twice.
+    for (final t in _effectiveTx) {
+      if (t.date.isAfter(today) || !byAccount.containsKey(t.accountId)) continue;
+      byAccount[t.accountId] = byAccount[t.accountId]! + (t.type == TxType.income ? t.amount : -t.amount);
     }
-    if (balances.length <= 1) return balances;
-    // Several currencies: one figure in the main currency (each converted
-    // with its day rate), like the total balance above it - otherwise a
-    // shortfall in one currency sat next to the untouched balance of another.
-    final mainCur = mainCurrencyOf(accounts);
+    for (final e in upcomingThisMonth) {
+      if (!byAccount.containsKey(e.t.accountId)) continue;
+      byAccount[e.t.accountId] = byAccount[e.t.accountId]! + (e.t.type == TxType.income ? e.t.amount : -e.t.amount);
+    }
+    final byCurrency = <String, double>{};
+    for (final a in _viewAccounts) {
+      final v = byAccount[a.id] ?? 0;
+      if (v != 0) byCurrency[a.currency] = (byCurrency[a.currency] ?? 0) + v;
+    }
+    if (byCurrency.length <= 1) return byCurrency;
     var total = 0.0;
-    balances.forEach((cur, value) {
-      final rate = cur == mainCur
-          ? 1.0
-          : accounts.firstWhere((a) => a.currency == cur, orElse: () => accounts.first).exchangeRateToMain;
-      total += value * rate;
-    });
-    return {mainCur: total};
+    for (final a in _viewAccounts) {
+      total += (byAccount[a.id] ?? 0) * a.exchangeRateToMain;
+    }
+    return {mainCurrencyOf(accounts): total};
+  }
+
+  /// What the "safe to spend" figure subtracts, so a surprising number can
+  /// be checked item by item.
+  void _showUpcoming() {
+    final items = upcomingThisMonth;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.7),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'پرداخت‌های پیش‌رو تا آخر ${calendarMonthOf(DateTime.now()).name} '
+                '(تراکنش‌های آینده و پرداخت‌های تکرارشونده‌ی همین ماه):',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
+            if (items.isEmpty)
+              const Padding(padding: EdgeInsets.all(16), child: Text('تا آخر ماه پرداختی در پیش نیست.')),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final e in items)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(e.isReal ? Icons.event_outlined : Icons.repeat, size: 20),
+                      title: Text(e.t.merchant.trim().isNotEmpty ? e.t.merchant.trim() : categoryName(e.t.categoryId)),
+                      subtitle: Text(formatDate(e.date)),
+                      trailing: Text(
+                        ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
+                        style: TextStyle(color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _balanceText(double value, String currency) => Padding(
@@ -5469,6 +5573,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            // Account filter: applies to every number and list on this page.
+            if (accounts.length > 1)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: DropdownButtonFormField<String?>(
+                  initialValue: dashboardAccountFilter,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+                  items: [
+                    DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
+                    ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
+                  ],
+                  onChanged: (v) => setState(() => dashboardAccountFilter = v),
+                ),
+              ),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -5478,7 +5597,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('موجودی کل', style: Theme.of(context).textTheme.titleMedium),
+                        Text(dashboardAccountFilter == null ? 'موجودی کل' : 'موجودی حساب', style: Theme.of(context).textTheme.titleMedium),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -5493,7 +5612,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                     ],
                     if (safeToSpend.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Container(
+                      InkWell(
+                        onTap: _showUpcoming,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                         decoration: BoxDecoration(
                           color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
@@ -5506,7 +5628,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                               children: [
                                 Icon(Icons.shield_outlined, size: 14, color: Colors.grey.shade600),
                                 const SizedBox(width: 6),
-                                Text('امن برای خرج تا آخر ماه', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                Expanded(
+                                  child: Text('امن برای خرج تا آخر ماه', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                ),
+                                Text('جزئیات', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                Icon(Icons.chevron_left, size: 14, color: Colors.grey.shade600),
                               ],
                             ),
                             const SizedBox(height: 4),
@@ -5538,6 +5664,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                           ],
                         ),
                       ),
+                      ),
                     ],
                     const Divider(height: 24),
                     Text(periodLabel, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
@@ -5557,6 +5684,36 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 ),
               ),
             ),
+            if (confirmedDuplicates > 0) ...[
+              const SizedBox(height: 12),
+              Material(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen(initialTab: 2)));
+                    await _countConfirmedDuplicates();
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(Icons.content_copy_outlined, color: Colors.orange.shade900),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '${persianDigits('$confirmedDuplicates')} مورد احتمالاً تکراری بین تراکنش‌های ثبت‌شده - بررسی کن',
+                            style: TextStyle(fontSize: 13, color: Colors.orange.shade900, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Icon(Icons.chevron_left, color: Colors.orange.shade900),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Material(
               color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.6),
@@ -5608,20 +5765,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
             ),
             const SizedBox(height: 12),
             if (tx.isNotEmpty) ...[
-              if (accounts.length > 1)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: DropdownButtonFormField<String?>(
-                    initialValue: dashboardAccountFilter,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
-                    items: [
-                      DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
-                      ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
-                    ],
-                    onChanged: (v) => setState(() => dashboardAccountFilter = v),
-                  ),
-                ),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -6348,12 +6491,68 @@ class _DraftsScreenState extends State<DraftsScreen> {
     tx = drafts.where((t) => !isBankImportId(t.id)).toList();
     bankTx = drafts.where((t) => isBankImportId(t.id)).toList();
     matches = matchBankDrafts(drafts, all);
+    confirmedPairs = findConfirmedDuplicatePairs(all, await loadDismissedDuplicatePairs());
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     if (mounted) setState(() => loading = false);
   }
 
   Map<String, List<DuplicateMatch>> matches = {};
+  List<({Transaction a, DuplicateMatch m})> confirmedPairs = [];
+
+  Future<void> _compareConfirmed(Transaction a, DuplicateMatch m) async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DuplicateCompareScreen(draft: a, matches: [m], categories: categories, accounts: accounts, confirmedPair: true),
+      ),
+    );
+    if (changed == true) await _load();
+  }
+
+  Widget _confirmedPairTile(Transaction a, DuplicateMatch m) {
+    final color = m.strong ? Colors.red : Colors.orange;
+    String line(Transaction t) {
+      final name = t.merchant.trim().isNotEmpty ? t.merchant.trim() : categoryName(t.categoryId);
+      return '${formatDate(t.date)} • $name • ${ltr(formatMoney(t.amount, currencyOf(t.accountId)))}';
+    }
+
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _compareConfirmed(a, m),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(line(a), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              const SizedBox(height: 4),
+              Text('${m.recurring ? 'پرداخت تکرارشونده: ' : ''}${line(m.t)}', style: const TextStyle(fontSize: 13)),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: color.shade50, borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${m.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'}: ${m.reasons.join('، ')}',
+                        style: TextStyle(color: color.shade900, fontSize: 12),
+                      ),
+                    ),
+                    Text('مقایسه', style: TextStyle(color: color.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
+                    Icon(Icons.chevron_left, size: 18, color: color.shade900),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
@@ -6512,7 +6711,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '${best.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'}: ${best.reasons.join('، ')}',
+                            '${best.t.draft ? 'مشابه پیش‌نویس دیگر' : best.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'}: ${best.reasons.join('، ')}',
                             style: TextStyle(color: color.shade900, fontSize: 12),
                           ),
                         ),
@@ -6573,7 +6772,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
     final fresh = [for (final e in bankWithDup) if (e.dups.isEmpty) e.t];
     final sure = [for (final e in bankWithDup) if (e.dups.isNotEmpty && e.dups.first.strong) e.t];
     return DefaultTabController(
-      length: 2,
+      length: 3,
       initialIndex: widget.initialTab,
       child: Scaffold(
         appBar: AppBar(
@@ -6582,7 +6781,10 @@ class _DraftsScreenState extends State<DraftsScreen> {
             tabs: [
               Tab(text: 'اسکن و دستی (${persianDigits('${tx.length}')})'),
               Tab(text: 'صورتحساب بانک (${persianDigits('${bankTx.length}')})'),
+              Tab(text: 'تکراری در ثبت‌شده‌ها (${persianDigits('${confirmedPairs.length}')})'),
             ],
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
           ),
         ),
         body: TabBarView(
@@ -6647,6 +6849,24 @@ class _DraftsScreenState extends State<DraftsScreen> {
                       ...bankWithDup.map((e) => _tile(e.t, duplicates: e.dups, bank: true)),
                     ],
                   ),
+            confirmedPairs.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('بین تراکنش‌های ثبت‌شده مورد تکراری پیدا نشد.', textAlign: TextAlign.center),
+                    ),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      Text(
+                        'تراکنش‌های ثبت‌شده‌ای که احتمالاً دو بار وارد شده‌اند. اگر بگویی تکراری نیستند، دیگر نشان داده نمی‌شوند.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                      const SizedBox(height: 8),
+                      ...confirmedPairs.map((p) => _confirmedPairTile(p.a, p.m)),
+                    ],
+                  ),
           ],
         ),
       ),
@@ -6663,12 +6883,15 @@ class DuplicateCompareScreen extends StatefulWidget {
   final List<DuplicateMatch> matches;
   final List<Category> categories;
   final List<Account> accounts;
+  /// Two already confirmed transactions (not a draft against a saved one).
+  final bool confirmedPair;
   List<Transaction> get candidates => matches.map((m) => m.t).toList();
   const DuplicateCompareScreen({
     required this.draft,
     required this.matches,
     required this.categories,
     required this.accounts,
+    this.confirmedPair = false,
     super.key,
   });
   @override
@@ -6695,8 +6918,9 @@ String recurrenceLabelOf(Transaction t) {
 
 /// Turns a bank-statement draft into a transfer between two of the
 /// person's accounts (e.g. money moved from the Euro account into the Rial
-/// one): asks for the other account (and its amount when the currencies
-/// differ), saves both sides of the transfer and removes the draft.
+/// one): asks for the other account, then opens the transfer form filled in
+/// from the draft to check and complete before saving; the draft is removed
+/// only once the transfer is saved.
 Future<bool> convertDraftToTransfer(BuildContext context, Transaction draft, List<Account> accounts) async {
   final incoming = draft.type == TxType.income;
   final here = accounts.where((a) => a.id == draft.accountId).firstOrNull;
@@ -6705,84 +6929,41 @@ Future<bool> convertDraftToTransfer(BuildContext context, Transaction draft, Lis
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای انتقال، حساب دیگری لازم است.')));
     return false;
   }
-  Account other = others.first;
-  final otherAmountCtrl = TextEditingController();
-  final ok = await showDialog<bool>(
+  final other = await showDialog<Account>(
     context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setLocal) {
-        final sameCurrency = other.currency == here.currency;
-        return AlertDialog(
-          title: const Text('تبدیل به انتقال بین حساب‌ها'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                incoming
-                    ? '${formatMoney(draft.amount, here.currency)} به «${here.name}» واریز شده؛ از کدام حساب آمده؟'
-                    : '${formatMoney(draft.amount, here.currency)} از «${here.name}» برداشت شده؛ به کدام حساب رفته؟',
-                style: const TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<Account>(
-                initialValue: other,
-                decoration: InputDecoration(labelText: incoming ? 'از حساب' : 'به حساب', border: const OutlineInputBorder()),
-                items: others.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
-                onChanged: (v) => setLocal(() => other = v ?? other),
-              ),
-              if (!sameCurrency) ...[
-                const SizedBox(height: 12),
-                TextField(
-                  controller: otherAmountCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  inputFormatters: const [AmountInputFormatter()],
-                  decoration: InputDecoration(
-                    labelText: incoming ? 'مبلغ برداشت‌شده از «${other.name}» (${currencyLabel(other.currency)})' : 'مبلغ واریزشده به «${other.name}» (${currencyLabel(other.currency)})',
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تبدیل')),
-          ],
-        );
-      },
+    builder: (ctx) => SimpleDialog(
+      title: Text(
+        incoming
+            ? '${formatMoney(draft.amount, here.currency)} به «${here.name}» واریز شده؛ از کدام حساب آمده؟'
+            : '${formatMoney(draft.amount, here.currency)} از «${here.name}» برداشت شده؛ به کدام حساب رفته؟',
+        style: const TextStyle(fontSize: 15),
+      ),
+      children: others
+          .map((a) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, a),
+                child: Text('${a.name} (${currencyLabel(a.currency)})'),
+              ))
+          .toList(),
     ),
   );
-  if (ok != true) return false;
-  final otherAmount = other.currency == here.currency ? draft.amount : parseAmount(otherAmountCtrl.text);
-  if (otherAmount == null || otherAmount <= 0) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ حساب دیگر را وارد کنید.')));
-    }
-    return false;
-  }
-  final baseId = DateTime.now().microsecondsSinceEpoch.toString();
-  final from = incoming ? other : here;
-  final to = incoming ? here : other;
-  final bankText = draft.note.trim();
-  await Store.upsertTransaction(Transaction(
-    id: '${baseId}_out',
-    type: TxType.expense,
-    amount: incoming ? otherAmount : draft.amount,
-    categoryId: '_transfer_out_',
-    accountId: from.id,
-    date: draft.date,
-    note: bankText.isNotEmpty ? bankText : 'انتقال به ${to.name}',
-  ));
-  await Store.upsertTransaction(Transaction(
-    id: '${baseId}_in',
-    type: TxType.income,
-    amount: incoming ? draft.amount : otherAmount,
-    categoryId: '_transfer_in_',
-    accountId: to.id,
-    date: draft.date,
-    note: bankText.isNotEmpty ? bankText : 'انتقال از ${from.name}',
-  ));
+  if (other == null || !context.mounted) return false;
+  final bankText = draft.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim();
+  final saved = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(
+      builder: (_) => TransferScreen(
+        initialFromId: incoming ? other.id : here.id,
+        initialToId: incoming ? here.id : other.id,
+        // The draft's amount is in its own account's currency; the form's
+        // amount is the one leaving the source account.
+        initialAmount: !incoming || other.currency == here.currency ? draft.amount : null,
+        initialReceived: incoming && other.currency != here.currency ? draft.amount : null,
+        initialDate: draft.date,
+        initialNote: bankText,
+      ),
+    ),
+  );
+  if (saved != true) return false;
   await Store.deleteTransaction(draft.id);
   return true;
 }
@@ -6868,7 +7049,15 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   static const _editable = {'date', 'amount', 'category', 'account', 'merchant', 'note'};
 
   Future<void> _saveOtherEdits() async {
-    for (final t in edited.values) {
+    for (final e in edited.entries) {
+      var t = e.value;
+      if (widget.matches[e.key].recurring) {
+        // A payment of a recurring transaction isn't stored on its own: the
+        // change goes to the series itself (its own first date kept).
+        final base = (await Store.loadTransactions()).where((x) => x.id == t.id).firstOrNull;
+        if (base == null) continue;
+        t = base.copyWith(amount: t.amount, categoryId: t.categoryId, accountId: t.accountId, merchant: t.merchant, note: t.note);
+      }
       await Store.upsertTransaction(t);
       savedAny = true;
     }
@@ -6884,16 +7073,44 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   }
 
   Future<void> _deleteDraft() async {
+    var victim = widget.draft;
+    if (widget.confirmedPair && !_selectedIsRecurring) {
+      // Both are saved transactions: ask which one goes.
+      final pick = await showDialog<Transaction>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('کدام حذف شود؟'),
+          children: [
+            for (final t in [draft, other])
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, t),
+                child: Text('${formatDate(t.date)} • ${t.merchant.trim().isNotEmpty ? t.merchant.trim() : _category(t.categoryId)} • ${ltr(_money(t))}'),
+              ),
+          ],
+        ),
+      );
+      if (pick == null || !mounted) return;
+      victim = pick;
+    }
     setState(() => busy = true);
-    await _saveOtherEdits();
-    await Store.deleteTransaction(widget.draft.id);
+    if (victim.id == widget.draft.id) {
+      await _saveOtherEdits();
+    } else {
+      await _saveDraftEdits();
+    }
+    await Store.deleteTransaction(victim.id);
     if (mounted) Navigator.pop(context, true);
   }
 
   Future<void> _keepAsNew() async {
     setState(() => busy = true);
     await _saveOtherEdits();
-    await Store.upsertTransaction(draft.copyWith(draft: false));
+    if (widget.confirmedPair) {
+      await _saveDraftEdits();
+      await dismissDuplicatePair(widget.draft, widget.matches[selected]);
+    } else {
+      await Store.upsertTransaction(draft.copyWith(draft: false));
+    }
     if (mounted) Navigator.pop(context, true);
   }
 
@@ -6927,9 +7144,9 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   /// Tapping a cell: take the value from the other column, or type/pick a
   /// new one - right in the table.
   Future<void> _editField(String field, {required bool draftSide}) async {
-    if (!draftSide && _selectedIsRecurring) {
+    if (!draftSide && _selectedIsRecurring && field == 'date') {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('این یک پرداخت از تراکنش تکرارشونده است؛ برای تغییرش خود تراکنش تکرارشونده را ویرایش کن.'),
+        content: Text('تاریخ پرداخت‌های تکرارشونده از خود تراکنش تکرارشونده می‌آید و این‌جا تغییر نمی‌کند.'),
       ));
       return;
     }
@@ -7085,7 +7302,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           const SizedBox(width: 4),
           _cell(
             b,
-            editable: editable && !_selectedIsRecurring,
+            editable: editable && !(_selectedIsRecurring && field == 'date'),
             changed: edited.containsKey(selected) && b != _value(widget.candidates[selected], field),
             style: style,
             onTap: () => _editField(field, draftSide: false),
@@ -7122,7 +7339,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           OutlinedButton(
             onPressed: busy ? null : _keepAsNew,
             style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('تکراری نیست، ثبت شود', textAlign: TextAlign.center),
+            child: Text(widget.confirmedPair ? 'تکراری نیست' : 'تکراری نیست، ثبت شود', textAlign: TextAlign.center),
           ),
           FilledButton(
             onPressed: busy ? null : _deleteDraft,
@@ -7164,11 +7381,18 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                     child: Row(
                       children: [
                         const SizedBox(width: 64),
-                        const Expanded(child: Text('پیش‌نویس', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                        Expanded(
+                          child: Text(
+                            widget.confirmedPair ? 'این تراکنش' : 'پیش‌نویس',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            _selectedIsRecurring ? 'پرداخت تکرارشونده' : (o.draft ? 'پیش‌نویس موجود' : 'ثبت‌شده‌ی قبلی'),
+                            _selectedIsRecurring
+                                ? 'پرداخت تکرارشونده'
+                                : (o.draft ? 'پیش‌نویس دیگر' : (widget.confirmedPair ? 'تراکنش مشابه' : 'ثبت‌شده‌ی قبلی')),
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                           ),
                         ),
@@ -7210,16 +7434,25 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
               ),
               child: Text(
                 '${match.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'} - ${match.reasons.join('، ')}',
-                style: const TextStyle(fontSize: 12),
+                // Dark text on the light box, also in dark mode.
+                style: TextStyle(fontSize: 12, color: (match.strong ? Colors.red : Colors.orange).shade900),
               ),
             ),
+            if (_selectedIsRecurring) ...[
+              const SizedBox(height: 8),
+              Text(
+                'تغییر ستون «پرداخت تکرارشونده» روی خود تراکنش تکرارشونده (همه‌ی پرداخت‌هایش) ذخیره می‌شود.',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+            ],
             const SizedBox(height: 8),
             Text(
               'ردیف‌های نارنجی با هم فرق دارند. با لمس هر خانه می‌توانی مقدار ستون دیگر را بگذاری یا مقدار تازه وارد کنی.',
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
             ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
+            if (!widget.confirmedPair) const SizedBox(height: 12),
+            if (!widget.confirmedPair)
+              OutlinedButton.icon(
               onPressed: busy ? null : _toTransfer,
               icon: const Icon(Icons.swap_horiz),
               label: const Text('این پیش‌نویس انتقال بین حساب‌هاست'),
@@ -9226,6 +9459,23 @@ typedef StatementRow = ({DateTime date, double amount, String desc, String? merc
 String bankRowFingerprint(StatementRow p, String accountId) =>
     '$accountId|${p.date.year}-${p.date.month}-${p.date.day}|${p.amount.toStringAsFixed(2)}|${p.desc.trim().toLowerCase()}';
 
+/// Text-independent keys for the rows of one statement read: account, day,
+/// signed amount and which occurrence of that same day+amount it is. The AI
+/// words a booking's text a little differently every time it reads a page,
+/// so the exact fingerprint alone let re-read bookings in again.
+List<String> looseRowKeys(List<StatementRow> rows, String accountId) {
+  final seen = <String, int>{};
+  return [
+    for (final p in rows)
+      () {
+        final base = 'L|$accountId|${p.date.year}-${p.date.month}-${p.date.day}|${p.amount.toStringAsFixed(2)}';
+        final n = seen[base] ?? 0;
+        seen[base] = n + 1;
+        return '$base#$n';
+      }(),
+  ];
+}
+
 const _importedFingerprintsKey = 'bank_imported_fingerprints';
 
 Future<Set<String>> loadImportedFingerprints() async {
@@ -9351,7 +9601,13 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
 /// transactions) and [recurringPayments], best first.
 List<DuplicateMatch> findDuplicateMatches(Transaction d, List<Transaction> pool, List<Transaction> recurringPayments) {
   final result = <DuplicateMatch>[
-    ...pool.where((x) => x.id != d.id).map((x) => scoreDuplicate(d, x)).whereType<DuplicateMatch>(),
+    ...pool.where((x) => x.id != d.id).map((x) {
+      final m = scoreDuplicate(d, x);
+      if (m == null || !(d.draft && x.draft)) return m;
+      // Two drafts: shown, but marked as such and never counted as "almost
+      // surely a duplicate" (the bulk delete must not remove both).
+      return DuplicateMatch(t: x, recurring: false, score: min(m.score, 0.84), reasons: ['هر دو پیش‌نویس هستند', ...m.reasons]);
+    }).whereType<DuplicateMatch>(),
     ...recurringPayments.map((x) => scoreDuplicate(d, x, recurring: true)).whereType<DuplicateMatch>(),
   ]..sort((a, b) => b.score.compareTo(a.score));
   return result;
@@ -9363,9 +9619,9 @@ List<DuplicateMatch> findDuplicateMatches(Transaction d, List<Transaction> pool,
 /// as duplicates of the single one recorded.
 Map<String, List<DuplicateMatch>> matchBankDrafts(List<Transaction> drafts, List<Transaction> all) {
   final recurring = dueRecurringPayments(all);
-  // Drafts are only compared with confirmed transactions (and due recurring
-  // payments), never with each other.
-  final pool = all.where((x) => !x.draft).toList();
+  // Compared with confirmed transactions, due recurring payments and the
+  // other drafts (those marked as "both drafts").
+  final pool = all;
   final perDraft = {for (final d in drafts) d.id: findDuplicateMatches(d, pool, recurring)};
   final pairs = [
     for (final e in perDraft.entries)
@@ -9385,6 +9641,70 @@ Map<String, List<DuplicateMatch>> matchBankDrafts(List<Transaction> drafts, List
             ..sort((a, b) => (takenBy[b.key] == e.key ? 1 : 0).compareTo(takenBy[a.key] == e.key ? 1 : 0)))
           : const <DuplicateMatch>[],
   };
+}
+
+const _dismissedDupPairsKey = 'dismissed_duplicate_pairs';
+
+Future<Set<String>> loadDismissedDuplicatePairs() async {
+  final sp = await SharedPreferences.getInstance();
+  return {...(sp.getStringList(_dismissedDupPairsKey) ?? const [])};
+}
+
+/// Remembers that the person said [a] and [m] are not the same booking, so
+/// the pair is never suggested again.
+Future<void> dismissDuplicatePair(Transaction a, DuplicateMatch m) async {
+  final all = await loadDismissedDuplicatePairs();
+  all.add(duplicatePairKey(a, m));
+  final sp = await SharedPreferences.getInstance();
+  await sp.setStringList(_dismissedDupPairsKey, all.toList());
+}
+
+String duplicatePairKey(Transaction a, DuplicateMatch m) {
+  if (m.recurring) return '${a.id}|${m.key}';
+  final ids = [a.id, m.t.id]..sort();
+  return ids.join('|');
+}
+
+/// Likely duplicates among already confirmed transactions (and due payments
+/// of recurring ones), surest first - minus pairs the person already said
+/// are different. [a] is the one offered for deletion.
+List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Transaction> all, Set<String> dismissed) {
+  bool usable(Transaction t) => !t.draft && !t.categoryId.startsWith('_transfer');
+  final entries = <({Transaction t, bool rec})>[
+    for (final t in all)
+      if (usable(t)) (t: t, rec: false),
+    for (final r in dueRecurringPayments(all))
+      if (usable(r)) (t: r, rec: true),
+  ]..sort((x, y) => x.t.amount.compareTo(y.t.amount));
+  final result = <({Transaction a, DuplicateMatch m})>[];
+  for (var i = 0; i < entries.length; i++) {
+    final x = entries[i];
+    for (var j = i + 1; j < entries.length; j++) {
+      final y = entries[j];
+      if (y.t.amount > x.t.amount * 1.02 + 0.01) break;
+      if (x.rec && y.rec) continue;
+      if (x.t.id == y.t.id) continue; // a recurring payment and its own series
+      final Transaction a, b;
+      final bool rec;
+      if (x.rec || y.rec) {
+        a = x.rec ? y.t : x.t;
+        b = x.rec ? x.t : y.t;
+        rec = true;
+      } else {
+        // The newer one is the one more likely entered twice.
+        final xNewer = x.t.date.isAfter(y.t.date) || (x.t.date == y.t.date && x.t.id.compareTo(y.t.id) > 0);
+        a = xNewer ? x.t : y.t;
+        b = xNewer ? y.t : x.t;
+        rec = false;
+      }
+      if (a.isRecurring && rec) continue; // two recurring series meeting on a day
+      final m = scoreDuplicate(a, b, recurring: rec);
+      if (m == null || dismissed.contains(duplicatePairKey(a, m))) continue;
+      result.add((a: a, m: m));
+    }
+  }
+  result.sort((p, q) => q.m.score.compareTo(p.m.score));
+  return result;
 }
 
 /// Kept for the import preview: whether [t] has any likely duplicate.
@@ -9932,16 +10252,44 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   /// read twice, or read again while continuing it) - skipped instead of
   /// piling up copies. Bookings imported before are remembered, so ones the
   /// person has since confirmed, edited or deleted never come back either.
-  bool _alreadyImported(StatementRow p, String accountId) {
+  bool _alreadyImported(int i, String accountId) {
+    final p = preview![i];
     if (importedFingerprints.contains(bankRowFingerprint(p, accountId))) return true;
-    return existingTx.any((t) =>
+    final key = looseRowKeys(preview!, accountId)[i];
+    if (importedFingerprints.contains(key)) return true;
+    // Bookings imported before these keys existed: the n-th booking of a
+    // day and amount is known when at least n+1 such imports are stored.
+    final n = int.parse(key.split('#').last);
+    final type = p.amount >= 0 ? TxType.income : TxType.expense;
+    final stored = existingTx.where((t) =>
         isBankImportId(t.id) &&
         t.accountId == accountId &&
+        t.type == type &&
         t.date.year == p.date.year &&
         t.date.month == p.date.month &&
         t.date.day == p.date.day &&
-        (t.amount - p.amount.abs()).abs() < 0.01 &&
-        (p.desc.isEmpty || t.note.contains(p.desc)));
+        (t.amount - p.amount.abs()).abs() < 0.01);
+    return stored.length > n;
+  }
+
+  /// Date of the newest booking already imported into [accountId] - how far
+  /// earlier statements were read.
+  DateTime? _lastImportedDate(String accountId) {
+    DateTime? last;
+    void see(DateTime d) {
+      if (last == null || d.isAfter(last!)) last = d;
+    }
+
+    for (final t in existingTx) {
+      if (isBankImportId(t.id) && t.accountId == accountId) see(t.date);
+    }
+    for (final k in importedFingerprints) {
+      final parts = k.split('|');
+      if (parts.length < 3 || parts[0] != 'L' || parts[1] != accountId) continue;
+      final ymd = parts[2].split('-').map(int.tryParse).toList();
+      if (ymd.length == 3 && !ymd.contains(null)) see(DateTime(ymd[0]!, ymd[1]!, ymd[2]!));
+    }
+    return last;
   }
 
   Transaction _toDraft(StatementRow p, int index) {
@@ -9982,7 +10330,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     final drafts = <Transaction>[];
     for (var i = 0; i < preview!.length; i++) {
       final p = preview![i];
-      if (_alreadyImported(p, targetAccount!.id)) {
+      if (_alreadyImported(i, targetAccount!.id)) {
         skipped++;
         continue;
       }
@@ -9995,6 +10343,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       imported++;
     }
     importedFingerprints.addAll(preview!.map((p) => bankRowFingerprint(p, targetAccount!.id)));
+    importedFingerprints.addAll(looseRowKeys(preview!, targetAccount!.id));
     await saveImportedFingerprints(importedFingerprints);
     // Pages read by the AI are done once imported; the saved statement is
     // removed when all its pages are, otherwise later attempts continue
@@ -10250,11 +10599,24 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             if (preview != null) ...[
               const SizedBox(height: 16),
               Builder(builder: (context) {
-                final already = targetAccount == null ? 0 : preview!.where((p) => _alreadyImported(p, targetAccount!.id)).length;
-                return Text(
-                  '${persianDigits('${preview!.length - already}')} تراکنش جدید برای بارگذاری'
-                  '${already > 0 ? ' (${persianDigits('$already')} مورد قبلاً بارگذاری شده و دوباره اضافه نمی‌شود)' : ''}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                final already = targetAccount == null
+                    ? 0
+                    : [for (var i = 0; i < preview!.length; i++) i].where((i) => _alreadyImported(i, targetAccount!.id)).length;
+                final last = targetAccount == null ? null : _lastImportedDate(targetAccount!.id);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${persianDigits('${preview!.length - already}')} تراکنش جدید برای بارگذاری'
+                      '${already > 0 ? ' (${persianDigits('$already')} مورد قبلاً بارگذاری شده و دوباره اضافه نمی‌شود)' : ''}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    if (last != null)
+                      Text(
+                        'از این حساب قبلاً تا تراکنش ${formatDate(last)} بارگذاری شده است.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                  ],
                 );
               }),
               if (_possibleDuplicateCount() > 0)
@@ -10674,7 +11036,22 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
 }
 
 class TransferScreen extends StatefulWidget {
-  const TransferScreen({super.key});
+  // Prefilled values, e.g. when a bank-statement draft becomes a transfer.
+  final String? initialFromId;
+  final String? initialToId;
+  final double? initialAmount;
+  final double? initialReceived; // amount that arrived in the target account (other currency)
+  final DateTime? initialDate;
+  final String? initialNote;
+  const TransferScreen({
+    this.initialFromId,
+    this.initialToId,
+    this.initialAmount,
+    this.initialReceived,
+    this.initialDate,
+    this.initialNote,
+    super.key,
+  });
   @override
   State<TransferScreen> createState() => _TransferScreenState();
 }
@@ -10711,6 +11088,13 @@ class _TransferScreenState extends State<TransferScreen> {
     } else if (accounts.length == 1) {
       fromAccount = accounts[0];
     }
+    final w = widget;
+    fromAccount = accounts.where((a) => a.id == w.initialFromId).firstOrNull ?? fromAccount;
+    toAccount = accounts.where((a) => a.id == w.initialToId).firstOrNull ?? toAccount;
+    if (w.initialAmount != null) amountCtrl.text = formatAmountInput(w.initialAmount!);
+    if (w.initialDate != null) date = DateTime(w.initialDate!.year, w.initialDate!.month, w.initialDate!.day);
+    if (w.initialNote != null && w.initialNote!.isNotEmpty) noteCtrl.text = w.initialNote!;
+    receivedHint = w.initialReceived;
     setState(() => loading = false);
   }
 
@@ -10726,6 +11110,9 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   bool useAsDayRate = true;
+  // Amount that arrived in the target account (known from a bank draft), so
+  // the rate can be filled in once the source amount is typed.
+  double? receivedHint;
 
   /// The account whose day rate (to the main currency) a cross-currency
   /// transfer's rate can set: the side that isn't in the main currency, when
@@ -10890,8 +11277,22 @@ class _TransferScreenState extends State<TransferScreen> {
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
             decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 100.00', border: const OutlineInputBorder()),
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(() {
+              // Known amount received: the rate follows from the amount sent.
+              final amt = parseAmount(amountCtrl.text);
+              if (receivedHint != null && amt != null && amt > 0) {
+                exchangeRateCtrl.text = formatAmountInput(receivedHint! / amt, maxDecimals: 10);
+              }
+            }),
           ),
+          if (receivedHint != null && toAccount != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'به «${toAccount!.name}» ${ltr(formatMoney(receivedHint!, toAccount!.currency))} رسیده؛ مبلغ برداشت‌شده از حساب مبدأ را وارد کن.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
+            ),
           if (fromAccount != null && toAccount != null && fromAccount!.currency != toAccount!.currency) ...[
             const SizedBox(height: 16),
             TextField(
