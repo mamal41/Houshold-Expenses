@@ -12756,14 +12756,24 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   }
 
   Future<void> _showDayTransactions(DateTime date) async {
-    final dayEntries = occurrencesWithRecurringProjections(tx, horizonDays: 400, from: date)
+    final day = DateTime(date.year, date.month, date.day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    // Same entries the calendar cell adds up: real transactions of that day
+    // plus recurring payments falling on it - also on days already past.
+    final dayEntries = occurrencesWithRecurringProjections(tx, horizonDays: 400, from: day)
         .where((e) =>
-            e.date.year == date.year &&
-            e.date.month == date.month &&
-            e.date.day == date.day &&
+            e.date.year == day.year &&
+            e.date.month == day.month &&
+            e.date.day == day.day &&
             (accountFilter == null || e.t.accountId == accountFilter))
         .toList();
-    if (dayEntries.isEmpty) return;
+    if (dayEntries.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(content: Text('در ${formatDate(day)} تراکنشی نیست.'), duration: const Duration(seconds: 2)));
+      return;
+    }
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -12784,15 +12794,21 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                   itemBuilder: (context, i) {
                     final e = dayEntries[i];
                     final t = e.t;
+                    // Only payments after today are "not yet due"; a recurring
+                    // payment on a day already past has fallen due.
+                    final notDue = e.date.isAfter(today);
+                    final name = t.merchant.trim().isNotEmpty ? ' • ${t.merchant.trim()}' : '';
                     return Opacity(
-                      opacity: e.isReal ? 1.0 : 0.6,
+                      opacity: notDue ? 0.6 : 1.0,
                       child: Card(
                         child: ListTile(
-                          title: Text(categoryName(t.categoryId)),
+                          title: Text('${categoryName(t.categoryId)}$name'),
                           subtitle: Text(
-                            e.isReal
-                                ? (t.note.isNotEmpty ? t.note : '')
-                                : 'سررسیدنشده${t.isRecurring ? ' • تکرارشونده' : ''}',
+                            [
+                              if (notDue) 'سررسیدنشده' else if (!e.isReal) 'سررسید شده',
+                              if (t.isRecurring) 'تکرارشونده',
+                              if (e.isReal && t.note.isNotEmpty) t.note,
+                            ].join(' • '),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
