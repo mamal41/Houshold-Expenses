@@ -7764,9 +7764,12 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       totalsByCurrency[cur] = (totalsByCurrency[cur] ?? 0) + e.t.amount;
     }
 
-    // Lookahead chart: projected expense per calendar month. Whole months
-    // are counted - including recurring payments that already fell due
-    // earlier in the current month - not just what's still to come.
+    // Lookahead chart: not-yet-due expenses per calendar month, by the same
+    // rule as the list - future-dated transactions and recurring payments
+    // from today on. (It used to add up every transaction of the month,
+    // ordinary spending already done included, so the current month looked
+    // far more expensive than the others.)
+    bool notYetDue(TxOccurrence e) => e.t.isRecurring ? !e.date.isBefore(today) : e.date.isAfter(today);
     final firstChartMonth = calendarMonthOf(today, chartMonthOffset);
     final chartOccurrences = occurrencesWithRecurringProjections(
       tx,
@@ -7779,6 +7782,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       final total = chartOccurrences
           .where((e) =>
               e.t.type == TxType.expense &&
+              notYetDue(e) &&
               (accountFilter != null ? e.t.accountId == accountFilter : currencyOf(e.t.accountId) == currency) &&
               !e.date.isBefore(cm.start) &&
               !e.date.isAfter(cm.end))
@@ -7787,6 +7791,11 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     }
     final maxChart = chartMonths.fold(0.0, (m, c) => c.expense > m ? c.expense : m);
 
+    final rangeLabel = switch (range) {
+      _UpcomingRange.endOfThisMonth => 'تا آخر ${calendarMonthOf(today).name}',
+      _UpcomingRange.nextMonth => '${calendarMonthOf(today, 1).name} ${calendarMonthOf(today, 1).yearText}',
+      _UpcomingRange.custom => '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}',
+    };
     final customLabel = range == _UpcomingRange.custom
         ? '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}'
         : 'ماه دلخواه';
@@ -7877,7 +7886,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                         ),
                         Expanded(
                           child: Text(
-                            'هزینه‌ی پیش‌بینی‌شده‌ی ماهانه',
+                            'کل هزینه‌های سررسیدنشده‌ی هر ماه',
                             style: Theme.of(context).textTheme.titleSmall,
                             textAlign: TextAlign.center,
                           ),
@@ -7945,7 +7954,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
             Card(
               child: ListTile(
                 leading: const Icon(Icons.summarize_outlined),
-                title: const Text('جمع هزینه‌های پیش‌رو در این بازه', style: TextStyle(fontWeight: FontWeight.bold)),
+                title: Text('جمع هزینه‌های پیش‌رو $rangeLabel', style: const TextStyle(fontWeight: FontWeight.bold)),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: totalsByCurrency.entries
