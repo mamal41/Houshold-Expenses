@@ -7769,7 +7769,10 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     // from today on. (It used to add up every transaction of the month,
     // ordinary spending already done included, so the current month looked
     // far more expensive than the others.)
-    bool notYetDue(TxOccurrence e) => e.t.isRecurring ? !e.date.isBefore(today) : e.date.isAfter(today);
+    // Recurring payments count for the whole month (also the current month's
+    // ones already paid, so its bar shows the full month); one-off
+    // transactions only when dated in the future.
+    bool notYetDue(TxOccurrence e) => e.t.isRecurring || e.date.isAfter(today);
     final firstChartMonth = calendarMonthOf(today, chartMonthOffset);
     final chartOccurrences = occurrencesWithRecurringProjections(
       tx,
@@ -7886,7 +7889,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                         ),
                         Expanded(
                           child: Text(
-                            'کل هزینه‌های سررسیدنشده‌ی هر ماه',
+                            'کل هزینه‌های پیش‌رو و تکرارشونده‌ی هر ماه',
                             style: Theme.of(context).textTheme.titleSmall,
                             textAlign: TextAlign.center,
                           ),
@@ -7898,6 +7901,11 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                           visualDensity: VisualDensity.compact,
                         ),
                       ],
+                    ),
+                    Text(
+                      'همه‌ی پرداخت‌های تکرارشونده‌ی هر ماه (در ماه جاری کل ماه، حتی موارد پرداخت‌شده) به‌علاوه‌ی تراکنش‌های تاریخ‌دار آینده',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
                     SizedBox(
