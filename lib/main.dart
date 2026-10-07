@@ -4721,7 +4721,9 @@ bool isWholeNumberCurrency(String currency) => currency == 'IRT' || currency == 
 String _groupThousands(String digits) => digits.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
 
 String formatMoney(double amount, String currency) {
-  final n = persianDigits(amount.toStringAsFixed(2));
+  // Thousands separators for every currency ("€1,234.50"), like Toman/Rial.
+  final parts = amount.abs().toStringAsFixed(2).split('.');
+  final n = persianDigits('${amount < 0 ? '-' : ''}${_groupThousands(parts[0])}.${parts[1]}');
   switch (currency) {
     case 'EUR':
       return ltr('€$n');
@@ -10670,7 +10672,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                       ),
                       subtitle: Text('${formatDate(p.date)}${p.categoryHint != null ? ' • ${p.categoryHint}' : ''}'),
                       trailing: Text(
-                        ltr(persianDigits(p.amount.toStringAsFixed(2))),
+                        ltr((p.amount < 0 ? '-' : '') + formatAmountInput(p.amount.abs())),
                         style: TextStyle(color: p.amount >= 0 ? Colors.green : Colors.red, fontWeight: FontWeight.w600),
                       ),
                     ),
