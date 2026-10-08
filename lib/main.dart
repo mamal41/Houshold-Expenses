@@ -582,7 +582,8 @@ class _MerchantFieldState extends State<MerchantField> {
       final display = <String, String>{};
       for (final t in all) {
         final name = t.merchant.trim();
-        if (name.isEmpty) continue;
+        // Only shops of confirmed transactions, not of drafts.
+        if (name.isEmpty || t.draft) continue;
         final key = name.toLowerCase();
         count[key] = (count[key] ?? 0) + 1;
         display.putIfAbsent(key, () => name);
@@ -3466,6 +3467,7 @@ class AppDrawer extends StatelessWidget {
             item(23, Icons.repeat, 'تراکنش‌های تکرارشونده', () => const RecurringTransactionsScreen()),
             item(21, Icons.edit_note_outlined, 'تراکنش‌های پیش‌نویس', () => const DraftsScreen()),
             item(22, Icons.content_copy_outlined, 'تراکنش‌های تکراری', () => const DraftsScreen(initialTab: 2)),
+            item(24, Icons.auto_delete_outlined, 'حذف خودکار تکراری‌ها', () => const AutoDuplicatesScreen()),
             item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
             item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
             const Divider(height: 1),
@@ -6512,6 +6514,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
     bankTx = drafts.where((t) => isBankImportId(t.id)).toList();
     matches = matchBankDrafts(drafts, all);
     confirmedPairs = findConfirmedDuplicatePairs(all, await loadDismissedDuplicatePairs());
+    autoDeletedCount = (await LearnedDuplicates.deleted()).length;
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     if (mounted) setState(() => loading = false);
@@ -6519,6 +6522,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
 
   Map<String, List<DuplicateMatch>> matches = {};
   List<({Transaction a, DuplicateMatch m})> confirmedPairs = [];
+  int autoDeletedCount = 0;
 
   Future<void> _compareConfirmed(Transaction a, DuplicateMatch m) async {
     final changed = await Navigator.push<bool>(
@@ -6875,6 +6879,19 @@ class _DraftsScreenState extends State<DraftsScreen> {
                           ),
                         ),
                       ),
+                      if (autoDeletedCount > 0)
+                        Card(
+                          child: ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.auto_delete_outlined),
+                            title: Text('${persianDigits('$autoDeletedCount')} پرداخت تکرارشونده خودکار حذف شده (۶۰ روز اخیر)'),
+                            trailing: const Icon(Icons.chevron_left),
+                            onTap: () async {
+                              await Navigator.push(context, MaterialPageRoute(builder: (_) => const AutoDuplicatesScreen()));
+                              await _load();
+                            },
+                          ),
+                        ),
                       const SizedBox(height: 8),
                       ...bankWithDup.map((e) => _tile(e.t, duplicates: e.dups, bank: true)),
                     ],
@@ -7133,6 +7150,9 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
     setState(() => busy = true);
     if (victim.id == widget.draft.id) {
       await _saveOtherEdits();
+      // Teaches the app this bank booking of a recurring payment; after two
+      // months it is recognised and left out of the drafts automatically.
+      if (!widget.confirmedPair) await LearnedDuplicates.recordConfirmation(widget.draft, widget.matches[selected]);
     } else {
       await _saveDraftEdits();
     }
@@ -7507,6 +7527,162 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ============================== Learned duplicates screen ==============================
+
+/// The switch for automatic duplicate removal, what was learned per
+/// recurring payment, and the bookings removed automatically (restorable).
+class AutoDuplicatesScreen extends StatefulWidget {
+  const AutoDuplicatesScreen({super.key});
+  @override
+  State<AutoDuplicatesScreen> createState() => _AutoDuplicatesScreenState();
+}
+
+class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
+  bool loading = true;
+  bool enabled = true;
+  List<LearnedDupRule> rules = [];
+  List<AutoDeletedDraft> deleted = [];
+  List<Transaction> all = [];
+  List<Category> categories = [];
+  List<Account> accounts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    enabled = await LearnedDuplicates.enabled();
+    rules = await LearnedDuplicates.rules();
+    deleted = (await LearnedDuplicates.deleted())..sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
+    all = await Store.loadTransactions();
+    categories = await Store.loadCategories();
+    accounts = await Store.loadAccounts();
+    if (mounted) setState(() => loading = false);
+  }
+
+  String _cur(String accountId) => accounts.where((a) => a.id == accountId).firstOrNull?.currency ?? 'IRT';
+
+  String _name(Transaction? t) {
+    if (t == null) return 'تراکنش تکرارشونده‌ی حذف‌شده';
+    if (t.merchant.trim().isNotEmpty) return t.merchant.trim();
+    final c = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? '';
+    return t.note.trim().isNotEmpty ? '$c • ${t.note.trim()}' : c;
+  }
+
+  Future<void> _restore(AutoDeletedDraft e) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('برگرداندن به پیش‌نویس‌ها'),
+        content: const Text(
+          'این تراکنش به پیش‌نویس‌های صورتحساب بانک برمی‌گردد. اگر نباید حذف می‌شد، یادگیری این پرداخت از نو شروع می‌شود '
+          'و تا دو تأیید دیگر خودکار حذف نمی‌کند.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('برگرداندن')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await Store.upsertTransaction(e.t.copyWith(draft: true));
+    await LearnedDuplicates.saveDeleted(deleted.where((x) => x != e).toList());
+    await LearnedDuplicates.markWrong(e.seriesId);
+    await _load();
+  }
+
+  Future<void> _deleteRule(LearnedDupRule r) async {
+    await LearnedDuplicates.saveRules(rules.where((x) => x.seriesId != r.seriesId).toList());
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final grey = TextStyle(fontSize: 12, color: Colors.grey.shade600);
+    return Scaffold(
+      appBar: AppBar(title: const Text('حذف خودکار تکراری‌ها')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: SwitchListTile(
+              value: enabled,
+              onChanged: (v) async {
+                await LearnedDuplicates.setEnabled(v);
+                setState(() => enabled = v);
+              },
+              title: const Text('حذف خودکار پرداخت‌های تکرارشونده‌ی تکراری'),
+              subtitle: const Text(
+                'وقتی تراکنش بانکیِ یک پرداخت تکرارشونده را دو ماه (در صفحه‌ی مقایسه) تکراری تشخیص بدهی و حذف کنی، '
+                'از آن به بعد اگر دقیقاً با همان حساب، همان مبلغ و همان شرح و حداکثر ۳ روز فاصله تا سررسید بیاید، '
+                'دیگر به پیش‌نویس‌ها اضافه نمی‌شود. هر مورد ۶۰ روز این‌جا قابل برگرداندن است.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text('حذف‌شده‌های خودکار (${persianDigits('${deleted.length}')})', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          if (deleted.isEmpty) Text('هنوز موردی خودکار حذف نشده.', style: grey),
+          for (final e in deleted)
+            Card(
+              child: ListTile(
+                title: Text(_name(all.where((t) => t.id == e.seriesId).firstOrNull)),
+                subtitle: Text(
+                  'بانک: ${formatDate(e.t.date)} • سررسید: ${formatDate(e.paymentDate)}\n'
+                  '${e.t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim()}',
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                isThreeLine: true,
+                trailing: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(ltr(formatMoney(e.t.amount, _cur(e.t.accountId))), style: const TextStyle(fontWeight: FontWeight.bold)),
+                    InkWell(
+                      onTap: () => _restore(e),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text('برگرداندن', style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+          Text('پرداخت‌های یادگرفته‌شده', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          if (rules.isEmpty) Text('هنوز چیزی یاد گرفته نشده.', style: grey),
+          for (final r in rules)
+            Card(
+              child: ListTile(
+                leading: Icon(
+                  r.active ? Icons.check_circle : Icons.hourglass_bottom,
+                  color: r.active ? Colors.green.shade700 : Colors.orange.shade700,
+                ),
+                title: Text(_name(all.where((t) => t.id == r.seriesId).firstOrNull)),
+                subtitle: Text(
+                  '${ltr(formatMoney(r.amount, _cur(r.accountId)))} • '
+                  '${r.active ? 'فعال' : '${persianDigits('${r.months.toSet().length}')} از ${persianDigits('${LearnedDuplicates.confirmationsNeeded}')} تأیید'}',
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'فراموش کردن',
+                  onPressed: () => _deleteRule(r),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -9775,6 +9951,193 @@ List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Trans
   return result;
 }
 
+// ------------------------------ Learned duplicates ------------------------------
+
+/// What the app learned about one recurring payment from the person deleting
+/// its bank booking as a duplicate: account, exact amount and the words of
+/// the bank's booking text, plus the months it was confirmed in.
+class LearnedDupRule {
+  final String seriesId;
+  final String accountId;
+  final double amount;
+  final List<String> words;
+  final List<String> months; // "y-m" of each confirmed payment
+  const LearnedDupRule({
+    required this.seriesId,
+    required this.accountId,
+    required this.amount,
+    required this.words,
+    required this.months,
+  });
+
+  /// Confirmed in two different months: from now on handled automatically.
+  bool get active => months.toSet().length >= LearnedDuplicates.confirmationsNeeded;
+
+  Map<String, dynamic> toJson() =>
+      {'seriesId': seriesId, 'accountId': accountId, 'amount': amount, 'words': words, 'months': months};
+  factory LearnedDupRule.fromJson(Map<String, dynamic> j) => LearnedDupRule(
+        seriesId: j['seriesId'],
+        accountId: j['accountId'],
+        amount: (j['amount'] as num).toDouble(),
+        words: List<String>.from(j['words'] ?? const []),
+        months: List<String>.from(j['months'] ?? const []),
+      );
+}
+
+/// A bank booking that was not added as a draft because a learned rule said
+/// it is the recurring payment already recorded - kept for a while so it can
+/// be brought back.
+class AutoDeletedDraft {
+  final Transaction t;
+  final String seriesId;
+  final DateTime paymentDate;
+  final DateTime deletedAt;
+  const AutoDeletedDraft({required this.t, required this.seriesId, required this.paymentDate, required this.deletedAt});
+
+  Map<String, dynamic> toJson() => {
+        't': t.toJson(),
+        'seriesId': seriesId,
+        'paymentDate': paymentDate.toIso8601String(),
+        'deletedAt': deletedAt.toIso8601String(),
+      };
+  factory AutoDeletedDraft.fromJson(Map<String, dynamic> j) => AutoDeletedDraft(
+        t: Transaction.fromJson(j['t']),
+        seriesId: j['seriesId'],
+        paymentDate: DateTime.parse(j['paymentDate']),
+        deletedAt: DateTime.parse(j['deletedAt']),
+      );
+}
+
+/// Learning which bank bookings are a recurring payment that is already
+/// recorded, so they stop landing in the drafts once confirmed twice. Only
+/// recurring payments, only an exact repeat (same account, same amount, same
+/// booking text, within 3 days of the due date) - anything else still goes
+/// to the drafts for comparing as before.
+class LearnedDuplicates {
+  static const confirmationsNeeded = 2;
+  static const keepDays = 60;
+  static const _rulesKey = 'learned_dup_rules';
+  static const _deletedKey = 'auto_deleted_drafts';
+  static const _enabledKey = 'auto_dup_enabled';
+
+  static Future<bool> enabled() async => (await SharedPreferences.getInstance()).getBool(_enabledKey) ?? true;
+  static Future<void> setEnabled(bool v) async => (await SharedPreferences.getInstance()).setBool(_enabledKey, v);
+
+  static Future<List<LearnedDupRule>> rules() async {
+    final raw = (await SharedPreferences.getInstance()).getStringList(_rulesKey) ?? const [];
+    return raw.map((s) => LearnedDupRule.fromJson(jsonDecode(s))).toList();
+  }
+
+  static Future<void> saveRules(List<LearnedDupRule> list) async =>
+      (await SharedPreferences.getInstance()).setStringList(_rulesKey, list.map((r) => jsonEncode(r.toJson())).toList());
+
+  /// Auto-deleted bookings of the last [keepDays] days (older ones dropped).
+  static Future<List<AutoDeletedDraft>> deleted() async {
+    final raw = (await SharedPreferences.getInstance()).getStringList(_deletedKey) ?? const [];
+    final limit = DateTime.now().subtract(const Duration(days: keepDays));
+    final all = raw.map((s) => AutoDeletedDraft.fromJson(jsonDecode(s))).toList();
+    final kept = all.where((e) => e.deletedAt.isAfter(limit)).toList();
+    if (kept.length != all.length) await saveDeleted(kept);
+    return kept;
+  }
+
+  static Future<void> saveDeleted(List<AutoDeletedDraft> list) async =>
+      (await SharedPreferences.getInstance()).setStringList(_deletedKey, list.map((e) => jsonEncode(e.toJson())).toList());
+
+  static List<String> signature(Transaction t) => (_words(_matchText(t)).toList()..sort());
+
+  /// Same booking text: nearly the same words (the AI reading a statement
+  /// words things a little differently each time).
+  static bool sameText(List<String> a, List<String> b) {
+    if (a.isEmpty || b.isEmpty) return false;
+    final sa = a.toSet(), sb = b.toSet();
+    final common = sa.intersection(sb).length;
+    return common >= min(2, min(sa.length, sb.length)) && common / sa.union(sb).length >= 0.75;
+  }
+
+  static String _monthKey(DateTime d) => '${d.year}-${d.month}';
+
+  /// The person deleted bank draft [draft] as a duplicate of the recurring
+  /// payment [m]: one more confirmation for that payment's rule (a booking
+  /// that differs from the rule starts it over).
+  static Future<void> recordConfirmation(Transaction draft, DuplicateMatch m) async {
+    if (!m.recurring || !isBankImportId(draft.id)) return;
+    final list = await rules();
+    final words = signature(draft);
+    final i = list.indexWhere((r) => r.seriesId == m.t.id);
+    final month = _monthKey(m.t.date);
+    if (i >= 0 &&
+        list[i].accountId == draft.accountId &&
+        (list[i].amount - draft.amount).abs() < 0.01 &&
+        sameText(list[i].words, words)) {
+      final r = list[i];
+      list[i] = LearnedDupRule(
+        seriesId: r.seriesId,
+        accountId: r.accountId,
+        amount: r.amount,
+        words: words,
+        months: {...r.months, month}.toList(),
+      );
+    } else {
+      final rule = LearnedDupRule(seriesId: m.t.id, accountId: draft.accountId, amount: draft.amount, words: words, months: [month]);
+      if (i >= 0) {
+        list[i] = rule;
+      } else {
+        list.add(rule);
+      }
+    }
+    await saveRules(list);
+  }
+
+  /// A restored booking was wrongly auto-deleted: the rule needs two new
+  /// confirmations before it acts again.
+  static Future<void> markWrong(String seriesId) async {
+    final list = await rules();
+    await saveRules([
+      for (final r in list)
+        r.seriesId == seriesId
+            ? LearnedDupRule(seriesId: r.seriesId, accountId: r.accountId, amount: r.amount, words: r.words, months: const [])
+            : r,
+    ]);
+  }
+
+  /// The recurring payment bank draft [d] certainly repeats, or null. [taken]
+  /// holds payments already claimed (by another booking of the same import
+  /// or an earlier auto-delete).
+  static ({Transaction series, DateTime payment})? certainMatch(
+    Transaction d,
+    List<LearnedDupRule> rules,
+    List<Transaction> all,
+    Set<String> taken,
+  ) {
+    final words = signature(d);
+    for (final r in rules) {
+      if (!r.active || r.accountId != d.accountId || (r.amount - d.amount).abs() >= 0.01) continue;
+      if (!sameText(r.words, words)) continue;
+      final series = all.where((t) => t.id == r.seriesId && t.isRecurring && !t.draft).firstOrNull;
+      if (series == null || series.type != d.type || series.accountId != d.accountId) continue;
+      if ((series.amount - d.amount).abs() >= 0.01) continue;
+      final day = DateTime(d.date.year, d.date.month, d.date.day);
+      for (final o in computeRecurrenceOccurrences(series)) {
+        final od = DateTime(o.year, o.month, o.day);
+        if (od.difference(day).inDays.abs() > 3) continue;
+        final key = '${series.id}@${od.toIso8601String()}';
+        if (taken.contains(key)) continue;
+        // Already paired with another bank booking of that payment?
+        final booked = all.any((t) =>
+            isBankImportId(t.id) &&
+            t.id != d.id &&
+            t.accountId == d.accountId &&
+            (t.amount - d.amount).abs() < 0.01 &&
+            DateTime(t.date.year, t.date.month, t.date.day).difference(od).inDays.abs() <= 3);
+        if (booked) continue;
+        return (series: series, payment: od);
+      }
+    }
+    return null;
+  }
+}
+
 /// Kept for the import preview: whether [t] has any likely duplicate.
 List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) =>
     findDuplicateMatches(t, all.where((x) => !x.draft).toList(), dueRecurringPayments(all)).map((m) => m.t).toList();
@@ -10435,8 +10798,13 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   Future<void> _import() async {
     if (preview == null || targetAccount == null) return;
     setState(() => importing = true);
-    var imported = 0, skipped = 0, possibleDup = 0;
+    var imported = 0, skipped = 0, possibleDup = 0, autoDeleted = 0;
     final drafts = <Transaction>[];
+    final autoOn = await LearnedDuplicates.enabled();
+    final learned = autoOn ? await LearnedDuplicates.rules() : const <LearnedDupRule>[];
+    final priorAuto = autoOn ? await LearnedDuplicates.deleted() : <AutoDeletedDraft>[];
+    final taken = {for (final e in priorAuto) '${e.seriesId}@${e.paymentDate.toIso8601String()}'};
+    final newAuto = <AutoDeletedDraft>[];
     for (var i = 0; i < preview!.length; i++) {
       final p = preview![i];
       if (_alreadyImported(i, targetAccount!.id)) {
@@ -10444,9 +10812,18 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
         continue;
       }
       final d = _toDraft(p, i);
+      // A learned recurring payment, repeated exactly: not added as a draft.
+      final certain = learned.isEmpty ? null : LearnedDuplicates.certainMatch(d, learned, existingTx, taken);
+      if (certain != null) {
+        taken.add('${certain.series.id}@${certain.payment.toIso8601String()}');
+        newAuto.add(AutoDeletedDraft(t: d, seriesId: certain.series.id, paymentDate: certain.payment, deletedAt: DateTime.now()));
+        autoDeleted++;
+        continue;
+      }
       if (possibleDuplicatesOf(d, existingTx).isNotEmpty) possibleDup++;
       drafts.add(d);
     }
+    if (newAuto.isNotEmpty) await LearnedDuplicates.saveDeleted([...priorAuto, ...newAuto]);
     for (final d in drafts) {
       await Store.upsertTransaction(d);
       imported++;
@@ -10475,7 +10852,9 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
         content: Text(
           '${persianDigits('$imported')} تراکنش به‌صورت پیش‌نویس در بخش «صورتحساب بانک» پیش‌نویس‌ها ذخیره شد.'
           '${possibleDup > 0 ? '\n${persianDigits('$possibleDup')} مورد احتمالاً تکراری است؛ آن‌جا می‌توانی با تراکنش ثبت‌شده مقایسه‌اش کنی.' : ''}'
-          '${skipped > 0 ? '\n${persianDigits('$skipped')} مورد قبلاً از صورتحساب بارگذاری شده بود و دوباره اضافه نشد.' : ''}',
+          '${skipped > 0 ? '\n${persianDigits('$skipped')} مورد قبلاً از صورتحساب بارگذاری شده بود و دوباره اضافه نشد.' : ''}'
+          '${autoDeleted > 0 ? '\n${persianDigits('$autoDeleted')} مورد پرداخت تکرارشونده‌ی ثبت‌شده بود و طبق آن‌چه قبلاً تأیید کرده بودی خودکار حذف شد '
+              '(در «حذف خودکار تکراری‌ها» قابل برگرداندن است).' : ''}',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('confirm'))),
