@@ -3014,6 +3014,9 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'section_budget_goals': {AppLanguage.fa: 'بودجه و اهداف', AppLanguage.en: 'Budget & goals', AppLanguage.de: 'Budget & Ziele'},
   'section_reports': {AppLanguage.fa: 'گزارش‌ها و تحلیل', AppLanguage.en: 'Reports & analysis', AppLanguage.de: 'Berichte & Analyse'},
   'section_data': {AppLanguage.fa: 'داده', AppLanguage.en: 'Data', AppLanguage.de: 'Daten'},
+  'section_planning': {AppLanguage.fa: 'پرداخت‌های پیش‌رو و برنامه‌ریزی', AppLanguage.en: 'Upcoming & planning', AppLanguage.de: 'Anstehend & Planung'},
+  'section_shopping': {AppLanguage.fa: 'خرید', AppLanguage.en: 'Shopping', AppLanguage.de: 'Einkauf'},
+  'section_settings_data': {AppLanguage.fa: 'تنظیمات حساب‌ها، دسته‌بندی‌ها و داده', AppLanguage.en: 'Accounts, categories & data', AppLanguage.de: 'Konten, Kategorien & Daten'},
   'search': {AppLanguage.fa: 'جستجو', AppLanguage.en: 'Search', AppLanguage.de: 'Suche'},
   'filter': {AppLanguage.fa: 'فیلتر', AppLanguage.en: 'Filter', AppLanguage.de: 'Filter'},
   'sort': {AppLanguage.fa: 'مرتب‌سازی', AppLanguage.en: 'Sort', AppLanguage.de: 'Sortieren'},
@@ -3458,18 +3461,18 @@ class AppDrawer extends StatelessWidget {
             ),
             item(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
             const Divider(height: 1),
-            sectionLabel(tr('section_accounts_categories')),
-            item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
-            item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
-            item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
-            const Divider(height: 1),
             sectionLabel(tr('section_transactions')),
             item(12, Icons.list_alt, tr('all_transactions'), () => const AllTransactionsScreen()),
+            item(23, Icons.repeat, 'تراکنش‌های تکرارشونده', () => const RecurringTransactionsScreen()),
             item(21, Icons.edit_note_outlined, 'تراکنش‌های پیش‌نویس', () => const DraftsScreen()),
             item(22, Icons.content_copy_outlined, 'تراکنش‌های تکراری', () => const DraftsScreen(initialTab: 2)),
-            item(5, Icons.category_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
+            item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
             item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
-            item(20, Icons.shopping_cart_outlined, tr('shopping_lists_title'), () => const ShoppingListsScreen()),
+            const Divider(height: 1),
+            sectionLabel(tr('section_planning')),
+            item(8, Icons.upcoming_outlined, tr('upcoming_payments'), () => const UpcomingPaymentsScreen()),
+            item(10, Icons.calendar_month_outlined, tr('month_calendar'), () => const MonthCalendarScreen()),
+            item(9, Icons.trending_up, tr('expense_forecast'), () => const ForecastScreen()),
             const Divider(height: 1),
             sectionLabel(tr('section_budget_goals')),
             item(14, Icons.flag_outlined, tr('budget_goals'), () => const BudgetGoalsScreen()),
@@ -3478,15 +3481,17 @@ class AppDrawer extends StatelessWidget {
             item(16, Icons.lightbulb_outline, tr('savings_suggestion_title'), () => const SavingsSuggestionScreen()),
             const Divider(height: 1),
             sectionLabel(tr('section_reports')),
-            item(8, Icons.upcoming_outlined, tr('upcoming_payments'), () => const UpcomingPaymentsScreen()),
             item(7, Icons.bar_chart_outlined, tr('full_reporting'), () => const ReportsScreen()),
-            item(9, Icons.trending_up, tr('expense_forecast'), () => const ForecastScreen()),
-            item(10, Icons.calendar_month_outlined, tr('month_calendar'), () => const MonthCalendarScreen()),
             item(17, Icons.show_chart, tr('net_worth_title'), () => const NetWorthScreen()),
             const Divider(height: 1),
-            sectionLabel(tr('section_data')),
-            item(6, Icons.backup_outlined, tr('backup_restore_title'), () => const BackupRestoreScreen()),
+            sectionLabel(tr('section_shopping')),
+            item(20, Icons.shopping_cart_outlined, tr('shopping_lists_title'), () => const ShoppingListsScreen()),
             const Divider(height: 1),
+            sectionLabel(tr('section_settings_data')),
+            item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
+            item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
+            item(5, Icons.rule_folder_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
+            item(6, Icons.backup_outlined, tr('backup_restore_title'), () => const BackupRestoreScreen()),
             item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
           ],
         ),
@@ -5033,6 +5038,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     WidgetsBinding.instance.removeObserver(this);
     _draftHintStopTimer?.cancel();
     _draftHintController.dispose();
+    _homeScroll.dispose();
     super.dispose();
   }
 
@@ -5040,8 +5046,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   /// (no spinner, no full reload) so the numbers are always current.
   @override
   void didPopNext() {
+    // Back on Home: start again from the top of the page.
+    if (_homeScroll.hasClients) _homeScroll.jumpTo(0);
     _refresh();
   }
+
+  final _homeScroll = ScrollController();
 
   DateTime _lastRefresh = DateTime.fromMillisecondsSinceEpoch(0);
   bool _refreshing = false;
@@ -5573,6 +5583,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
+          controller: _homeScroll,
           padding: const EdgeInsets.all(16),
           children: [
             // Account filter: applies to every number and list on this page.
@@ -6779,6 +6790,16 @@ class _DraftsScreenState extends State<DraftsScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: Text(tr('drafts')),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.list_alt),
+              tooltip: tr('all_transactions'),
+              onPressed: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => const AllTransactionsScreen()));
+                await _load();
+              },
+            ),
+          ],
           bottom: TabBar(
             tabs: [
               Tab(text: 'اسکن و دستی (${persianDigits('${tx.length}')})'),
@@ -7336,7 +7357,17 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         if (context.mounted) Navigator.pop(context, savedAny);
       },
       child: Scaffold(
-        appBar: AppBar(title: const Text('مقایسه‌ی تراکنش مشابه')),
+        appBar: AppBar(
+          title: const Text('مقایسه‌ی تراکنش مشابه'),
+          actions: [
+            // A quick look at the other transactions; back returns here.
+            IconButton(
+              icon: const Icon(Icons.list_alt),
+              tooltip: tr('all_transactions'),
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AllTransactionsScreen())),
+            ),
+          ],
+        ),
         bottomNavigationBar: pinnedBottomButtons(context, [
           OutlinedButton(
             onPressed: busy ? null : _keepAsNew,
@@ -9602,7 +9633,10 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
   // Both have a name/description and they share nothing, not even part of a
   // word (e.g. "REWE Markt" vs "Lidl"): two different bookings that just
   // happen to have the same amount.
-  if (dWords.isNotEmpty && xWords.isNotEmpty && common.isEmpty) {
+  // Not for a recurring payment: the bank's booking text for rent or a
+  // subscription rarely matches the name given to the recurring
+  // transaction, and amount plus due date already say enough there.
+  if (!recurring && dWords.isNotEmpty && xWords.isNotEmpty && common.isEmpty) {
     final dl = dText.toLowerCase(), xl = xText.toLowerCase();
     final partial = dWords.any((w) => xl.contains(w)) || xWords.any((w) => dl.contains(w));
     if (!partial) return null;
@@ -13253,6 +13287,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       } else {
         final img = await ImagePicker().pickImage(
           source: source == ScanSource.camera ? ImageSource.camera : ImageSource.gallery,
+          preferredCameraDevice: CameraDevice.rear,
           imageQuality: 85,
           maxWidth: 1800,
           maxHeight: 1800,
