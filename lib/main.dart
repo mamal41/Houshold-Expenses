@@ -9779,6 +9779,45 @@ List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Trans
 List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) =>
     findDuplicateMatches(t, all.where((x) => !x.draft).toList(), dueRecurringPayments(all)).map((m) => m.t).toList();
 
+/// The category this person used most for the same shop before (ties go to
+/// the latest), so a new transaction at that shop starts in it. Matches the
+/// shop name exactly first, then partly (one name containing the other);
+/// with [text] (a bank booking line) also a known shop name inside it.
+String? categoryForMerchant(List<Transaction> all, String merchant, TxType type, {String? text}) {
+  final name = merchant.trim().toLowerCase();
+  final hay = (text ?? '').toLowerCase();
+  if (name.length < 2 && hay.isEmpty) return null;
+  String? best(bool Function(String m) matches) {
+    final count = <String, int>{};
+    final latest = <String, DateTime>{};
+    for (final t in all) {
+      if (t.draft || t.type != type || t.categoryId.startsWith('_transfer')) continue;
+      final m = t.merchant.trim().toLowerCase();
+      if (m.length < 2 || !matches(m)) continue;
+      count[t.categoryId] = (count[t.categoryId] ?? 0) + 1;
+      if (latest[t.categoryId] == null || t.date.isAfter(latest[t.categoryId]!)) latest[t.categoryId] = t.date;
+    }
+    if (count.isEmpty) return null;
+    return (count.keys.toList()
+          ..sort((a, b) {
+            final c = count[b]!.compareTo(count[a]!);
+            return c != 0 ? c : latest[b]!.compareTo(latest[a]!);
+          }))
+        .first;
+  }
+
+  if (name.length >= 2) {
+    final exact = best((m) => m == name);
+    if (exact != null) return exact;
+    if (name.length >= 3) {
+      final partial = best((m) => m.length >= 3 && (m.contains(name) || name.contains(m)));
+      if (partial != null) return partial;
+    }
+  }
+  if (hay.isNotEmpty) return best((m) => m.length >= 3 && hay.contains(m));
+  return null;
+}
+
 /// Best guess of a category for a booking text: a known shop name first,
 /// then any of the person's category names that appears in the text.
 Category? guessCategoryForText(String text, TxType type, List<Category> categories) {
@@ -10362,7 +10401,9 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
 
   Transaction _toDraft(StatementRow p, int index) {
     final type = p.amount >= 0 ? TxType.income : TxType.expense;
-    final cat = _matchCategoryHint(p.categoryHint, categories, type) ??
+    final usedBefore = categoryForMerchant(existingTx, p.merchant ?? '', type, text: p.desc);
+    final cat = categories.where((c) => c.id == usedBefore).firstOrNull ??
+        _matchCategoryHint(p.categoryHint, categories, type) ??
         guessCategoryForText('${p.merchant ?? ''} ${p.desc}', type, categories) ??
         (type == TxType.income ? defaultIncomeCategory : defaultExpenseCategory);
     return Transaction(
@@ -13512,8 +13553,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     existingTx = await Store.loadTransactions();
     selectedAccount = _initialAccount();
     selectedCategory = categories.where((c) => c.id == widget.existing?.categoryId).firstOrNull ??
+        categories.where((c) => c.id == categoryForMerchant(existingTx, merchantCtrl.text, TxType.expense)).firstOrNull ??
         _matchCategoryHint(widget.initial.categoryHint, categories, TxType.expense);
     _initialSignature = _signature();
+    merchantCtrl.addListener(_categoryFromMerchant);
     final key = await Store.loadGeminiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
@@ -13562,8 +13605,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         if (result['keepReceipt'] is bool) keepReceipt = result['keepReceipt'] as bool;
         detectedCurrency = normalizeCurrency(result['currency']) ?? detectedCurrency;
         if (result['keepReceiptReason'] != null) keepReceiptReason = result['keepReceiptReason'].toString();
-        final matched = _matchCategoryHint(result['category']?.toString(), categories, TxType.expense);
-        if (matched != null) selectedCategory = matched;
+        // The category used for this shop before wins over the AI's guess,
+        // and a category picked by hand is kept.
+        final usedBefore = categories
+            .where((c) => c.id == categoryForMerchant(existingTx, merchantCtrl.text, TxType.expense))
+            .firstOrNull;
+        final matched = usedBefore ?? _matchCategoryHint(result['category']?.toString(), categories, TxType.expense);
+        if (matched != null && !_categoryPickedByHand) selectedCategory = matched;
       }
     } catch (e) {
       geminiFailed = true;
@@ -13617,8 +13665,23 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     categories = await Store.loadCategories();
     if (!context.mounted) return;
     setState(() {
-      if (picked != null) selectedCategory = picked;
+      if (picked != null) {
+        selectedCategory = picked;
+        _categoryPickedByHand = true;
+      }
     });
+  }
+
+  bool _categoryPickedByHand = false;
+
+  /// A shop already used before: start in the category chosen for it then
+  /// (the person's own choice beats the AI's guess) - until one is picked
+  /// by hand.
+  void _categoryFromMerchant() {
+    if (_categoryPickedByHand || loading || (widget.existing != null && !widget.existing!.draft)) return;
+    final id = categoryForMerchant(existingTx, merchantCtrl.text, TxType.expense);
+    final c = categories.where((c) => c.id == id).firstOrNull;
+    if (c != null && c.id != selectedCategory?.id) setState(() => selectedCategory = c);
   }
 
   Future<void> _addItemRow({int? editIndex}) async {
@@ -15055,11 +15118,24 @@ class _TransactionEditorState extends State<TransactionEditor> {
   final payslipArbeitgeberCtrl = TextEditingController();
   final payslipMonatCtrl = TextEditingController();
   List<PayslipCustomField> payslipCustomFields = [];
+  // Earlier transactions, to start a new one at a known shop in the
+  // category used for it before - until a category is picked by hand.
+  List<Transaction> _history = [];
+  bool _categoryPickedByHand = false;
+
+  void _categoryFromMerchant() {
+    if (_categoryPickedByHand || (widget.existing != null && selectedCategory != null)) return;
+    final id = categoryForMerchant(_history, merchantCtrl.text, type);
+    final c = categories.where((c) => c.id == id).firstOrNull;
+    if (c != null && c.id != selectedCategory?.id) setState(() => selectedCategory = c);
+  }
 
   @override
   void initState() {
     super.initState();
     categories = widget.categories;
+    Store.loadTransactions().then((all) => _history = all);
+    merchantCtrl.addListener(_categoryFromMerchant);
     final e = widget.existing;
     type = e?.type ?? TxType.expense;
     selectedAccount = widget.accounts.isEmpty
@@ -15156,6 +15232,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       categories = refreshed;
       if (picked != null) {
         selectedCategory = picked;
+        _categoryPickedByHand = true;
         _dirty = true;
       }
     });
