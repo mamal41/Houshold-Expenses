@@ -7007,9 +7007,14 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   Transaction? editedDraft;
   final Map<int, Transaction> edited = {};
   List<Category> categories = [];
+  // What is stored right now: starts as what the screen was opened with and
+  // follows every save, so the table keeps showing the saved values instead
+  // of falling back to the ones from before the edit.
+  late Transaction savedDraft = widget.draft;
+  late final List<Transaction> savedCandidates = List.of(widget.candidates);
 
-  Transaction get draft => editedDraft ?? widget.draft;
-  Transaction get other => edited[selected] ?? widget.candidates[selected];
+  Transaction get draft => editedDraft ?? savedDraft;
+  Transaction get other => edited[selected] ?? savedCandidates[selected];
   bool get hasEdits => edited.isNotEmpty || editedDraft != null;
   bool get _selectedIsRecurring => widget.matches[selected].recurring;
 
@@ -7090,6 +7095,8 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       }
       await Store.upsertTransaction(t);
       savedAny = true;
+      // A recurring payment keeps its own date in the table.
+      savedCandidates[e.key] = widget.matches[e.key].recurring ? t.copyWith(date: e.value.date) : t;
     }
     edited.clear();
   }
@@ -7099,6 +7106,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
     if (d == null) return;
     await Store.upsertTransaction(d);
     savedAny = true;
+    savedDraft = d;
     editedDraft = null;
   }
 
@@ -7325,7 +7333,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           _cell(
             a,
             editable: editable,
-            changed: editedDraft != null && a != _value(widget.draft, field),
+            changed: editedDraft != null && a != _value(savedDraft, field),
             style: style,
             onTap: () => _editField(field, draftSide: true),
           ),
@@ -7333,7 +7341,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           _cell(
             b,
             editable: editable && !(_selectedIsRecurring && field == 'date'),
-            changed: edited.containsKey(selected) && b != _value(widget.candidates[selected], field),
+            changed: edited.containsKey(selected) && b != _value(savedCandidates[selected], field),
             style: style,
             onTap: () => _editField(field, draftSide: false),
           ),
@@ -7400,8 +7408,8 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                   for (var i = 0; i < widget.candidates.length; i++)
                     ChoiceChip(
                       label: Text(
-                        '${formatDate(widget.candidates[i].date)}'
-                        '${widget.matches[i].recurring ? ' (تکرارشونده)' : widget.candidates[i].draft ? ' (پیش‌نویس)' : ''}'
+                        '${formatDate(savedCandidates[i].date)}'
+                        '${widget.matches[i].recurring ? ' (تکرارشونده)' : savedCandidates[i].draft ? ' (پیش‌نویس)' : ''}'
                         '${widget.matches[i].strong ? ' ✓' : ''}',
                       ),
                       selected: selected == i,
