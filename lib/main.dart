@@ -5046,8 +5046,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   /// (no spinner, no full reload) so the numbers are always current.
   @override
   void didPopNext() {
-    // Back on Home: start again from the top of the page.
-    if (_homeScroll.hasClients) _homeScroll.jumpTo(0);
+    // Back on Home: start again from the top of the page - after the frame,
+    // and only once the list has been laid out. Right after the app lock
+    // closes on startup the list was built under the lock screen but never
+    // laid out, and scrolling it then threw in the middle of closing the
+    // lock screen, which stayed stuck on top.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_homeScroll.hasClients) return;
+      if (_homeScroll.positions.every((p) => p.hasPixels && p.hasContentDimensions)) _homeScroll.jumpTo(0);
+    });
     _refresh();
   }
 
