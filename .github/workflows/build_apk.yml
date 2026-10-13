@@ -65,6 +65,18 @@ jobs:
           }
           GROOVY
           fi
+      - name: Configure Android for flutter_local_notifications (scheduled reminders)
+        run: |
+          # The plugin's own manifest only brings POST_NOTIFICATIONS; without
+          # these receivers the alarms of scheduled reminders fire into
+          # nothing (no reminder ever shows), and after a reboot all of them
+          # are lost.
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>' "$MANIFEST"
+          sed -i 's#</application>#    <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n    </application>#' "$MANIFEST"
+          echo "--- AndroidManifest.xml ---"; cat "$MANIFEST"
+          grep -q ScheduledNotificationReceiver "$MANIFEST"
+          grep -q ScheduledNotificationBootReceiver "$MANIFEST"
       - name: Configure stable release signing
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}

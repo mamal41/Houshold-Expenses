@@ -1602,6 +1602,41 @@ class NotificationService {
         ?.requestNotificationsPermission();
   }
 
+  /// Asks for the notification permission once (Android 13+ shows nothing
+  /// at all without it) - budget, unusual-spending and return-deadline
+  /// alerts need it too, not only recurring reminders.
+  Future<void> askPermissionOnce() async {
+    final sp = await SharedPreferences.getInstance();
+    if (sp.getBool('notif_permission_asked') ?? false) return;
+    await sp.setBool('notif_permission_asked', true);
+    await requestPermission();
+  }
+
+  bool _rescheduled = false;
+
+  /// Schedules every reminder again from the saved transactions, once per
+  /// app start: reminders set before this fix never fired, and only the next
+  /// few installments are scheduled at a time (Android allows an app at most
+  /// 500 pending alarms), so later ones are added as time moves on.
+  Future<void> rescheduleAll() async {
+    if (_rescheduled || !_initialized) return;
+    _rescheduled = true;
+    try {
+      final pending = await _plugin.pendingNotificationRequests();
+      await Future.wait(pending.map((p) => _plugin.cancel(p.id)));
+      final tx = await Store.loadConfirmedTransactions();
+      final categories = await Store.loadCategories();
+      for (final t in tx) {
+        if (!t.notifyEnabled || !t.isRecurring) continue;
+        final name = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? 'یادآوری';
+        await scheduleForTransaction(t, name, alreadyCancelled: true);
+      }
+    } catch (_) {
+      // best effort; the next app start tries again
+      _rescheduled = false;
+    }
+  }
+
   /// Shows an immediate (not scheduled) notification, e.g. for a budget
   /// goal threshold that was just crossed.
   Future<void> showNow(int id, String title, String body, {String? payload}) async {
@@ -1645,8 +1680,8 @@ class NotificationService {
     return tz.TZDateTime.now(tz.UTC).add(delay);
   }
 
-  Future<void> scheduleForTransaction(Transaction t, String categoryName) async {
-    await cancelForTransaction(t.id);
+  Future<void> scheduleForTransaction(Transaction t, String categoryName, {bool alreadyCancelled = false}) async {
+    if (!alreadyCancelled) await cancelForTransaction(t.id);
     if (!t.notifyEnabled) return;
     final occurrences = computeRecurrenceOccurrences(t);
     if (occurrences.isEmpty) return;
@@ -1684,10 +1719,13 @@ class NotificationService {
     final days = t.notifyDaysBeforeEach;
     if (days != null && days > 0) {
       final capped = occurrences.take(200).toList();
+      var scheduled = 0;
       for (var i = 0; i < capped.length; i++) {
         final due = capped[i];
         final when = DateTime(due.year, due.month, due.day, 9).subtract(Duration(days: days));
         if (!when.isAfter(now)) continue;
+        // Only the next few; the rest are scheduled on later app starts.
+        if (++scheduled > 3) break;
         scheduleCalls.add(_plugin.zonedSchedule(
           _idFor(t.id, 2 + i),
           categoryName,
@@ -5103,6 +5141,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     // icon last time (e.g. Gemini was unavailable); does nothing if none
     // are pending.
     unawaited(_countConfirmedDuplicates());
+    unawaited(NotificationService.instance.askPermissionOnce());
+    unawaited(NotificationService.instance.rescheduleAll());
     unawaited(retryPendingCategoryIcons());
     unawaited(checkBudgetGoals());
     unawaited(checkSpendingAnomalies());
