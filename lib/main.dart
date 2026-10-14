@@ -3191,6 +3191,23 @@ class _MoneyAppState extends State<MoneyApp> {
   }
 }
 
+/// Completes once the app lock is not showing (right away when it isn't).
+Future<void> whenUnlocked() async {
+  // Give the lock a moment to come up on startup before deciding.
+  await Future<void>.delayed(const Duration(milliseconds: 600));
+  while (appLocked.value) {
+    final done = Completer<void>();
+    void listener() {
+      if (!appLocked.value && !done.isCompleted) done.complete();
+    }
+
+    appLocked.addListener(listener);
+    await done.future;
+    appLocked.removeListener(listener);
+  }
+  await Future<void>.delayed(const Duration(milliseconds: 400));
+}
+
 /// Lets the home screen notice when the person comes back to it, so its
 /// numbers refresh without pulling the page down.
 final RouteObserver<ModalRoute<void>> appRouteObserver = RouteObserver<ModalRoute<void>>();
@@ -3275,7 +3292,10 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   /// Puts the lock screen on top of whatever screen is open (keeping it
   /// underneath), with no animation so nothing shows through on the way.
   void _showLock() {
-    if (appLocked.value) return;
+    if (appLocked.value) {
+      if (_obscured) setState(() => _obscured = false);
+      return;
+    }
     final nav = rootNavigatorKey.currentState;
     if (nav == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _showLock());
@@ -3322,7 +3342,7 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.resumed) {
       final pausedAt = _pausedAt;
       _pausedAt = null;
-      if (pausedAt != null && DateTime.now().difference(pausedAt) >= _graceDuration) {
+      if (pausedAt != null && DateTime.now().difference(pausedAt) >= _graceDuration && !appLocked.value) {
         _showLock(); // the cover stays until the lock screen is up
       } else if (_obscured) {
         setState(() => _obscured = false);
@@ -3332,7 +3352,13 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final hidden = _loading || _obscured;
+    return ValueListenableBuilder<bool>(valueListenable: appLocked, builder: (context, locked, _) => _build(context, locked));
+  }
+
+  Widget _build(BuildContext context, bool locked) {
+    // Never over the lock screen itself: it already hides everything, and a
+    // cover left on top of it blocked the PIN field and fingerprint button.
+    final hidden = _loading || (_obscured && !locked);
     // The open screen is blurred and covered while the app is in the
     // background or the lock is about to show - it used to stay readable in
     // the recent-apps list and behind the fingerprint prompt.
@@ -3370,6 +3396,15 @@ class PinLockScreen extends StatefulWidget {
 
 class _PinLockScreenState extends State<PinLockScreen> {
   final pinCtrl = TextEditingController();
+  final pinFocus = FocusNode();
+
+  @override
+  void dispose() {
+    pinFocus.dispose();
+    pinCtrl.dispose();
+    super.dispose();
+  }
+
   String? error;
   bool checking = false;
   bool biometricAvailable = false;
@@ -3404,10 +3439,15 @@ class _PinLockScreenState extends State<PinLockScreen> {
         localizedReason: 'برای باز کردن برنامه هویت خود را تأیید کنید',
         options: const AuthenticationOptions(biometricOnly: false, stickyAuth: true),
       );
-      if (ok) widget.onUnlocked();
+      if (ok) {
+        widget.onUnlocked();
+        return;
+      }
     } catch (_) {
       // user cancelled or biometric failed - they can still use the PIN field
     }
+    // Fingerprint didn't work out: bring up the keyboard for the PIN.
+    if (mounted) pinFocus.requestFocus();
   }
 
   Future<void> _submitPin() async {
@@ -3439,6 +3479,8 @@ class _PinLockScreenState extends State<PinLockScreen> {
                 const SizedBox(height: 24),
                 TextField(
                   controller: pinCtrl,
+                  focusNode: pinFocus,
+                  autofocus: !biometricAvailable,
                   obscureText: true,
                   keyboardType: TextInputType.number,
                   maxLength: 8,
@@ -5141,8 +5183,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     // icon last time (e.g. Gemini was unavailable); does nothing if none
     // are pending.
     unawaited(_countConfirmedDuplicates());
-    unawaited(NotificationService.instance.askPermissionOnce());
-    unawaited(NotificationService.instance.rescheduleAll());
+    // Only once the app is unlocked: a system permission dialog on top of
+    // the lock screen got in the way of the fingerprint prompt and the PIN
+    // keyboard.
+    unawaited(whenUnlocked().then((_) async {
+      await NotificationService.instance.askPermissionOnce();
+      await NotificationService.instance.rescheduleAll();
+    }));
     unawaited(retryPendingCategoryIcons());
     unawaited(checkBudgetGoals());
     unawaited(checkSpendingAnomalies());
