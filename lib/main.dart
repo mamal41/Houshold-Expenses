@@ -2178,43 +2178,77 @@ Future<void> retryPendingCategoryIcons() async {
 /// fires a one-time notification the first time a category crosses 80%
 /// (approaching), 100% (met), or passes 100% (exceeded) of its goal for
 /// the month - never repeats the same threshold twice in one month.
+/// Confirmed transactions that already happened in calendar month [m] (up
+/// to today, in the calendar chosen in settings), together with the due
+/// payments of recurring transactions on their own day - only a recurring
+/// transaction's first payment is stored, so without them rent or a
+/// subscription counted in its first month only.
+List<Transaction> happenedInMonth(List<Transaction> confirmed, CalendarMonth m) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final end = m.end.isAfter(today) ? today : m.end;
+  bool inRange(DateTime d) {
+    final dd = DateTime(d.year, d.month, d.day);
+    return !dd.isBefore(m.start) && !dd.isAfter(end);
+  }
+
+  return [
+    ...confirmed.where((t) => !t.draft && inRange(t.date)),
+    ...dueRecurringPayments(confirmed).where((t) => inRange(t.date)),
+  ];
+}
+
+/// [t]'s amount in the main account's currency (other currencies at their
+/// account's day rate), so goals can count every account.
+double amountInMain(Transaction t, List<Account> accounts) {
+  final a = accounts.where((a) => a.id == t.accountId).firstOrNull;
+  if (a == null || a.currency == mainCurrencyOf(accounts)) return t.amount;
+  return t.amount * a.exchangeRateToMain;
+}
+
+/// Top-level ancestor id of category [id].
+String? topCategoryIdOf(String id, Map<String, Category> byId) {
+  var cat = byId[id];
+  if (cat == null) return id;
+  while (cat!.parentId != null && byId[cat.parentId] != null) {
+    cat = byId[cat.parentId];
+  }
+  return cat.id;
+}
+
+/// This calendar month's spending per top-level expense category, in the
+/// main currency - what budget goals and the zero-based budget compare
+/// against.
+Map<String, double> spendingByTopCategoryThisMonth(List<Transaction> confirmed, List<Category> categories, List<Account> accounts) {
+  final byId = {for (final c in categories) c.id: c};
+  final month = calendarMonthOf(DateTime.now());
+  final result = <String, double>{};
+  for (final t in happenedInMonth(confirmed, month)) {
+    if (t.type != TxType.expense || t.categoryId == '_transfer_out_') continue;
+    final top = topCategoryIdOf(t.categoryId, byId);
+    if (top == null) continue;
+    result[top] = (result[top] ?? 0) + amountInMain(t, accounts);
+  }
+  return result;
+}
+
 Future<void> checkBudgetGoals() async {
   final goals = await Store.loadBudgetGoals();
   if (goals.isEmpty) return;
   final accountList = await Store.loadAccounts();
-  final mainCur = mainCurrencyOf(accountList);
-  final curById = {for (final a in accountList) a.id: a.currency};
-  final tx = (await Store.loadConfirmedTransactions()).where((t) => (curById[t.accountId] ?? mainCur) == mainCur).toList();
+  final tx = await Store.loadConfirmedTransactions();
   final categories = await Store.loadCategories();
-  final now = DateTime.now();
-  final monthKey = '${now.year}-${now.month}';
+  // The calendar month chosen in settings (Jalali or Gregorian).
+  final monthStart = calendarMonthOf(DateTime.now()).start;
+  final monthKey = '${monthStart.year}-${monthStart.month}-${monthStart.day}';
   final notifyState = await Store.loadBudgetNotifyState();
   var changed = false;
-
-  // Build lookup structures once (instead of scanning the full category
-  // list per transaction, which made this noticeably slow with many
-  // transactions/categories) - a map for O(1) lookup, and a cache of each
-  // category's resolved top-level ancestor id.
   final categoryById = {for (final c in categories) c.id: c};
-  final topCache = <String, String?>{};
-  String? topIdOf(String id) {
-    return topCache.putIfAbsent(id, () {
-      var cat = categoryById[id];
-      while (cat?.parentId != null) {
-        cat = categoryById[cat!.parentId];
-      }
-      return cat?.id;
-    });
-  }
+  final spending = spendingByTopCategoryThisMonth(tx, categories, accountList);
 
   for (final goal in goals) {
     if (goal.monthlyAmount <= 0) continue;
-    double spend = 0;
-    for (final t in tx) {
-      if (t.type != TxType.expense) continue;
-      if (t.date.year != now.year || t.date.month != now.month) continue;
-      if (topIdOf(t.categoryId) == goal.categoryId) spend += t.amount;
-    }
+    final spend = spending[goal.categoryId] ?? 0;
     final ratio = spend / goal.monthlyAmount;
     String? level;
     if (ratio >= 1.05) {
@@ -9063,32 +9097,22 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
 
   String get primaryCurrency => mainCurrencyOf(accounts);
 
-  /// This month's actual income so far; if nothing has come in yet this
-  /// month, falls back to the average of the last 3 months so the screen
-  /// still has something meaningful to allocate against early in the month.
+  /// This calendar month's income so far (recurring income such as a
+  /// salary included, other currencies at their day rate); if nothing has
+  /// come in yet this month, the average of the last 3 months (of those
+  /// that had any income) so there is something to allocate early on.
+  double _incomeIn(CalendarMonth m) => happenedInMonth(tx, m)
+      .where((t) => t.type == TxType.income && t.categoryId != '_transfer_in_')
+      .fold(0.0, (s, t) => s + amountInMain(t, accounts));
+
+  bool get incomeIsEstimate => _incomeIn(calendarMonthOf(DateTime.now())) <= 0;
+
   double get _monthIncome {
-    final now = DateTime.now();
-    var income = 0.0;
-    for (final t in tx) {
-      if (t.type != TxType.income || t.categoryId == '_transfer_in_') continue;
-      if (currencyOf(t.accountId) != primaryCurrency) continue;
-      if (t.date.year == now.year && t.date.month == now.month) income += t.amount;
-    }
+    final today = DateTime.now();
+    final income = _incomeIn(calendarMonthOf(today));
     if (income > 0) return income;
-    var sum = 0.0;
-    for (var i = 1; i <= 3; i++) {
-      var y = now.year, m = now.month - i;
-      while (m < 1) {
-        m += 12;
-        y--;
-      }
-      for (final t in tx) {
-        if (t.type != TxType.income || t.categoryId == '_transfer_in_') continue;
-        if (currencyOf(t.accountId) != primaryCurrency) continue;
-        if (t.date.year == y && t.date.month == m) sum += t.amount;
-      }
-    }
-    return sum / 3;
+    final past = [for (var i = 1; i <= 3; i++) _incomeIn(calendarMonthOf(today, -i))].where((v) => v > 0).toList();
+    return past.isEmpty ? 0 : past.reduce((a, b) => a + b) / past.length;
   }
 
   double get _totalAllocated => goals.fold(0.0, (s, g) => s + g.monthlyAmount);
@@ -9098,24 +9122,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
     return m.isEmpty ? 0 : m.first.monthlyAmount;
   }
 
-  double _spendFor(String categoryId) {
-    final now = DateTime.now();
-    var spend = 0.0;
-    for (final t in tx) {
-      if (t.type != TxType.expense || t.categoryId == '_transfer_out_') continue;
-      if (currencyOf(t.accountId) != primaryCurrency) continue;
-      if (t.date.year != now.year || t.date.month != now.month) continue;
-      var cat = categories.where((c) => c.id == t.categoryId).toList();
-      var current = cat.isEmpty ? null : cat.first;
-      while (current?.parentId != null) {
-        final pm = categories.where((c) => c.id == current!.parentId).toList();
-        if (pm.isEmpty) break;
-        current = pm.first;
-      }
-      if (current?.id == categoryId) spend += t.amount;
-    }
-    return spend;
-  }
+  double _spendFor(String categoryId) => spendingByTopCategoryThisMonth(tx, categories, accounts)[categoryId] ?? 0;
 
   Future<void> _editAllocation(Category c) async {
     final ctrl = TextEditingController(text: _allocationFor(c.id) > 0 ? formatAmountInput(_allocationFor(c.id)) : '');
@@ -9175,7 +9182,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('درآمد این ماه'),
+                      Text(incomeIsEstimate ? 'درآمد این ماه (برآورد: میانگین ۳ ماه قبل)' : 'درآمد این ماه'),
                       Text(ltr(formatMoney(income, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
                     ],
                   ),
@@ -9282,28 +9289,13 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
     tx = await Store.loadConfirmedTransactions();
     goals = await Store.loadBudgetGoals();
     accounts = await Store.loadAccounts();
+    _spending = null;
     setState(() => loading = false);
   }
 
-  double _spendFor(String categoryId) {
-    final now = DateTime.now();
-    var spend = 0.0;
-    final curById = {for (final a in accounts) a.id: a.currency};
-    for (final t in tx) {
-      if (t.type != TxType.expense) continue;
-      if ((curById[t.accountId] ?? mainCurrency) != mainCurrency) continue; // other units can't be added up
-      if (t.date.year != now.year || t.date.month != now.month) continue;
-      var cat = categories.where((c) => c.id == t.categoryId).toList();
-      var current = cat.isEmpty ? null : cat.first;
-      while (current?.parentId != null) {
-        final pm = categories.where((c) => c.id == current!.parentId).toList();
-        if (pm.isEmpty) break;
-        current = pm.first;
-      }
-      if (current?.id == categoryId) spend += t.amount;
-    }
-    return spend;
-  }
+  Map<String, double>? _spending;
+  double _spendFor(String categoryId) =>
+      (_spending ??= spendingByTopCategoryThisMonth(tx, categories, accounts))[categoryId] ?? 0;
 
   Future<void> _editGoal(Category c) async {
     final existing = goals.where((g) => g.categoryId == c.id).toList();
@@ -9364,7 +9356,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
-                'هدف‌ها به واحد حساب اصلی (${currencyLabel(mainCurrency)}) هستند؛ تراکنش‌های حساب‌هایی با واحد دیگر در این محاسبه نمی‌آیند.',
+                'هدف‌ها به واحد حساب اصلی (${currencyLabel(mainCurrency)}) هستند؛ هزینه‌های حساب‌هایی با واحد دیگر با نرخ روز همان حساب تبدیل و حساب می‌شوند.',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
             );
@@ -9446,18 +9438,21 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
 
   double _totalFor(String goalId) => contributions.where((c) => c.goalId == goalId).fold(0.0, (s, c) => s + c.amount);
 
-  /// Average monthly contribution based on months since the first
-  /// contribution to this goal - used for a rough "at this pace" estimate.
+  /// Average monthly contribution since the first contribution to this goal
+  /// (time measured in days, at least one month) - for the "at this pace"
+  /// estimate.
   double _avgMonthlyContribution(String goalId) {
     final list = contributions.where((c) => c.goalId == goalId).toList();
     if (list.isEmpty) return 0;
     list.sort((a, b) => a.date.compareTo(b.date));
-    final first = list.first.date;
-    final now = DateTime.now();
-    final months = ((now.year - first.year) * 12 + now.month - first.month + 1).clamp(1, 1000);
+    final days = DateTime.now().difference(list.first.date).inDays;
+    final months = max(1.0, days / 30.44);
     final total = list.fold(0.0, (s, c) => s + c.amount);
     return total / months;
   }
+
+  /// Months left until [target] (at least one while it's still ahead).
+  double _monthsUntil(DateTime target) => max(1.0, target.difference(DateTime.now()).inDays / 30.44);
 
   Future<void> _addOrEditGoal({SavingsGoal? existing}) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
@@ -9665,11 +9660,26 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 final ratio = (current / g.targetAmount).clamp(0.0, 1.0);
                 final growth = _avgMonthlyContribution(g.id);
                 String? projection;
+                String? needed;
+                var onTrack = true;
                 if (current >= g.targetAmount) {
                   projection = 'به هدف رسیدی! \u{1F389}';
-                } else if (growth > 0) {
-                  final monthsLeft = ((g.targetAmount - current) / growth).ceil();
-                  projection = 'با روند فعلی، حدود ${persianDigits('$monthsLeft')} ماه دیگر به هدف می\u200cرسی.';
+                } else {
+                  if (growth > 0) {
+                    final monthsLeft = ((g.targetAmount - current) / growth).ceil();
+                    projection = 'با روند فعلی، حدود ${persianDigits('$monthsLeft')} ماه دیگر به هدف می\u200cرسی.';
+                  }
+                  // With a target date: how much is needed each month from
+                  // now on to make it, and whether the current pace does.
+                  if (g.targetDate != null) {
+                    final perMonth = (g.targetAmount - current) / _monthsUntil(g.targetDate!);
+                    onTrack = growth >= perMonth;
+                    needed = g.targetDate!.isBefore(DateTime.now())
+                        ? 'تاریخ هدف گذشته است.'
+                        : 'برای رسیدن تا تاریخ هدف، ماهی ${ltr(formatMoney(perMonth, mainCurrency))} لازم است'
+                            '${growth > 0 ? (onTrack ? ' - روند فعلی کافی است.' : ' - روند فعلی کمتر از این است.') : '.'}';
+                    if (g.targetDate!.isBefore(DateTime.now())) onTrack = false;
+                  }
                 }
                 return Card(
                   child: Padding(
@@ -9711,6 +9721,14 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(projection, style: TextStyle(fontSize: 12, color: Colors.indigo.shade700)),
+                          ),
+                        if (needed != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              needed,
+                              style: TextStyle(fontSize: 12, color: onTrack ? Colors.green.shade700 : Colors.orange.shade800),
+                            ),
                           ),
                         const SizedBox(height: 8),
                         Row(
