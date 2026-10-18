@@ -7286,6 +7286,9 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   Transaction get other => edited[selected] ?? savedCandidates[selected];
   bool get hasEdits => edited.isNotEmpty || editedDraft != null;
   bool get _selectedIsRecurring => widget.matches[selected].recurring;
+  // One leg of a transfer between accounts: changing its amount, date or
+  // account here would separate it from its other leg.
+  bool get _selectedIsTransfer => other.categoryId.startsWith('_transfer');
 
   @override
   void initState() {
@@ -7454,6 +7457,12 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   /// Tapping a cell: take the value from the other column, or type/pick a
   /// new one - right in the table.
   Future<void> _editField(String field, {required bool draftSide}) async {
+    if (!draftSide && _selectedIsTransfer && field != 'note') {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('این یک انتقال بین حساب‌هاست؛ برای تغییر مبلغ، تاریخ یا حساب خود انتقال را ویرایش کن.'),
+      ));
+      return;
+    }
     if (!draftSide && _selectedIsRecurring && field == 'date') {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('تاریخ پرداخت‌های تکرارشونده از خود تراکنش تکرارشونده می‌آید و این‌جا تغییر نمی‌کند.'),
@@ -7612,7 +7621,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           const SizedBox(width: 4),
           _cell(
             b,
-            editable: editable && !(_selectedIsRecurring && field == 'date'),
+            editable: editable && !(_selectedIsRecurring && field == 'date') && !(_selectedIsTransfer && field != 'note'),
             changed: edited.containsKey(selected) && b != _value(savedCandidates[selected], field),
             style: style,
             onTap: () => _editField(field, draftSide: false),
@@ -7710,7 +7719,9 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            _selectedIsRecurring
+                            _selectedIsTransfer
+                                ? 'انتقال بین حساب‌ها'
+                                : _selectedIsRecurring
                                 ? 'پرداخت تکرارشونده'
                                 : (o.draft ? 'پیش‌نویس دیگر' : (widget.confirmedPair ? 'تراکنش مشابه' : 'ثبت‌شده‌ی قبلی')),
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
@@ -10018,6 +10029,11 @@ String _matchText(Transaction t) =>
 /// and similar shop/booking text make it surer. Null when it's no match.
 DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = false}) {
   if (x.type != d.type) return null;
+  // A recorded transfer between the person's own accounts: the bank
+  // booking of its leg in the same account (money in for the receiving
+  // account, out for the sending one) is the same money.
+  final transfer = x.categoryId.startsWith('_transfer') && !d.categoryId.startsWith('_transfer');
+  if (transfer && x.accountId != d.accountId) return null;
   final reasons = <String>[];
   var score = 0.0;
   final diff = (x.amount - d.amount).abs();
@@ -10063,7 +10079,8 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
   // Not for a recurring payment: the bank's booking text for rent or a
   // subscription rarely matches the name given to the recurring
   // transaction, and amount plus due date already say enough there.
-  if (!recurring && dWords.isNotEmpty && xWords.isNotEmpty && common.isEmpty) {
+  // Nor for a transfer: its text is the app's own ("انتقال از ...").
+  if (!recurring && !transfer && dWords.isNotEmpty && xWords.isNotEmpty && common.isEmpty) {
     final dl = dText.toLowerCase(), xl = xText.toLowerCase();
     final partial = dWords.any((w) => xl.contains(w)) || xWords.any((w) => dl.contains(w));
     if (!partial) return null;
@@ -10073,6 +10090,7 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
     reasons.add('نام/شرح مشابه');
   }
   if (recurring) reasons.add('پرداخت تکرارشونده');
+  if (transfer) reasons.add('انتقال بین حساب‌ها');
   if (score < 0.6) return null;
   return DuplicateMatch(t: x, recurring: recurring, score: score, reasons: reasons);
 }
@@ -10149,7 +10167,8 @@ String duplicatePairKey(Transaction a, DuplicateMatch m) {
 /// of recurring ones), surest first - minus pairs the person already said
 /// are different. [a] is the one offered for deletion.
 List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Transaction> all, Set<String> dismissed) {
-  bool usable(Transaction t) => !t.draft && !t.categoryId.startsWith('_transfer');
+  bool isTransfer(Transaction t) => t.categoryId.startsWith('_transfer');
+  bool usable(Transaction t) => !t.draft;
   // Sorted by date and compared only within 10 days (a duplicate is never
   // further apart): sorting by amount instead compared every pair of the
   // many bookings with the same amount (a weekly payment over years) and
@@ -10171,6 +10190,19 @@ List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Trans
       if (diff > max(x.t.amount, y.t.amount) * 0.02 + 0.01) continue;
       if (x.rec && y.rec) continue;
       if (x.t.id == y.t.id) continue; // a recurring payment and its own series
+      // Transfers only against an ordinary booking (e.g. the bank deposit
+      // recorded separately), never two transfer legs against each other.
+      if (isTransfer(x.t) && isTransfer(y.t)) continue;
+      if (isTransfer(x.t) || isTransfer(y.t)) {
+        final tr = isTransfer(x.t) ? x : y;
+        final other = isTransfer(x.t) ? y : x;
+        if (other.rec) continue;
+        // The ordinary booking is the one offered for deletion.
+        final m = scoreDuplicate(other.t, tr.t, recurring: tr.rec);
+        if (m == null || dismissed.contains(duplicatePairKey(other.t, m))) continue;
+        result.add((a: other.t, m: m));
+        continue;
+      }
       final Transaction a, b;
       final bool rec;
       if (x.rec || y.rec) {
