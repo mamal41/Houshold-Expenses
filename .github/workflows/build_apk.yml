@@ -219,6 +219,12 @@ jobs:
           -keepattributes Signature
           -keepattributes *Annotation*
           -dontwarn com.google.gson.**
+
+          # shared_preferences (and other plugins reached from Dart through
+          # JNI) must keep their names and members, or loading stored data
+          # fails with NoSuchMethodError in release builds.
+          -keep class io.flutter.plugins.sharedpreferences.** { *; }
+          -keep class com.github.dart_lang.jni.** { *; }
           PROGUARD
       - name: Remove default test (uses old template)
         run: rm -f test/widget_test.dart

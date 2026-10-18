@@ -27,6 +27,13 @@ dependencies:
   excel: ^4.0.6
   share_plus: ^10.1.4
 
+# shared_preferences_android 2.5.0 (Oct 2026) moved to JNI, and in release
+# (R8-shrunk) builds its Kotlin methods were stripped: the app could not read
+# any stored data ("NoSuchMethodError ... SharedPreferencesApiRegistrar
+# .getAll"). Stay on the last version that works until that is sorted out.
+dependency_overrides:
+  shared_preferences_android: 2.4.28
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
