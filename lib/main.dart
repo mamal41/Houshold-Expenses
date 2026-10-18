@@ -3642,7 +3642,6 @@ class AppDrawer extends StatelessWidget {
             item(23, Icons.repeat, 'تراکنش‌های تکرارشونده', () => const RecurringTransactionsScreen()),
             item(21, Icons.edit_note_outlined, 'تراکنش‌های پیش‌نویس', () => const DraftsScreen()),
             item(22, Icons.content_copy_outlined, 'تراکنش‌های تکراری', () => const DraftsScreen(initialTab: 2)),
-            item(24, Icons.auto_delete_outlined, 'حذف خودکار تکراری‌ها', () => const AutoDuplicatesScreen()),
             item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
             item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
             const Divider(height: 1),
@@ -5375,6 +5374,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       _startupChecksDone = true;
       unawaited(whenUnlocked().then((_) async {
         for (final step in <Future<void> Function()>[
+          loadPairVerdicts,
           _countConfirmedDuplicates,
           NotificationService.instance.askPermissionOnce,
           NotificationService.instance.rescheduleAll,
@@ -6837,6 +6837,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
     final drafts = all.where((t) => t.draft).toList()..sort((a, b) => b.date.compareTo(a.date));
     tx = drafts.where((t) => !isBankImportId(t.id)).toList();
     bankTx = drafts.where((t) => isBankImportId(t.id)).toList();
+    await loadPairVerdicts();
     matches = matchBankDrafts(drafts, all);
     confirmedPairs = findConfirmedDuplicatePairs(all, await loadDismissedDuplicatePairs());
     autoDeletedCount = (await LearnedDuplicates.deleted()).length;
@@ -7476,6 +7477,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       victim = pick;
     }
     setState(() => busy = true);
+    await recordPairVerdict(widget.draft, widget.matches[selected].t, same: true);
     if (victim.id == widget.draft.id) {
       await _saveOtherEdits();
       // Teaches the app this bank booking of a recurring payment; after two
@@ -7490,6 +7492,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
 
   Future<void> _keepAsNew() async {
     setState(() => busy = true);
+    await recordPairVerdict(widget.draft, widget.matches[selected].t, same: false);
     await _saveOtherEdits();
     if (widget.confirmedPair) {
       await _saveDraftEdits();
@@ -9010,10 +9013,15 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Card(
-                color: Colors.indigo.shade50,
+                // Theme colours: the light box with the default (light in
+                // dark mode) text was unreadable.
+                color: Theme.of(context).colorScheme.primaryContainer,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: Text(aiSuggestion!, style: const TextStyle(fontSize: 13, height: 1.7)),
+                  child: Text(
+                    aiSuggestion!,
+                    style: TextStyle(fontSize: 13, height: 1.7, color: Theme.of(context).colorScheme.onPrimaryContainer),
+                  ),
                 ),
               ),
             ),
@@ -10164,6 +10172,23 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
   }
   if (recurring) reasons.add('پرداخت تکرارشونده');
   if (transfer) reasons.add('انتقال بین حساب‌ها');
+  // What the person decided before for a look-alike pair.
+  if (learnedPairVerdicts.isNotEmpty) {
+    final a = LearnedDuplicates.signature(d), b = LearnedDuplicates.signature(x);
+    if (a.isNotEmpty && b.isNotEmpty) {
+      final v = learnedPairVerdicts.lastWhere((v) => _verdictFits(v, a, b), orElse: () => const PairVerdict(a: [], b: [], same: true, sameDay: true));
+      if (v.a.isNotEmpty) {
+        if (!v.same) {
+          // "Not the same" given for bookings on different days still lets
+          // a same-day pair through (that could be a real double entry).
+          if (!(days == 0 && !v.sameDay)) return null;
+        } else {
+          score += 0.2;
+          reasons.add('مشابه موردی که قبلاً تکراری تشخیص دادی');
+        }
+      }
+    }
+  }
   if (score < 0.6) return null;
   return DuplicateMatch(t: x, recurring: recurring, score: score, reasons: reasons);
 }
@@ -10486,6 +10511,54 @@ class LearnedDuplicates {
   }
 }
 
+/// What the person decided in the compare screen ("not the same" / "the
+/// same booking") for a pair of bookings, by their shop/booking words - so
+/// later look-alike pairs are judged the same way.
+class PairVerdict {
+  final List<String> a;
+  final List<String> b;
+  final bool same;
+  final bool sameDay; // the decided pair was on the same day
+  const PairVerdict({required this.a, required this.b, required this.same, required this.sameDay});
+  Map<String, dynamic> toJson() => {'a': a, 'b': b, 'same': same, 'sameDay': sameDay};
+  factory PairVerdict.fromJson(Map<String, dynamic> j) => PairVerdict(
+        a: List<String>.from(j['a'] ?? const []),
+        b: List<String>.from(j['b'] ?? const []),
+        same: j['same'] == true,
+        sameDay: j['sameDay'] == true,
+      );
+}
+
+/// Loaded once and kept here, as duplicate scoring is synchronous.
+List<PairVerdict> learnedPairVerdicts = [];
+const _pairVerdictsKey = 'learned_pair_verdicts';
+
+Future<void> loadPairVerdicts() async {
+  try {
+    final raw = (await SharedPreferences.getInstance()).getStringList(_pairVerdictsKey) ?? const [];
+    learnedPairVerdicts = raw.map((s) => PairVerdict.fromJson(jsonDecode(s))).toList();
+  } catch (_) {}
+}
+
+/// Remembers the person's verdict on [d] and [x] (latest wins for a
+/// look-alike pair; at most 300 kept).
+Future<void> recordPairVerdict(Transaction d, Transaction x, {required bool same}) async {
+  final a = LearnedDuplicates.signature(d), b = LearnedDuplicates.signature(x);
+  if (a.isEmpty || b.isEmpty) return;
+  final sameDay = DateTime(d.date.year, d.date.month, d.date.day) == DateTime(x.date.year, x.date.month, x.date.day);
+  final list = [
+    ...learnedPairVerdicts.where((v) => !_verdictFits(v, a, b)),
+    PairVerdict(a: a, b: b, same: same, sameDay: sameDay),
+  ];
+  learnedPairVerdicts = list.length > 300 ? list.sublist(list.length - 300) : list;
+  final sp = await SharedPreferences.getInstance();
+  await sp.setStringList(_pairVerdictsKey, learnedPairVerdicts.map((v) => jsonEncode(v.toJson())).toList());
+}
+
+bool _verdictFits(PairVerdict v, List<String> a, List<String> b) =>
+    (LearnedDuplicates.sameText(v.a, a) && LearnedDuplicates.sameText(v.b, b)) ||
+    (LearnedDuplicates.sameText(v.a, b) && LearnedDuplicates.sameText(v.b, a));
+
 /// Kept for the import preview: whether [t] has any likely duplicate.
 List<Transaction> possibleDuplicatesOf(Transaction t, List<Transaction> all) =>
     findDuplicateMatches(t, all.where((x) => !x.draft).toList(), dueRecurringPayments(all)).map((m) => m.t).toList();
@@ -10525,9 +10598,24 @@ String? categoryForMerchant(List<Transaction> all, String merchant, TxType type,
       if (partial != null) return partial;
     }
   }
-  if (hay.isNotEmpty) return best((m) => m.length >= 3 && hay.contains(m));
-  return null;
+  if (hay.isNotEmpty) {
+    final inText = best((m) => m.length >= 3 && hay.contains(m));
+    if (inText != null) return inText;
+  }
+  // Similar names: a distinctive word in common ("REWE Markt GmbH" and
+  // "REWE SAGT DANKE 4711").
+  final nameWords = _shopWords(name.isNotEmpty ? name : hay);
+  if (nameWords.isEmpty) return null;
+  return best((m) => _shopWords(m).intersection(nameWords).isNotEmpty);
 }
+
+const _genericShopWords = {
+  'gmbh', 'markt', 'sagt', 'danke', 'filiale', 'store', 'shop', 'und', 'the', 'kg', 'ohg', 'co', 'ag', 'online',
+  'center', 'zentrum', 'service', 'ltd', 'inc', 'gbr', 'mbh', 'kartenzahlung', 'lastschrift', 'zahlung', 'fil', 'nr',
+  'فروشگاه', 'شرکت', 'مرکز', 'خرید',
+};
+
+Set<String> _shopWords(String text) => _words(text).where((w) => !_genericShopWords.contains(w)).toSet();
 
 /// Best guess of a category for a booking text: a known shop name first,
 /// then any of the person's category names that appears in the text.
@@ -11148,6 +11236,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     setState(() => importing = true);
     var imported = 0, skipped = 0, possibleDup = 0, autoDeleted = 0;
     final drafts = <Transaction>[];
+    await loadPairVerdicts();
     final autoOn = await LearnedDuplicates.enabled();
     final learned = autoOn ? await LearnedDuplicates.rules() : const <LearnedDupRule>[];
     final priorAuto = autoOn ? await LearnedDuplicates.deleted() : <AutoDeletedDraft>[];
@@ -12960,6 +13049,52 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
   }
 }
 
+/// The transactions behind one figure of a report, newest first.
+class ReportTransactionsScreen extends StatelessWidget {
+  final String title;
+  final List<Transaction> transactions;
+  final List<Category> categories;
+  final List<Account> accounts;
+  const ReportTransactionsScreen({required this.title, required this.transactions, required this.categories, required this.accounts, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final list = List.of(transactions)..sort((a, b) => b.date.compareTo(a.date));
+    String cur(String id) => accounts.where((a) => a.id == id).firstOrNull?.currency ?? 'IRT';
+    String cat(String id) => categories.where((c) => c.id == id).firstOrNull?.name ?? 'بدون‌دسته';
+    return Scaffold(
+      appBar: AppBar(title: Text('$title (${persianDigits('${list.length}')})')),
+      body: list.isEmpty
+          ? const Center(child: Text('تراکنشی نیست.'))
+          : ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: list.length,
+              itemBuilder: (context, i) {
+                final t = list[i];
+                return Card(
+                  child: ListTile(
+                    title: Text(t.merchant.trim().isNotEmpty ? '${cat(t.categoryId)} • ${t.merchant.trim()}' : cat(t.categoryId)),
+                    subtitle: Text(
+                      '${formatDate(t.date)}${t.isRecurring ? ' • تکرارشونده' : ''}${t.note.trim().isNotEmpty ? ' • ${t.note.trim()}' : ''}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: Text(
+                      ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, cur(t.accountId)),
+                      style: TextStyle(fontWeight: FontWeight.bold, color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700),
+                    ),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: t, categories: categories, accounts: accounts)),
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
   @override
@@ -12987,7 +13122,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _load() async {
-    tx = await Store.loadConfirmedTransactions();
+    final confirmed = await Store.loadConfirmedTransactions();
+    // Due payments of recurring transactions count in their own period too
+    // (only a recurring transaction's first payment is stored).
+    tx = [...confirmed, ...dueRecurringPayments(confirmed)];
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     setState(() => loading = false);
@@ -13118,6 +13256,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return map;
   }
 
+  /// Opens the transactions behind a figure of the report.
+  Future<void> _openList(String title, List<Transaction> list) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ReportTransactionsScreen(title: title, transactions: list, categories: categories, accounts: accounts)),
+    );
+    await _load();
+  }
+
   String _presetLabel(_ReportPreset p) => switch (p) {
         _ReportPreset.thisMonth => 'این ماه',
         _ReportPreset.lastMonth => 'ماه قبل',
@@ -13160,7 +13307,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ..sort((a, b) => b.value.compareTo(a.value));
     final maxMerchantAmount = byMerchant.isEmpty ? 0.0 : byMerchant.first.value;
 
-    Widget comparisonRow(String label, double cur, double prev, {required bool higherIsBad}) {
+    Widget comparisonRow(String label, double cur, double prev, {required bool higherIsBad, TxType? type}) {
       String changeText = '';
       Color changeColor = Colors.grey;
       if (prev > 0) {
@@ -13170,12 +13317,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
         changeColor = bad ? Colors.red.shade700 : Colors.green.shade700;
         changeText = '${ltr(persianDigits('${up ? '+' : ''}${change.round()}%'))} نسبت به دوره‌ی قبل';
       }
-      return Padding(
+      return InkWell(
+        onTap: () => _openList(
+          label,
+          currentTx.where((t) => (type == null || t.type == type) && currencyOf(t.accountId) == primaryCurrency).toList(),
+        ),
+        child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label),
+            Row(mainAxisSize: MainAxisSize.min, children: [Text(label), Icon(Icons.chevron_left, size: 16, color: Colors.grey.shade500)]),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -13184,6 +13336,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ],
             ),
           ],
+        ),
         ),
       );
     }
@@ -13216,9 +13369,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   initialValue: categoryFilter,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'دسته‌بندی', border: OutlineInputBorder(), isDense: true),
+                  // Same order as the filter in All transactions: expense
+                  // categories then income ones, each subcategory indented
+                  // under its parent.
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('همه')),
-                    ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name, overflow: TextOverflow.ellipsis))),
+                    const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
+                    for (final type in [TxType.expense, TxType.income])
+                      ...categoriesInHierarchicalOrder(categories, type).map((c) => DropdownMenuItem(
+                            value: c.id,
+                            child: Text(c.parentId == null ? c.name : '　　${c.name}', overflow: TextOverflow.ellipsis),
+                          )),
                   ],
                   onChanged: (v) => setState(() => categoryFilter = v),
                 ),
@@ -13257,8 +13417,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 children: [
                   Text('خلاصه (${currentTx.length} تراکنش)', style: Theme.of(context).textTheme.titleMedium),
                   const Divider(),
-                  if (typeFilter != TxType.expense) comparisonRow('درآمد', curIncome, prevIncome, higherIsBad: false),
-                  if (typeFilter != TxType.income) comparisonRow('هزینه', curExpense, prevExpense, higherIsBad: true),
+                  if (typeFilter != TxType.expense) comparisonRow('درآمد', curIncome, prevIncome, higherIsBad: false, type: TxType.income),
+                  if (typeFilter != TxType.income) comparisonRow('هزینه', curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
                   if (typeFilter == null)
                     comparisonRow('خالص', curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
                 ],
@@ -13280,7 +13440,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             const SizedBox(height: 8),
             if (!groupByMerchant)
-              ...byCategory.map((e) => Padding(
+              ...byCategory.map((e) => InkWell(
+                    onTap: () => _openList(
+                      e.key.name,
+                      currentTx
+                          .where((t) =>
+                              t.type == TxType.expense &&
+                              currencyOf(t.accountId) == primaryCurrency &&
+                              (e.key.id == '_uncategorized_'
+                                  ? !categories.any((c) => c.id == t.categoryId)
+                                  : categoryMatchesFilter(t.categoryId, e.key.id, categories)))
+                          .toList(),
+                    ),
+                    child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -13304,6 +13476,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         ),
                       ],
                     ),
+                  ),
                   ))
             else if (byMerchant.isEmpty)
               const Padding(
@@ -13311,7 +13484,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 child: Text('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.', style: TextStyle(color: Colors.grey, fontSize: 12)),
               )
             else
-              ...byMerchant.map((e) => Padding(
+              ...byMerchant.map((e) => InkWell(
+                    onTap: () => _openList(
+                      e.key,
+                      currentTx
+                          .where((t) =>
+                              t.type == TxType.expense &&
+                              currencyOf(t.accountId) == primaryCurrency &&
+                              (t.merchant.trim().isEmpty ? 'بدون‌نام' : t.merchant.trim()) == e.key)
+                          .toList(),
+                    ),
+                    child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -13335,6 +13518,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         ),
                       ],
                     ),
+                  ),
                   )),
           ],
         ],
