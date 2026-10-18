@@ -34,10 +34,33 @@ void main() async {
     systemNavigationBarColor: Colors.black,
     systemNavigationBarIconBrightness: Brightness.light,
   ));
-  await NotificationService.instance.init();
-  currentLanguage.value = await Store.loadLanguage();
-  currentThemeMode.value = await Store.loadThemeMode();
-  currentCalendarSystem.value = await Store.loadCalendarSystem();
+  // A screen that fails to build shows what went wrong instead of an empty
+  // grey box, so a problem can be reported.
+  ErrorWidget.builder = (details) => Material(
+        color: const Color(0xFF3A1F1F),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: SelectableText(
+              'خطا در نمایش این صفحه:\n${details.exceptionAsString()}',
+              textDirection: TextDirection.ltr,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
+          ),
+        ),
+      );
+  // Nothing before the first screen may keep the app from starting: each
+  // step is time-limited and its failure only means its default is used.
+  Future<void> safely(Future<void> Function() step) async {
+    try {
+      await step().timeout(const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
+  await safely(() => NotificationService.instance.init());
+  await safely(() async => currentLanguage.value = await Store.loadLanguage());
+  await safely(() async => currentThemeMode.value = await Store.loadThemeMode());
+  await safely(() async => currentCalendarSystem.value = await Store.loadCalendarSystem());
   runApp(const MoneyApp());
 }
 
@@ -2210,7 +2233,9 @@ double amountInMain(Transaction t, List<Account> accounts) {
 String? topCategoryIdOf(String id, Map<String, Category> byId) {
   var cat = byId[id];
   if (cat == null) return id;
-  while (cat!.parentId != null && byId[cat.parentId] != null) {
+  final seen = <String>{cat.id};
+  // (seen: a category chain that loops back on itself must not hang)
+  while (cat!.parentId != null && byId[cat.parentId] != null && seen.add(cat.parentId!)) {
     cat = byId[cat.parentId];
   }
   return cat.id;
@@ -3307,7 +3332,15 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
   }
 
   Future<void> _init() async {
-    final enabled = await Store.loadAppLockEnabled();
+    var enabled = false;
+    try {
+      enabled = await Store.loadAppLockEnabled().timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // can't tell - fall back to the lock if a PIN exists at all
+      try {
+        enabled = await Store.hasPinSet();
+      } catch (_) {}
+    }
     if (!mounted) return;
     _lockEnabled = enabled;
     if (enabled) {
@@ -3316,6 +3349,28 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
       _showLock();
     }
     setState(() => _loading = false);
+    _watchCover();
+  }
+
+  /// Safety net: the cover must never stay up on its own. If it's still
+  /// showing a moment after the app is in front, bring up the lock screen
+  /// (or just drop the cover when there is no lock).
+  void _watchCover() {
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (!mounted) return;
+      final inFront = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+      if (inFront && !appLocked.value && (_obscured || _loading)) _recoverCover();
+    });
+  }
+
+  void _recoverCover() {
+    if (_lockEnabled && !appLocked.value) {
+      _showLock();
+    }
+    setState(() {
+      _loading = false;
+      _obscured = false;
+    });
   }
 
   // True while the app is in the background (or about to go there) and until
@@ -3381,6 +3436,7 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
       } else if (_obscured) {
         setState(() => _obscured = false);
       }
+      _watchCover();
     }
   }
 
@@ -3405,7 +3461,10 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
         ),
         if (hidden)
           Positioned.fill(
-            child: AbsorbPointer(
+            // A tap on the cover also gets past it (to the lock screen).
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _recoverCover,
               child: ColoredBox(
                 color: Theme.of(context).colorScheme.surface.withValues(alpha: _loading ? 1 : 0.85),
                 child: Center(
