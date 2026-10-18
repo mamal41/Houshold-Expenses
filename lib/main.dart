@@ -5145,6 +5145,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   final Map<String, bool> _monthShowNotDue = {}; // "y-m" -> true shows the not-yet-due list instead of the due one
   int shoppingPending = 0; // items not yet ticked off across all shopping lists
   int confirmedDuplicates = 0; // likely double-entered confirmed transactions
+  bool _startupChecksDone = false;
 
   Future<void> _countConfirmedDuplicates() async {
     final n = findConfirmedDuplicatePairs(await Store.loadTransactions(), await loadDismissedDuplicatePairs()).length;
@@ -5250,20 +5251,38 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       _memo.clear();
       shoppingPending = await _loadShoppingPending();
       if (mounted) setState(() {});
-      unawaited(_countConfirmedDuplicates());
+      if (_startupChecksDone && !appLocked.value) unawaited(_countConfirmedDuplicates());
     } finally {
       _lastRefresh = DateTime.now();
       _refreshing = false;
     }
   }
 
+  // What the start-up load is doing, and what went wrong if it failed -
+  // shown instead of an endless spinner.
+  String _loadStep = '';
+  String? _loadError;
+
   Future<void> _load() async {
-    await _reloadTx();
-    categories = await Store.loadCategories();
-    accounts = await Store.loadAccounts();
-    _memo.clear();
-    shoppingPending = await _loadShoppingPending();
-    setState(() => loading = false);
+    try {
+      _loadStep = 'خواندن تراکنش‌ها';
+      await _reloadTx();
+      _loadStep = 'خواندن دسته‌بندی‌ها';
+      categories = await Store.loadCategories();
+      _loadStep = 'خواندن حساب‌ها';
+      accounts = await Store.loadAccounts();
+      _memo.clear();
+      _loadStep = 'خواندن لیست‌های خرید';
+      shoppingPending = await _loadShoppingPending();
+    } catch (e, st) {
+      if (mounted) setState(() => _loadError = '$_loadStep:\n$e\n\n$st');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      loading = false;
+      _loadError = null;
+    });
     // Draw attention to the drafts icon the first time the app is opened
     // with unconfirmed drafts sitting around, so it's noticed - not on
     // every later silent refresh, just once per app visit. A short delay
@@ -5275,19 +5294,30 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     // Best-effort background retry for categories that only got a generic
     // icon last time (e.g. Gemini was unavailable); does nothing if none
     // are pending.
-    unawaited(_countConfirmedDuplicates());
-    // Only once the app is unlocked: a system permission dialog on top of
-    // the lock screen got in the way of the fingerprint prompt and the PIN
-    // keyboard.
-    unawaited(whenUnlocked().then((_) async {
-      await NotificationService.instance.askPermissionOnce();
-      await NotificationService.instance.rescheduleAll();
-    }));
-    unawaited(retryPendingCategoryIcons());
-    unawaited(checkBudgetGoals());
-    unawaited(checkSpendingAnomalies());
-    unawaited(checkReturnDeadlines());
-    unawaited(maybeRunAutoBackup());
+    // Background work only once the app is unlocked and showing, one step at
+    // a time with a breath in between: run all at once on start it kept the
+    // app busy before the lock screen could even come up. (Also the system
+    // permission dialog must not appear over the lock screen.)
+    if (!_startupChecksDone) {
+      _startupChecksDone = true;
+      unawaited(whenUnlocked().then((_) async {
+        for (final step in <Future<void> Function()>[
+          _countConfirmedDuplicates,
+          NotificationService.instance.askPermissionOnce,
+          NotificationService.instance.rescheduleAll,
+          retryPendingCategoryIcons,
+          checkBudgetGoals,
+          checkSpendingAnomalies,
+          checkReturnDeadlines,
+          maybeRunAutoBackup,
+        ]) {
+          try {
+            await step();
+          } catch (_) {}
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+      }));
+    }
   }
 
   String categoryName(String id) {
@@ -5707,7 +5737,49 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_loadError != null) {
+      return Scaffold(
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              const Text('خطا در باز کردن اطلاعات برنامه. از این صفحه عکس بگیر و بفرست:',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              SelectableText(_loadError!, textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  setState(() => _loadError = null);
+                  _load();
+                },
+                child: const Text('تلاش دوباره'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (loading) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              // Says what's taking long, if it does.
+              FutureBuilder<void>(
+                future: Future<void>.delayed(const Duration(seconds: 4)),
+                builder: (context, snap) => snap.connectionState == ConnectionState.done
+                    ? Text('در حال $_loadStep…', style: TextStyle(color: Colors.grey.shade500, fontSize: 12))
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final balances = totalBalanceByCurrency;
     final safeToSpend = safeToSpendByCurrency;
     final period = periodStatsByCurrency;
@@ -10078,18 +10150,25 @@ String duplicatePairKey(Transaction a, DuplicateMatch m) {
 /// are different. [a] is the one offered for deletion.
 List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Transaction> all, Set<String> dismissed) {
   bool usable(Transaction t) => !t.draft && !t.categoryId.startsWith('_transfer');
-  final entries = <({Transaction t, bool rec})>[
+  // Sorted by date and compared only within 10 days (a duplicate is never
+  // further apart): sorting by amount instead compared every pair of the
+  // many bookings with the same amount (a weekly payment over years) and
+  // froze the app on start.
+  int dayOf(DateTime d) => DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch ~/ 86400000;
+  final entries = <({Transaction t, bool rec, int day})>[
     for (final t in all)
-      if (usable(t)) (t: t, rec: false),
+      if (usable(t)) (t: t, rec: false, day: dayOf(t.date)),
     for (final r in dueRecurringPayments(all))
-      if (usable(r)) (t: r, rec: true),
-  ]..sort((x, y) => x.t.amount.compareTo(y.t.amount));
+      if (usable(r)) (t: r, rec: true, day: dayOf(r.date)),
+  ]..sort((x, y) => x.day.compareTo(y.day));
   final result = <({Transaction a, DuplicateMatch m})>[];
   for (var i = 0; i < entries.length; i++) {
     final x = entries[i];
     for (var j = i + 1; j < entries.length; j++) {
       final y = entries[j];
-      if (y.t.amount > x.t.amount * 1.02 + 0.01) break;
+      if (y.day - x.day > 10) break;
+      final diff = (y.t.amount - x.t.amount).abs();
+      if (diff > max(x.t.amount, y.t.amount) * 0.02 + 0.01) continue;
       if (x.rec && y.rec) continue;
       if (x.t.id == y.t.id) continue; // a recurring payment and its own series
       final Transaction a, b;
