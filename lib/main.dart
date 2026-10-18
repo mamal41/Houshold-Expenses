@@ -2,8 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show SynchronousFuture;
+import 'package:flutter/foundation.dart' show SynchronousFuture, compute;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
@@ -24,6 +25,7 @@ import 'package:crypto/crypto.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:excel/excel.dart' as xls;
 import 'package:share_plus/share_plus.dart';
+import 'package:image/image.dart' as img;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -4238,18 +4240,89 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
 /// Asked when a draft that carries a scanned receipt/payslip photo becomes a
 /// final transaction. Returns true to keep the photo, false to delete it and
 /// null if the dialog was dismissed (the save should then be cancelled).
-Future<bool?> askKeepReceiptImage(BuildContext context) {
+/// With [recommendKeep] (an item that can be returned or has a warranty)
+/// "yes" is the highlighted answer and the reason is shown; otherwise both
+/// answers look the same.
+Future<bool?> askKeepReceiptImage(BuildContext context, {bool recommendKeep = false, String? reason}) {
   return showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('تصویر فیش'),
-      content: const Text('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر، حذف شود')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ذخیره شود')),
-      ],
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟'),
+          if (recommendKeep) ...[
+            const SizedBox(height: 8),
+            Text(
+              reason?.trim().isNotEmpty == true ? reason!.trim() : 'این خرید کالایی با امکان مرجوعی یا گارانتی دارد؛ بهتر است فیش نگه داشته شود.',
+              style: TextStyle(fontSize: 12, color: Colors.amber.shade800),
+            ),
+          ],
+        ],
+      ),
+      actions: recommendKeep
+          ? [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+            ]
+          : [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+            ],
     ),
   );
+}
+
+/// Crops a kept receipt photo to the receipt: the area holding its text (as
+/// found by on-device text recognition) plus a generous margin, so the
+/// table or background around it is cut away. Leaves the file as it is when
+/// there's too little text to go by or the receipt already fills the photo.
+Future<void> autoCropReceipt(String path) async {
+  if (!path.toLowerCase().endsWith('.jpg') && !path.toLowerCase().endsWith('.jpeg') && !path.toLowerCase().endsWith('.png')) {
+    return;
+  }
+  try {
+    final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    RecognizedText result;
+    try {
+      result = await recognizer.processImage(InputImage.fromFilePath(path));
+    } finally {
+      await recognizer.close();
+    }
+    final blocks = result.blocks.map((b) => b.boundingBox).toList();
+    if (blocks.length < 3) return;
+    var left = blocks.first.left, top = blocks.first.top, right = blocks.first.right, bottom = blocks.first.bottom;
+    for (final r in blocks) {
+      left = min(left, r.left);
+      top = min(top, r.top);
+      right = max(right, r.right);
+      bottom = max(bottom, r.bottom);
+    }
+    final bytes = await File(path).readAsBytes();
+    final out = await compute(_cropToBox, (bytes: bytes, l: left, t: top, r: right, b: bottom, png: path.toLowerCase().endsWith('.png')));
+    if (out != null) await File(path).writeAsBytes(out, flush: true);
+  } catch (_) {
+    // best effort - the uncropped photo stays as it is
+  }
+}
+
+Uint8List? _cropToBox(({Uint8List bytes, double l, double t, double r, double b, bool png}) a) {
+  final decoded = img.decodeImage(a.bytes);
+  if (decoded == null) return null;
+  final photo = img.bakeOrientation(decoded);
+  final w = photo.width, h = photo.height;
+  // Text found outside the photo means the coordinates don't fit it.
+  if (a.r > w * 1.02 || a.b > h * 1.02) return null;
+  final mx = max(30.0, w * 0.06), my = max(30.0, h * 0.05);
+  final x0 = max(0, (a.l - mx).floor()), y0 = max(0, (a.t - my).floor());
+  final x1 = min(w, (a.r + mx).ceil()), y1 = min(h, (a.b + my).ceil());
+  final cw = x1 - x0, ch = y1 - y0;
+  if (cw < w * 0.25 || ch < h * 0.25) return null; // too little to be the whole receipt
+  if (cw * ch > w * h * 0.85) return null; // the receipt already fills the photo
+  final cropped = img.copyCrop(photo, x: x0, y: y0, width: cw, height: ch);
+  return a.png ? img.encodePng(cropped) : img.encodeJpg(cropped, quality: 88);
 }
 
 /// Copies a scanned receipt/payslip image (which otherwise lives in a
@@ -14449,9 +14522,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     // Drafts always keep their scan; on the final save ask whether the
     // receipt/payslip photo should be kept with the transaction.
     var keepNewImage = draft;
+    var keptByAnswer = false;
     if (!draft && (widget.existing == null || widget.existing!.draft)) {
-      final keep = await askKeepReceiptImage(context);
+      // An item that can be returned or has a warranty: keeping is advised.
+      final returnable = keepReceipt == true || items.any((e) => e.returnUntil != null || e.warrantyUntil != null);
+      final keep = await askKeepReceiptImage(context, recommendKeep: returnable, reason: returnable ? keepReceiptReason : null);
       if (keep == null) return;
+      keptByAnswer = keep;
       if (widget.existing == null) {
         keepNewImage = keep;
       } else if (!keep && persistedImage != null) {
@@ -14471,6 +14548,9 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         // best-effort only - saving the transaction matters more than the image copy
       }
     }
+    // A receipt photo kept with the final transaction is cropped to the
+    // receipt itself.
+    if (keptByAnswer && persistedImage != null) await autoCropReceipt(persistedImage);
     final result = Transaction(
       id: id,
       type: TxType.expense,
@@ -16005,8 +16085,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
     String? keptImage = _currentImagePath;
     if (keptImage != null && !draft && (widget.existing?.draft ?? false)) {
       if (!context.mounted) return false;
-      final keep = await askKeepReceiptImage(context);
+      final returnable = items.any((e) => e.returnUntil != null || e.warrantyUntil != null);
+      final keep = await askKeepReceiptImage(context, recommendKeep: returnable);
       if (keep == null) return false;
+      if (keep) await autoCropReceipt(keptImage);
       if (!keep) {
         try {
           await File(keptImage).delete();

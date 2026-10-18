@@ -26,6 +26,7 @@ dependencies:
   crypto: ^3.0.3
   excel: ^4.0.6
   share_plus: ^10.1.4
+  image: ^4.3.0
 
 # shared_preferences_android 2.5.0 (Oct 2026) moved to JNI, and in release
 # (R8-shrunk) builds its Kotlin methods were stripped: the app could not read
