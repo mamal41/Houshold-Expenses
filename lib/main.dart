@@ -8546,20 +8546,60 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     );
   }
 
+  /// For the last payment of a recurring transaction that ends (a set
+  /// number of installments or an end date): its number of all of them.
+  ({int n, int total})? _lastPaymentOf(TxOccurrence e) {
+    final t = e.t;
+    if (!t.isRecurring || (t.installments == null && t.recurrenceEndDate == null)) return null;
+    final all = computeRecurrenceOccurrences(t);
+    if (all.isEmpty) return null;
+    final last = all.last;
+    if (last.year != e.date.year || last.month != e.date.month || last.day != e.date.day) return null;
+    return (n: all.length, total: all.length);
+  }
+
   Widget _entryCard(TxOccurrence e, DateTime today) {
     final daysLeft = e.date.difference(today).inDays;
+    // The series ends with this payment: set apart so it's noticed (the
+    // budget gets this amount back from next month on).
+    final last = _lastPaymentOf(e);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Card(
+      color: last != null ? (dark ? Colors.teal.shade900.withValues(alpha: 0.5) : Colors.teal.shade50) : null,
+      shape: last != null
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.teal.shade400, width: 1.5))
+          : null,
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100,
+          backgroundColor: last != null
+              ? Colors.teal.shade100
+              : (e.t.type == TxType.income ? Colors.green.shade100 : Colors.red.shade100),
           child: Icon(
-            e.t.type == TxType.income ? Icons.add : Icons.remove,
-            color: e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800,
+            last != null ? Icons.flag : (e.t.type == TxType.income ? Icons.add : Icons.remove),
+            color: last != null ? Colors.teal.shade800 : (e.t.type == TxType.income ? Colors.green.shade800 : Colors.red.shade800),
           ),
         ),
-        title: Text(categoryName(e.t.categoryId)),
-        subtitle: Text(
-          daysLeft == 0 ? 'امروز' : '${formatDate(e.date)} • ${ltr(persianDigits('$daysLeft'))} روز دیگر',
+        title: Text(e.t.merchant.trim().isNotEmpty ? '${categoryName(e.t.categoryId)} • ${e.t.merchant.trim()}' : categoryName(e.t.categoryId)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(daysLeft == 0 ? 'امروز' : '${formatDate(e.date)} • ${ltr(persianDigits('$daysLeft'))} روز دیگر'),
+            if (last != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: Colors.teal.shade600, borderRadius: BorderRadius.circular(10)),
+                  child: Text(
+                    e.t.installments != null
+                        ? 'آخرین قسط (${persianDigits('${last.n}')} از ${persianDigits('${last.total}')}) - از ماه بعد تمام است'
+                        : 'آخرین پرداخت - از ماه بعد تمام است',
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+          ],
         ),
         trailing: Text(
           ltr(e.t.type == TxType.income ? '+' : '-') + formatMoney(e.t.amount, currencyOf(e.t.accountId)),
