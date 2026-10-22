@@ -1517,39 +1517,46 @@ DateTime? nextOccurrencePreview(Transaction t) {
 List<DateTime> computeRecurrenceOccurrences(Transaction t) {
   if (!t.isRecurring) return [];
   final unlimited = t.installments == null && t.recurrenceEndDate == null;
+  final start = DateTime(t.date.year, t.date.month, t.date.day);
+  // A series without an end runs until a horizon a few years ahead (it
+  // used to stop after 200 payments counted from its start, so an old
+  // weekly payment quietly vanished from every list and total).
+  final now = DateTime.now();
+  final horizon = DateTime(now.year + 3, now.month, now.day);
+  final end = t.recurrenceEndDate == null
+      ? null
+      : DateTime(t.recurrenceEndDate!.year, t.recurrenceEndDate!.month, t.recurrenceEndDate!.day);
+  // Every payment is worked out from the first one (not from the previous
+  // payment), so a day-31 payment doesn't slide to the 28th for good after
+  // February.
+  final day = t.recurrenceDay ?? dayOfMonthInCalendar(start);
+  final interval = max(1, t.recurrenceIntervalDays ?? 30);
   final result = <DateTime>[];
-  var current = t.date;
-  var count = 0;
-  // For a truly unlimited series there is no real "last" occurrence; cap
-  // generation to a reasonable window (used only for the optional
-  // per-installment reminder, never for the "last 2" reminder).
-  final hardCap = unlimited ? 200 : 1000;
-  while (count < hardCap) {
-    if (t.recurrenceEndDate != null && current.isAfter(t.recurrenceEndDate!)) break;
-    result.add(current);
-    count++;
-    if (t.installments != null && count >= t.installments!) break;
-    DateTime next;
+  for (var i = 0; i < 20000; i++) {
+    final DateTime current;
     switch (t.recurrence) {
       case RecurrenceFrequency.monthly:
-        next = calendarMonthDate(current, 1, t.recurrenceDay ?? dayOfMonthInCalendar(current));
-        break;
-      case RecurrenceFrequency.weekly:
-        next = current.add(const Duration(days: 7));
-        break;
-      case RecurrenceFrequency.custom:
-        next = current.add(Duration(days: t.recurrenceIntervalDays ?? 30));
+        current = i == 0 ? start : calendarMonthDate(start, i, day);
         break;
       case RecurrenceFrequency.quarterly:
-        next = calendarMonthDate(current, 3, t.recurrenceDay ?? dayOfMonthInCalendar(current));
+        current = i == 0 ? start : calendarMonthDate(start, i * 3, day);
+        break;
+      case RecurrenceFrequency.weekly:
+        current = DateTime(start.year, start.month, start.day + 7 * i);
+        break;
+      case RecurrenceFrequency.custom:
+        current = DateTime(start.year, start.month, start.day + interval * i);
         break;
       case RecurrenceFrequency.yearly:
-        next = clampedMonthDate(current.year + 1, current.month, current.day);
+        current = clampedMonthDate(start.year + i, start.month, start.day);
         break;
       case RecurrenceFrequency.none:
         return result;
     }
-    current = next;
+    if (end != null && current.isAfter(end)) break;
+    if (unlimited && current.isAfter(horizon)) break;
+    result.add(current);
+    if (t.installments != null && result.length >= t.installments!) break;
   }
   return result;
 }
@@ -1743,7 +1750,7 @@ class NotificationService {
     }
     final days = t.notifyDaysBeforeEach;
     if (days != null && days > 0) {
-      final capped = occurrences.take(200).toList();
+      final capped = occurrences;
       var scheduled = 0;
       for (var i = 0; i < capped.length; i++) {
         final due = capped[i];
@@ -2314,7 +2321,10 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
   final accountList = await Store.loadAccounts();
   final mainCur = mainCurrencyOf(accountList);
   final curById = {for (final a in accountList) a.id: a.currency};
-  final tx = (await Store.loadConfirmedTransactions()).where((t) => (curById[t.accountId] ?? mainCur) == mainCur).toList();
+  final confirmed = await Store.loadConfirmedTransactions();
+  final tx = [...confirmed, ...dueRecurringPayments(confirmed)]
+      .where((t) => !t.date.isAfter(DateTime.now()) && (curById[t.accountId] ?? mainCur) == mainCur)
+      .toList();
   final categories = await Store.loadCategories();
   final now = DateTime.now();
   final monthKey = '${now.year}-${now.month}';
@@ -8876,6 +8886,9 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
 
   Future<void> _load() async {
     tx = await Store.loadConfirmedTransactions();
+    // Due payments of recurring transactions count too (only the first
+    // payment of a series is stored).
+    tx = [...tx, ...dueRecurringPayments(tx)];
     accounts = await Store.loadAccounts();
     goals = await Store.loadSavingsGoals();
     contributions = await Store.loadSavingsContributions();
@@ -9100,6 +9113,9 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
   Future<void> _load() async {
     accounts = await Store.loadAccounts();
     tx = await Store.loadConfirmedTransactions();
+    // Due payments of recurring transactions count too (only the first
+    // payment of a series is stored).
+    tx = [...tx, ...dueRecurringPayments(tx)];
     final storedBase = await Store.loadBaseCurrency();
     baseCurrency = storedBase ?? (accounts.isNotEmpty ? accounts.first.currency : 'IRT');
     rates = await Store.loadExchangeRates();
@@ -13606,6 +13622,9 @@ class _ForecastScreenState extends State<ForecastScreen> {
 
   Future<void> _load() async {
     tx = await Store.loadConfirmedTransactions();
+    // Due payments of recurring transactions count too (only the first
+    // payment of a series is stored).
+    tx = [...tx, ...dueRecurringPayments(tx)];
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
     setState(() => loading = false);
