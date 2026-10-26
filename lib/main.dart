@@ -62,7 +62,7 @@ void main() async {
 
   await safely(() => NotificationService.instance.init());
   await safely(() async => currentLanguage.value = await Store.loadLanguage());
-  if (currentLanguage.value != AppLanguage.fa) await safely(() => localizeDefaultNames(currentLanguage.value));
+  await safely(() async => languageChosen = await Store.hasChosenLanguage());
   await safely(() async => currentThemeMode.value = await Store.loadThemeMode());
   await safely(() async => currentCalendarSystem.value = await Store.loadCalendarSystem());
   runApp(const MoneyApp());
@@ -1880,7 +1880,8 @@ const _defaultCategoryNames = <String, List<String>>{
 
 /// Renames the default categories and the default account to [lang] - only
 /// those still carrying a default name (in any language), so a name the
-/// person chose is never touched.
+/// person chose is never touched. Done once, when the language is chosen on
+/// the first start; later language changes keep the names as they are.
 Future<void> localizeDefaultNames(AppLanguage lang) async {
   final idx = lang == AppLanguage.en ? 0 : 1;
   final faById = {for (final c in defaultCategories) c.id: c.name};
@@ -1906,6 +1907,72 @@ Future<void> localizeDefaultNames(AppLanguage lang) async {
   final target = accountNames[lang == AppLanguage.fa ? 0 : (lang == AppLanguage.en ? 1 : 2)];
   if (accounts.any((a) => a.id == 'default' && accountNames.contains(a.name.trim()) && a.name != target)) {
     await Store.saveAccounts([for (final a in accounts) a.id == 'default' ? a.copyWith(name: target) : a]);
+  }
+}
+
+/// False until a language has been chosen (the very first start).
+bool languageChosen = true;
+
+/// Shown once, on the very first start: choose the app language. The
+/// default categories and account get their names in that language (only
+/// now - changing the language later doesn't rename them).
+class FirstLanguageScreen extends StatefulWidget {
+  const FirstLanguageScreen({super.key});
+  @override
+  State<FirstLanguageScreen> createState() => _FirstLanguageScreenState();
+}
+
+class _FirstLanguageScreenState extends State<FirstLanguageScreen> {
+  bool busy = false;
+
+  Future<void> _choose(AppLanguage lang) async {
+    setState(() => busy = true);
+    currentLanguage.value = lang;
+    await Store.saveLanguage(lang);
+    await localizeDefaultNames(lang);
+    languageChosen = true;
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Icon(Icons.translate, size: 56, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(height: 16),
+                // In all three languages, as none is chosen yet.
+                const Text('زبان برنامه را انتخاب کنید', textAlign: TextAlign.center, textDirection: TextDirection.rtl, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text('Choose the app language', textAlign: TextAlign.center, style: TextStyle(fontSize: 15)),
+                const Text('App-Sprache wählen', textAlign: TextAlign.center, style: TextStyle(fontSize: 15)),
+                const SizedBox(height: 24),
+                for (final lang in AppLanguage.values) ...[
+                  FilledButton.tonal(
+                    onPressed: busy ? null : () => _choose(lang),
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                    child: Text(lang.label, style: const TextStyle(fontSize: 17)),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                const SizedBox(height: 8),
+                const Text(
+                  'می‌توانی بعداً از «تنظیمات» عوضش کنی. • You can change it later in Settings. • Später in den Einstellungen änderbar.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -2746,6 +2813,12 @@ class Store {
     await saveAccounts(accounts);
   }
 
+  /// Whether a language was ever chosen (false on the very first start).
+  static Future<bool> hasChosenLanguage() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_langKey) != null;
+  }
+
   static Future<AppLanguage> loadLanguage() async {
     final sp = await SharedPreferences.getInstance();
     final code = sp.getString(_langKey);
@@ -3381,7 +3454,8 @@ class _MoneyAppState extends State<MoneyApp> {
       },
       navigatorKey: rootNavigatorKey,
       navigatorObservers: [appRouteObserver],
-      home: const HomeScreen(),
+      // The very first start asks for the language first.
+      home: languageChosen ? const HomeScreen() : const FirstLanguageScreen(),
     );
   }
 }
@@ -3906,7 +3980,6 @@ class LanguageSettingsScreen extends StatelessWidget {
                 if (v == null) return;
                 currentLanguage.value = v;
                 await Store.saveLanguage(v);
-                await localizeDefaultNames(v);
               },
             ),
           ),
