@@ -26,6 +26,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:excel/excel.dart' as xls;
 import 'package:share_plus/share_plus.dart';
 import 'package:image/image.dart' as img;
+import 'ui_translations.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +45,7 @@ void main() async {
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: SelectableText(
-              'خطا در نمایش این صفحه:\n${details.exceptionAsString()}',
+              locf('خطا در نمایش این صفحه:\n{0}', [(details.exceptionAsString())]),
               textDirection: TextDirection.ltr,
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
@@ -61,6 +62,7 @@ void main() async {
 
   await safely(() => NotificationService.instance.init());
   await safely(() async => currentLanguage.value = await Store.loadLanguage());
+  if (currentLanguage.value != AppLanguage.fa) await safely(() => localizeDefaultNames(currentLanguage.value));
   await safely(() async => currentThemeMode.value = await Store.loadThemeMode());
   await safely(() async => currentCalendarSystem.value = await Store.loadCalendarSystem());
   runApp(const MoneyApp());
@@ -75,7 +77,13 @@ enum CalendarSystem { gregorian, jalali }
 // is saved and restored on start-up.
 final ValueNotifier<CalendarSystem> currentCalendarSystem = ValueNotifier(CalendarSystem.jalali);
 
-const _jalaliMonthNames = [
+/// Jalali month names in the app language (transliterated in English and
+/// German).
+List<String> get _jalaliMonthNames => currentLanguage.value == AppLanguage.fa
+    ? _jalaliMonthNamesFa
+    : const ['Farvardin', 'Ordibehesht', 'Khordad', 'Tir', 'Mordad', 'Shahrivar', 'Mehr', 'Aban', 'Azar', 'Dey', 'Bahman', 'Esfand'];
+
+const _jalaliMonthNamesFa = [
   'فروردین',
   'اردیبهشت',
   'خرداد',
@@ -415,7 +423,7 @@ class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
     while (cells.length % 7 != 0) {
       cells.add(const SizedBox.shrink());
     }
-    const weekdayLetters = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'];
+    final weekdayLetters = [loc('ش'), loc('ی'), loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج')];
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -430,7 +438,7 @@ class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  IconButton(icon: const Icon(Icons.chevron_left), tooltip: 'ماه بعد', onPressed: () => _shiftMonth(1)),
+                  IconButton(icon: const Icon(Icons.chevron_left), tooltip: loc('ماه بعد'), onPressed: () => _shiftMonth(1)),
                   Expanded(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -451,7 +459,7 @@ class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
                       ],
                     ),
                   ),
-                  IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'ماه قبل', onPressed: () => _shiftMonth(-1)),
+                  IconButton(icon: const Icon(Icons.chevron_right), tooltip: loc('ماه قبل'), onPressed: () => _shiftMonth(-1)),
                 ],
               ),
               Row(
@@ -485,7 +493,7 @@ class _JalaliDatePickerDialogState extends State<JalaliDatePickerDialog> {
                 });
               }
             },
-            child: const Text('امروز'),
+            child: Text(loc('امروز')),
           ),
           FilledButton(onPressed: () => Navigator.pop(context, selected), child: Text(tr('confirm'))),
         ],
@@ -498,11 +506,11 @@ Future<bool> confirmExitApp(BuildContext context) async {
   final result = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('خروج از برنامه'),
-      content: const Text('آیا می‌خواهید از برنامه خارج شوید؟'),
+      title: Text(loc('خروج از برنامه')),
+      content: Text(loc('آیا می‌خواهید از برنامه خارج شوید؟')),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(loc('خیر'))),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بله'))),
       ],
     ),
   );
@@ -515,12 +523,12 @@ Future<bool> confirmDiscardChanges(BuildContext context, {Future<bool> Function(
   final choice = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('تغییرات ذخیره نشده'),
-      content: const Text('چیزی تغییر کرده یا اضافه شده که هنوز ذخیره نشده. چه کار کنم؟'),
+      title: Text(loc('تغییرات ذخیره نشده')),
+      content: Text(loc('چیزی تغییر کرده یا اضافه شده که هنوز ذخیره نشده. چه کار کنم؟')),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: Text(tr('cancel'))),
-        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خروج بدون ذخیره')),
-        if (onSave != null) FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('ذخیره و خروج')),
+        TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: Text(loc('خروج بدون ذخیره'))),
+        if (onSave != null) FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: Text(loc('ذخیره و خروج'))),
       ],
     ),
   );
@@ -552,8 +560,7 @@ Widget currencyMismatchWarning(String detected, String accountCurrency) {
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            'واحد پول این سند (${currencyLabel(detected)}) با واحد پول حساب انتخاب‌شده (${currencyLabel(accountCurrency)}) '
-            'یکی نیست. مبلغ را بررسی کنید یا حساب دیگری انتخاب کنید.',
+            locf('واحد پول این سند ({0}) با واحد پول حساب انتخاب‌شده ({1}) یکی نیست. مبلغ را بررسی کنید یا حساب دیگری انتخاب کنید.', [(currencyLabel(detected)), (currencyLabel(accountCurrency))]),
             style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
           ),
         ),
@@ -568,16 +575,16 @@ Future<String?> askSaveChanges(BuildContext context) {
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('ذخیره تغییرات'),
-      content: const Text('آیا تغییرات انجام شده ذخیره شود؟'),
+      title: Text(loc('ذخیره تغییرات')),
+      content: Text(loc('آیا تغییرات انجام شده ذخیره شود؟')),
       actions: [
         Row(
           children: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
             const Spacer(),
-            TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: const Text('خیر')),
+            TextButton(onPressed: () => Navigator.pop(ctx, 'discard'), child: Text(loc('خیر'))),
             const SizedBox(width: 8),
-            FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('بله')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: Text(loc('بله'))),
           ],
         ),
       ],
@@ -709,17 +716,17 @@ extension AccountTypeLabel on AccountType {
   String get label {
     switch (this) {
       case AccountType.cash:
-        return 'نقدی';
+        return loc('نقدی');
       case AccountType.bank:
-        return 'بانکی';
+        return loc('بانکی');
       case AccountType.creditCard:
-        return 'کارت اعتباری';
+        return loc('کارت اعتباری');
       case AccountType.savings:
-        return 'پس‌انداز';
+        return loc('پس‌انداز');
       case AccountType.investment:
-        return 'سرمایه‌گذاری';
+        return loc('سرمایه‌گذاری');
       case AccountType.other:
-        return 'سایر';
+        return loc('سایر');
     }
   }
 }
@@ -1045,8 +1052,8 @@ bool dayRateInverted(String currency, String mainCurrency) =>
 
 /// Label of the day-rate field, in the readable direction.
 String dayRateLabel(String currency, String mainCurrency) => dayRateInverted(currency, mainCurrency)
-    ? '۱ ${currencyLabel(mainCurrency)} = ? ${currencyLabel(currency)}'
-    : '۱ ${currencyLabel(currency)} = ? ${currencyLabel(mainCurrency)}';
+    ? locf('۱ {0} = ? {1}', [(currencyLabel(mainCurrency)), (currencyLabel(currency))])
+    : locf('۱ {0} = ? {1}', [(currencyLabel(currency)), (currencyLabel(mainCurrency))]);
 
 /// The stored rate (1 account unit = ? main units) as the person reads it.
 double dayRateForDisplay(Account a, String mainCurrency) =>
@@ -1061,8 +1068,8 @@ String dayRateText(Account a, String mainCurrency) {
   final v = dayRateForDisplay(a, mainCurrency);
   final shown = formatAmountInput(v, maxDecimals: v >= 100 ? 0 : 6);
   return dayRateInverted(a.currency, mainCurrency)
-      ? '۱ ${currencyLabel(mainCurrency)} = ${ltr(shown)} ${currencyLabel(a.currency)}'
-      : '۱ ${currencyLabel(a.currency)} = ${ltr(shown)} ${currencyLabel(mainCurrency)}';
+      ? locf('۱ {0} = {1} {2}', [(currencyLabel(mainCurrency)), (ltr(shown)), (currencyLabel(a.currency))])
+      : locf('۱ {0} = {1} {2}', [(currencyLabel(a.currency)), (ltr(shown)), (currencyLabel(mainCurrency))]);
 }
 
 /// Asks for a new day rate for [a] (in the readable direction) and saves it.
@@ -1074,7 +1081,7 @@ Future<Account?> editDayRate(BuildContext context, Account a, String mainCurrenc
   final typed = await showDialog<double>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text('نرخ روز ${a.name}'),
+      title: Text(locf('نرخ روز {0}', [(a.name)])),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1088,7 +1095,7 @@ Future<Account?> editDayRate(BuildContext context, Account a, String mainCurrenc
           ),
           const SizedBox(height: 8),
           Text(
-            'فقط برای نمایش موجودی کل به ${currencyLabel(mainCurrency)} استفاده می‌شود؛ مبلغ تراکنش‌ها تغییری نمی‌کند.',
+            locf('فقط برای نمایش موجودی کل به {0} استفاده می‌شود؛ مبلغ تراکنش‌ها تغییری نمی‌کند.', [(currencyLabel(mainCurrency))]),
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
           ),
         ],
@@ -1461,7 +1468,7 @@ Future<void> showInfoDialog(BuildContext context, String title, String text) {
 
 Widget infoButton(BuildContext context, String title, String text) => IconButton(
       icon: const Icon(Icons.info_outline),
-      tooltip: 'توضیحات',
+      tooltip: loc('توضیحات'),
       onPressed: () => showInfoDialog(context, title, text),
     );
 
@@ -1660,7 +1667,7 @@ class NotificationService {
       final categories = await Store.loadCategories();
       for (final t in tx) {
         if (!t.notifyEnabled || !t.isRecurring) continue;
-        final name = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? 'یادآوری';
+        final name = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? loc('یادآوری');
         await scheduleForTransaction(t, name, alreadyCancelled: true);
       }
     } catch (_) {
@@ -1672,8 +1679,8 @@ class NotificationService {
   /// Shows an immediate (not scheduled) notification, e.g. for a budget
   /// goal threshold that was just crossed.
   Future<void> showNow(int id, String title, String body, {String? payload}) async {
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails('budget_goals', 'اهداف هزینه', importance: Importance.high, priority: Priority.high),
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails('budget_goals', loc('اهداف هزینه'), importance: Importance.high, priority: Priority.high),
     );
     await _plugin.show(id, title, body, details, payload: payload);
   }
@@ -1718,12 +1725,12 @@ class NotificationService {
     final occurrences = computeRecurrenceOccurrences(t);
     if (occurrences.isEmpty) return;
     final now = DateTime.now();
-    final body = t.notifyMessage.trim().isNotEmpty ? t.notifyMessage.trim() : 'سررسید این تراکنش تکرارشونده نزدیک است.';
-    const details = NotificationDetails(
+    final body = t.notifyMessage.trim().isNotEmpty ? t.notifyMessage.trim() : loc('سررسید این تراکنش تکرارشونده نزدیک است.');
+    final details = NotificationDetails(
       android: AndroidNotificationDetails(
         'recurring_due',
-        'یادآوری تراکنش‌های تکرارشونده',
-        channelDescription: 'یادآوری قبل از سررسیدهای یک تراکنش تکرارشونده',
+        loc('یادآوری تراکنش‌های تکرارشونده'),
+        channelDescription: loc('یادآوری قبل از سررسیدهای یک تراکنش تکرارشونده'),
         importance: Importance.high,
         priority: Priority.high,
       ),
@@ -1761,7 +1768,7 @@ class NotificationService {
         scheduleCalls.add(_plugin.zonedSchedule(
           _idFor(t.id, 2 + i),
           categoryName,
-          '$days روز تا سررسید این قسط (${formatDate(due)})${t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : ''}',
+          locf('{0} روز تا سررسید این قسط ({1}){2}', [days, (formatDate(due)), (t.notifyMessage.trim().isNotEmpty ? ' • ${t.notifyMessage.trim()}' : '')]),
           _asTZDateTime(when),
           details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -1823,6 +1830,84 @@ const defaultCategories = <Category>[
   Category(id: 'i_misc', name: 'متفرقه', type: TxType.income),
   Category(id: '_transfer_in_', name: 'انتقال بین حساب‌ها', type: TxType.income),
 ];
+
+/// English/German names of the default categories (by id).
+const _defaultCategoryNames = <String, List<String>>{
+  'e_food': ['Food & groceries', 'Lebensmittel & Essen'],
+  'e_food_market': ['Supermarket', 'Supermarkt'],
+  'e_food_restaurant': ['Restaurant', 'Restaurant'],
+  'e_food_produce': ['Fruit & vegetables', 'Obst & Gemüse'],
+  'e_housing': ['Housing', 'Wohnen'],
+  'e_housing_rent': ['Rent / deposit', 'Miete / Kaution'],
+  'e_housing_fee': ['Building charges', 'Nebenkosten'],
+  'e_housing_repair': ['Repairs', 'Reparaturen'],
+  'e_transport': ['Transport', 'Verkehr'],
+  'e_transport_fuel': ['Fuel', 'Kraftstoff'],
+  'e_transport_repair': ['Car repair', 'Autoreparatur'],
+  'e_transport_public': ['Public transport', 'ÖPNV'],
+  'e_car': ['Car', 'Auto'],
+  'e_car_insurance': ['Car insurance', 'Kfz-Versicherung'],
+  'e_car_service': ['Repair & service', 'Reparatur & Wartung'],
+  'e_car_fuel': ['Fuel', 'Kraftstoff'],
+  'e_car_fine': ['Traffic fines', 'Bußgelder'],
+  'e_car_parking': ['Parking', 'Parken'],
+  'e_bills': ['Bills', 'Rechnungen'],
+  'e_bills_power': ['Electricity', 'Strom'],
+  'e_bills_water': ['Water', 'Wasser'],
+  'e_bills_gas': ['Gas', 'Gas'],
+  'e_bills_internet': ['Internet', 'Internet'],
+  'e_bills_phone': ['Phone', 'Telefon'],
+  'e_health': ['Health', 'Gesundheit'],
+  'e_leisure': ['Leisure', 'Freizeit'],
+  'e_clothing': ['Clothing', 'Kleidung'],
+  'e_loans': ['Loans & installments', 'Kredite & Raten'],
+  'e_loans_car': ['Car loan', 'Autokredit'],
+  'e_loans_home': ['Mortgage', 'Immobilienkredit'],
+  'e_loans_personal': ['Personal loan', 'Privatkredit'],
+  'e_loans_installment_purchase': ['Installment purchase', 'Ratenkauf'],
+  'e_subscription': ['Subscriptions', 'Abonnements'],
+  'e_subscription_software': ['Software subscriptions', 'Software-Abos'],
+  'e_insurance': ['Insurance', 'Versicherungen'],
+  'e_misc': ['Miscellaneous', 'Sonstiges'],
+  '_transfer_out_': ['Transfer between accounts', 'Kontoübertrag'],
+  'i_salary': ['Salary', 'Gehalt'],
+  'i_freelance': ['Freelance', 'Freiberuflich'],
+  'i_investment': ['Investment', 'Kapitalerträge'],
+  'i_gift': ['Gift', 'Geschenk'],
+  'i_misc': ['Miscellaneous', 'Sonstiges'],
+  '_transfer_in_': ['Transfer between accounts', 'Kontoübertrag'],
+};
+
+/// Renames the default categories and the default account to [lang] - only
+/// those still carrying a default name (in any language), so a name the
+/// person chose is never touched.
+Future<void> localizeDefaultNames(AppLanguage lang) async {
+  final idx = lang == AppLanguage.en ? 0 : 1;
+  final faById = {for (final c in defaultCategories) c.id: c.name};
+  final cats = await Store.loadCategories();
+  var changed = false;
+  final updated = [
+    for (final c in cats)
+      () {
+        final fa = faById[c.id];
+        final other = _defaultCategoryNames[c.id];
+        if (fa == null || other == null) return c;
+        final variants = {fa, ...other};
+        if (!variants.contains(c.name.trim())) return c;
+        final target = lang == AppLanguage.fa ? fa : other[idx];
+        if (target == c.name) return c;
+        changed = true;
+        return c.copyWith(name: target);
+      }(),
+  ];
+  if (changed) await Store.saveCategories(updated);
+  const accountNames = ['حساب اصلی', 'Main account', 'Hauptkonto'];
+  final accounts = await Store.loadAccounts();
+  final target = accountNames[lang == AppLanguage.fa ? 0 : (lang == AppLanguage.en ? 1 : 2)];
+  if (accounts.any((a) => a.id == 'default' && accountNames.contains(a.name.trim()) && a.name != target)) {
+    await Store.saveAccounts([for (final a in accounts) a.id == 'default' ? a.copyWith(name: target) : a]);
+  }
+}
 
 const defaultAccount = Account(id: 'default', name: 'حساب اصلی', type: AccountType.bank, currency: 'IRT');
 
@@ -2301,12 +2386,12 @@ Future<void> checkBudgetGoals() async {
     changed = true;
     final name = categoryById[goal.categoryId]?.name ?? '';
     final title = switch (level) {
-      'exceeded' => 'هدف هزینه‌ی «$name» رد شد',
-      'met' => 'هدف هزینه‌ی «$name» به پایان رسید',
-      _ => 'نزدیک شدن به هدف هزینه‌ی «$name»',
+      'exceeded' => locf('هدف هزینه‌ی «{0}» رد شد', [name]),
+      'met' => locf('هدف هزینه‌ی «{0}» به پایان رسید', [name]),
+      _ => locf('نزدیک شدن به هدف هزینه‌ی «{0}»', [name]),
     };
     final percentText = persianDigits('${(ratio * 100).round()}%');
-    final body = '$percentText از هدف این ماه (${formatAmountInput(spend)} از ${formatAmountInput(goal.monthlyAmount)}) خرج شده.';
+    final body = locf('{0} از هدف این ماه ({1} از {2}) خرج شده.', [percentText, (formatAmountInput(spend)), (formatAmountInput(goal.monthlyAmount))]);
     await NotificationService.instance.showNow(goal.categoryId.hashCode & 0xffff, title, body);
   }
   if (changed) await Store.saveBudgetNotifyState(notifyState);
@@ -2386,8 +2471,8 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
     final pct = ((currentSpend / avg - 1) * 100).round();
     await NotificationService.instance.showNow(
       (cat.id.hashCode & 0xffff) ^ 0x4000, // distinct id range from budget-goal notifications
-      'هزینه‌ی «$name» این ماه غیرعادی بالاست',
-      'تا الان ${formatAmountInput(currentSpend)} خرج شده، حدود ${persianDigits('$pct%')} بیشتر از میانگین ${persianDigits('$lookbackMonths')} ماه قبل (${formatAmountInput(avg)}).',
+      locf('هزینه‌ی «{0}» این ماه غیرعادی بالاست', [name]),
+      locf('تا الان {0} خرج شده، حدود {1} بیشتر از میانگین {2} ماه قبل ({3}).', [(formatAmountInput(currentSpend)), (persianDigits('$pct%')), (persianDigits('$lookbackMonths')), (formatAmountInput(avg))]),
     );
   }
   if (changed) await Store.saveAnomalyNotifyState(notifyState);
@@ -2418,8 +2503,8 @@ Future<void> checkReturnDeadlines() async {
       changed = true;
       await NotificationService.instance.showNow(
         (key.hashCode & 0xffff) ^ 0x7000,
-        'مهلت مرجوعی نزدیک است',
-        daysLeft == 0 ? '${item.name} امروز آخرین مهلت مرجوعی است.' : '${item.name} تا ${formatDate(untilDay)} امکان مرجوع کردن دارد.',
+        loc('مهلت مرجوعی نزدیک است'),
+        daysLeft == 0 ? locf('{0} امروز آخرین مهلت مرجوعی است.', [(item.name)]) : locf('{0} تا {1} امکان مرجوع کردن دارد.', [(item.name), (formatDate(untilDay))]),
         payload: t.id,
       );
     }
@@ -2651,7 +2736,7 @@ class Store {
   /// [FormatException] if the data doesn't look like a valid backup.
   static Future<void> restoreBackupData(Map<String, dynamic> data) async {
     if (data['transactions'] is! List || data['categories'] is! List || data['accounts'] is! List) {
-      throw const FormatException('این فایل یک نسخه‌ی پشتیبان معتبر برنامه نیست.');
+      throw FormatException(loc('این فایل یک نسخه‌ی پشتیبان معتبر برنامه نیست.'));
     }
     final tx = (data['transactions'] as List).map((j) => Transaction.fromJson(j)).toList();
     final categories = (data['categories'] as List).map((j) => Category.fromJson(j)).toList();
@@ -3044,7 +3129,7 @@ enum AppLanguage { fa, en, de }
 
 extension AppLanguageX on AppLanguage {
   String get label => switch (this) {
-        AppLanguage.fa => 'فارسی',
+        AppLanguage.fa => loc('فارسی'),
         AppLanguage.en => 'English',
         AppLanguage.de => 'Deutsch',
       };
@@ -3182,6 +3267,32 @@ const Map<String, Map<AppLanguage, String>> _translations = {
 
 /// Looks up [key] in the current UI language; falls back to the Persian
 /// string (or the key itself) if a translation is missing.
+/// A Persian UI text in the app language (English/German from
+/// [uiTranslations]; the Persian text itself when there is none).
+/// The language the AI should write its answers in (the app language).
+String get aiAnswerLanguage => switch (currentLanguage.value) {
+      AppLanguage.fa => 'Persian (Farsi)',
+      AppLanguage.en => 'English',
+      AppLanguage.de => 'German',
+    };
+
+String loc(String fa) {
+  final lang = currentLanguage.value;
+  if (lang == AppLanguage.fa) return fa;
+  final row = uiTranslations[fa];
+  if (row == null) return fa;
+  return lang == AppLanguage.en ? row[0] : row[1];
+}
+
+/// [loc] for a text with values in it: {0}, {1}... are replaced by [args].
+String locf(String fa, List<Object?> args) {
+  var s = loc(fa);
+  for (var i = 0; i < args.length; i++) {
+    s = s.replaceAll('{$i}', '${args[i]}');
+  }
+  return s;
+}
+
 String tr(String key) {
   final row = _translations[key];
   if (row == null) return key;
@@ -3211,7 +3322,20 @@ class _MoneyAppState extends State<MoneyApp> {
     super.dispose();
   }
 
-  void _onChanged() => setState(() {});
+  void _onChanged() {
+    setState(() {});
+    // Texts are looked up while building, so after a language (or calendar)
+    // change every open screen is rebuilt - not only those that happen to
+    // depend on the locale.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      void rebuild(Element e) {
+        e.markNeedsBuild();
+        e.visitChildren(rebuild);
+      }
+
+      WidgetsBinding.instance.rootElement?.visitChildren(rebuild);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3541,7 +3665,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
     final auth = LocalAuthentication();
     try {
       final ok = await auth.authenticate(
-        localizedReason: 'برای باز کردن برنامه هویت خود را تأیید کنید',
+        localizedReason: loc('برای باز کردن برنامه هویت خود را تأیید کنید'),
         options: const AuthenticationOptions(biometricOnly: false, stickyAuth: true),
       );
       if (ok) {
@@ -3563,7 +3687,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
     if (ok) {
       widget.onUnlocked();
     } else {
-      setState(() => error = 'رمز اشتباه است');
+      setState(() => error = loc('رمز اشتباه است'));
       pinCtrl.clear();
     }
   }
@@ -3580,7 +3704,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
               children: [
                 const Icon(Icons.lock_outline, size: 64),
                 const SizedBox(height: 16),
-                Text('برنامه قفل است', style: Theme.of(context).textTheme.titleLarge),
+                Text(loc('برنامه قفل است'), style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 24),
                 TextField(
                   controller: pinCtrl,
@@ -3590,14 +3714,14 @@ class _PinLockScreenState extends State<PinLockScreen> {
                   keyboardType: TextInputType.number,
                   maxLength: 8,
                   textAlign: TextAlign.center,
-                  decoration: InputDecoration(labelText: 'رمز عبور', errorText: error, border: const OutlineInputBorder()),
+                  decoration: InputDecoration(labelText: loc('رمز عبور'), errorText: error, border: const OutlineInputBorder()),
                   onSubmitted: (_) => _submitPin(),
                 ),
                 const SizedBox(height: 12),
-                FilledButton(onPressed: checking ? null : _submitPin, child: const Text('باز کردن')),
+                FilledButton(onPressed: checking ? null : _submitPin, child: Text(loc('باز کردن'))),
                 if (biometricAvailable) ...[
                   const SizedBox(height: 12),
-                  TextButton.icon(onPressed: _tryBiometric, icon: const Icon(Icons.fingerprint), label: const Text('استفاده از اثرانگشت')),
+                  TextButton.icon(onPressed: _tryBiometric, icon: const Icon(Icons.fingerprint), label: Text(loc('استفاده از اثرانگشت'))),
                 ],
               ],
             ),
@@ -3639,19 +3763,19 @@ class AppDrawer extends StatelessWidget {
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            const DrawerHeader(
+            DrawerHeader(
               child: Align(
                 alignment: Alignment.centerRight,
-                child: Text('مدیریت مالی شخصی', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                child: Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
             ),
             item(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
             const Divider(height: 1),
             sectionLabel(tr('section_transactions')),
             item(12, Icons.list_alt, tr('all_transactions'), () => const AllTransactionsScreen()),
-            item(23, Icons.repeat, 'تراکنش‌های تکرارشونده', () => const RecurringTransactionsScreen()),
-            item(21, Icons.edit_note_outlined, 'تراکنش‌های پیش‌نویس', () => const DraftsScreen()),
-            item(22, Icons.content_copy_outlined, 'تراکنش‌های تکراری', () => const DraftsScreen(initialTab: 2)),
+            item(23, Icons.repeat, loc('تراکنش‌های تکرارشونده'), () => const RecurringTransactionsScreen()),
+            item(21, Icons.edit_note_outlined, loc('تراکنش‌های پیش‌نویس'), () => const DraftsScreen()),
+            item(22, Icons.content_copy_outlined, loc('تراکنش‌های تکراری'), () => const DraftsScreen(initialTab: 2)),
             item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
             item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
             const Divider(height: 1),
@@ -3714,13 +3838,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.dark_mode_outlined),
-            title: const Text('ظاهر برنامه'),
+            title: Text(loc('ظاهر برنامه')),
             subtitle: ValueListenableBuilder<ThemeMode>(
               valueListenable: currentThemeMode,
               builder: (context, mode, _) => Text(switch (mode) {
-                ThemeMode.system => 'پیش‌فرض سیستم',
-                ThemeMode.light => 'روشن',
-                ThemeMode.dark => 'تیره',
+                ThemeMode.system => loc('پیش‌فرض سیستم'),
+                ThemeMode.light => loc('روشن'),
+                ThemeMode.dark => loc('تیره'),
               }),
             ),
             trailing: const Icon(Icons.chevron_left),
@@ -3728,32 +3852,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.calendar_month_outlined),
-            title: const Text('تقویم'),
+            title: Text(loc('تقویم')),
             subtitle: ValueListenableBuilder<CalendarSystem>(
               valueListenable: currentCalendarSystem,
-              builder: (context, system, _) => Text(system == CalendarSystem.jalali ? 'هجری شمسی' : 'میلادی'),
+              builder: (context, system, _) => Text(system == CalendarSystem.jalali ? loc('هجری شمسی') : loc('میلادی')),
             ),
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CalendarSettingsScreen())),
           ),
           ListTile(
             leading: const Icon(Icons.auto_awesome_outlined),
-            title: const Text('هوش مصنوعی (Gemini)'),
-            subtitle: const Text('کلید API برای بهبود خواندن رسید و فیش حقوقی'),
+            title: Text(loc('هوش مصنوعی (Gemini)')),
+            subtitle: Text(loc('کلید API برای بهبود خواندن رسید و فیش حقوقی')),
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
           ),
           ListTile(
             leading: const Icon(Icons.lock_outline),
-            title: const Text('قفل برنامه'),
-            subtitle: const Text('رمز عبور و اثرانگشت/چهره'),
+            title: Text(loc('قفل برنامه')),
+            subtitle: Text(loc('رمز عبور و اثرانگشت/چهره')),
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppLockSettingsScreen())),
           ),
           ListTile(
             leading: const Icon(Icons.info_outline),
-            title: const Text('درباره‌ی برنامه'),
-            subtitle: Text(ltr('نسخه‌ی ${persianDigits(kAppVersion)} • حریم خصوصی و شرایط استفاده')),
+            title: Text(loc('درباره‌ی برنامه')),
+            subtitle: Text(ltr(locf('نسخه‌ی {0} • حریم خصوصی و شرایط استفاده', [(persianDigits(kAppVersion))]))),
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutScreen())),
           ),
@@ -3782,14 +3906,8 @@ class LanguageSettingsScreen extends StatelessWidget {
                 if (v == null) return;
                 currentLanguage.value = v;
                 await Store.saveLanguage(v);
+                await localizeDefaultNames(v);
               },
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: Text(
-              'ترجمه در حال تکمیل است؛ فعلاً بخش‌های اصلی برنامه ترجمه شده‌اند.',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ),
         ],
@@ -3814,18 +3932,18 @@ class AppearanceSettingsScreen extends StatelessWidget {
             await Store.saveThemeMode(v);
           },
           child: ListView(
-            children: const [
+            children: [
               RadioListTile<ThemeMode>(
-                title: Text('پیش‌فرض سیستم'),
-                subtitle: Text('تنظیم روشن/تیره‌ی گوشی را دنبال کند'),
+                title: Text(loc('پیش‌فرض سیستم')),
+                subtitle: Text(loc('تنظیم روشن/تیره‌ی گوشی را دنبال کند')),
                 value: ThemeMode.system,
               ),
               RadioListTile<ThemeMode>(
-                title: Text('روشن'),
+                title: Text(loc('روشن')),
                 value: ThemeMode.light,
               ),
               RadioListTile<ThemeMode>(
-                title: Text('تیره'),
+                title: Text(loc('تیره')),
                 value: ThemeMode.dark,
               ),
             ],
@@ -3852,15 +3970,15 @@ class CalendarSettingsScreen extends StatelessWidget {
             await Store.saveCalendarSystem(v);
           },
           child: ListView(
-            children: const [
+            children: [
               RadioListTile<CalendarSystem>(
-                title: Text('هجری شمسی'),
-                subtitle: Text('مثلاً ۱۴۰۵/۰۷/۰۱'),
+                title: Text(loc('هجری شمسی')),
+                subtitle: Text(loc('مثلاً ۱۴۰۵/۰۷/۰۱')),
                 value: CalendarSystem.jalali,
               ),
               RadioListTile<CalendarSystem>(
-                title: Text('میلادی'),
-                subtitle: Text('مثلاً 23.09.2026'),
+                title: Text(loc('میلادی')),
+                subtitle: Text(loc('مثلاً 23.09.2026')),
                 value: CalendarSystem.gregorian,
               ),
             ],
@@ -3878,9 +3996,9 @@ Future<void> promptForGeminiKey(BuildContext context) async {
   await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('نیاز به کلید هوش مصنوعی'),
-      content: const Text(
-        'برای استفاده از قابلیت‌های هوش مصنوعی (مثل خواندن خودکار رسید/فیش یا پیشنهاد پس‌انداز)، ابتدا باید یک کلید API رایگان از Gemini بگیری و در تنظیمات برنامه وارد کنی.',
+      title: Text(loc('نیاز به کلید هوش مصنوعی')),
+      content: Text(
+        loc('برای استفاده از قابلیت‌های هوش مصنوعی (مثل خواندن خودکار رسید/فیش یا پیشنهاد پس‌انداز)، ابتدا باید یک کلید API رایگان از Gemini بگیری و در تنظیمات برنامه وارد کنی.'),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
@@ -3889,7 +4007,7 @@ Future<void> promptForGeminiKey(BuildContext context) async {
             Navigator.pop(ctx);
             Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiKeyGuideScreen()));
           },
-          child: const Text('راهنما'),
+          child: Text(loc('راهنما')),
         ),
       ],
     ),
@@ -3925,12 +4043,12 @@ class GeminiKeyGuideScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          const Text(
-            'کلید Gemini رایگانه و فقط چند دقیقه طول می‌کشه. این کلید فقط روی گوشی خودت ذخیره می‌شه و به جایی فرستاده نمی‌شه.',
-            style: TextStyle(fontSize: 13, color: Colors.grey),
+          Text(
+            loc('کلید Gemini رایگانه و فقط چند دقیقه طول می‌کشه. این کلید فقط روی گوشی خودت ذخیره می‌شه و به جایی فرستاده نمی‌شه.'),
+            style: const TextStyle(fontSize: 13, color: Colors.grey),
           ),
           const SizedBox(height: 20),
-          _step(context, 1, 'روی دکمه‌ی زیر بزن تا لینک صفحه‌ی دریافت کلید کپی بشه، و اون رو توی مرورگر گوشیت باز کن.'),
+          _step(context, 1, loc('روی دکمه‌ی زیر بزن تا لینک صفحه‌ی دریافت کلید کپی بشه، و اون رو توی مرورگر گوشیت باز کن.')),
           Padding(
             padding: const EdgeInsets.only(right: 36, bottom: 16),
             child: Column(
@@ -3942,24 +4060,24 @@ class GeminiKeyGuideScreen extends StatelessWidget {
                   onPressed: () async {
                     await Clipboard.setData(const ClipboardData(text: _keyUrl));
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لینک کپی شد.')));
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('لینک کپی شد.'))));
                     }
                   },
                   icon: const Icon(Icons.copy, size: 16),
-                  label: const Text('کپی لینک'),
+                  label: Text(loc('کپی لینک')),
                 ),
               ],
             ),
           ),
-          _step(context, 2, 'با حساب گوگلت وارد شو (همون حسابی که جیمیل داری).'),
-          _step(context, 3, 'روی دکمه‌ی «Create API key» بزن.'),
-          _step(context, 4, 'کلیدی که ساخته می‌شه رو کپی کن (یه رشته‌ی طولانی که با AIza شروع می‌شه).'),
-          _step(context, 5, 'برگرد به این برنامه، از منو برو به «تنظیمات › هوش مصنوعی (Gemini)»، کلید رو توی همون‌جا بچسبون و ذخیره کن.'),
+          _step(context, 2, loc('با حساب گوگلت وارد شو (همون حسابی که جیمیل داری).')),
+          _step(context, 3, loc('روی دکمه‌ی «Create API key» بزن.')),
+          _step(context, 4, loc('کلیدی که ساخته می‌شه رو کپی کن (یه رشته‌ی طولانی که با AIza شروع می‌شه).')),
+          _step(context, 5, loc('برگرد به این برنامه، از منو برو به «تنظیمات › هوش مصنوعی (Gemini)»، کلید رو توی همون‌جا بچسبون و ذخیره کن.')),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
             icon: const Icon(Icons.settings_outlined),
-            label: const Text('رفتن به تنظیمات هوش مصنوعی'),
+            label: Text(loc('رفتن به تنظیمات هوش مصنوعی')),
           ),
         ],
       ),
@@ -3990,41 +4108,31 @@ class AboutScreen extends StatelessWidget {
                   child: Image.asset('assets/icon/icon.png', width: 84, height: 84, errorBuilder: (_, __, ___) => const Icon(Icons.savings, size: 84)),
                 ),
                 const SizedBox(height: 12),
-                const Text('مدیریت مالی شخصی', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
-                Text(ltr('نسخه‌ی ${persianDigits(kAppVersion)}'), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                Text(ltr(locf('نسخه‌ی {0}', [(persianDigits(kAppVersion))])), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                 const SizedBox(height: 2),
-                Text('توسعه‌دهنده: $kDeveloperName', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                Text(locf('توسعه‌دهنده: {0}', [kDeveloperName]), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
               ],
             ),
           ),
-          _sectionTitle(context, 'درباره'),
-          const Text(
-            'این برنامه برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، اهداف پس‌انداز و بودجه‌بندی شخصی طراحی شده. '
-            'همه‌ی اطلاعات مالی فقط روی همین گوشی ذخیره می‌شوند و به هیچ سروری فرستاده نمی‌شوند.',
-            style: TextStyle(fontSize: 13, height: 1.7),
+          _sectionTitle(context, loc('درباره')),
+          Text(
+            loc('این برنامه برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، اهداف پس‌انداز و بودجه‌بندی شخصی طراحی شده. همه‌ی اطلاعات مالی فقط روی همین گوشی ذخیره می‌شوند و به هیچ سروری فرستاده نمی‌شوند.'),
+            style: const TextStyle(fontSize: 13, height: 1.7),
           ),
-          _sectionTitle(context, 'حریم خصوصی'),
-          const Text(
-            '• تمام تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها و تصاویر رسید/فیش فقط به‌صورت محلی روی گوشی شما ذخیره می‌شوند؛ '
-            'این برنامه هیچ سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n'
-            '• قابلیت خواندن هوشمند رسید/فیش (اختیاری) با استفاده از سرویس Gemini گوگل و با کلید API شخصیِ خودتان انجام می‌شود؛ '
-            'در این حالت فقط تصویر همان رسید/فیش برای پردازش به سرویس Gemini ارسال می‌شود، طبق قوانین حریم خصوصی گوگل.\n\n'
-            '• قفل برنامه (اثر انگشت/پین) به‌صورت محلی و رمزنگاری‌شده روی گوشی ذخیره می‌شود.\n\n'
-            '• پشتیبان‌گیری فقط با اقدام شخص کاربر و به‌صورت فایل روی گوشی/فضای ابری شخصی او انجام می‌شود.\n\n'
-            '• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به اشخاص ثالث جمع‌آوری نمی‌کند.',
-            style: TextStyle(fontSize: 13, height: 1.8),
+          _sectionTitle(context, loc('حریم خصوصی')),
+          Text(
+            loc('• تمام تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها و تصاویر رسید/فیش فقط به‌صورت محلی روی گوشی شما ذخیره می‌شوند؛ این برنامه هیچ سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• قابلیت خواندن هوشمند رسید/فیش (اختیاری) با استفاده از سرویس Gemini گوگل و با کلید API شخصیِ خودتان انجام می‌شود؛ در این حالت فقط تصویر همان رسید/فیش برای پردازش به سرویس Gemini ارسال می‌شود، طبق قوانین حریم خصوصی گوگل.\n\n• قفل برنامه (اثر انگشت/پین) به‌صورت محلی و رمزنگاری‌شده روی گوشی ذخیره می‌شود.\n\n• پشتیبان‌گیری فقط با اقدام شخص کاربر و به‌صورت فایل روی گوشی/فضای ابری شخصی او انجام می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به اشخاص ثالث جمع‌آوری نمی‌کند.'),
+            style: const TextStyle(fontSize: 13, height: 1.8),
           ),
-          _sectionTitle(context, 'شرایط استفاده'),
-          const Text(
-            '• این برنامه یک ابزار شخصی برای ثبت و پیگیری اطلاعات مالی است و جایگزین مشاوره‌ی مالی، حسابداری یا حقوقی رسمی نیست.\n\n'
-            '• پیشنهادهای بخش «پیشنهاد پس‌انداز و سرمایه‌گذاری» جنبه‌ی آموزشی و کلی دارند و توصیه‌ی مالی شخصی‌سازی‌شده محسوب نمی‌شوند.\n\n'
-            '• صحت اطلاعات خوانده‌شده توسط هوش مصنوعی (از روی تصویر رسید/فیش) باید توسط کاربر بررسی و تأیید شود.\n\n'
-            '• مسئولیت نگهداری از نسخه‌ی پشتیبان اطلاعات بر عهده‌ی کاربر است.',
-            style: TextStyle(fontSize: 13, height: 1.8),
+          _sectionTitle(context, loc('شرایط استفاده')),
+          Text(
+            loc('• این برنامه یک ابزار شخصی برای ثبت و پیگیری اطلاعات مالی است و جایگزین مشاوره‌ی مالی، حسابداری یا حقوقی رسمی نیست.\n\n• پیشنهادهای بخش «پیشنهاد پس‌انداز و سرمایه‌گذاری» جنبه‌ی آموزشی و کلی دارند و توصیه‌ی مالی شخصی‌سازی‌شده محسوب نمی‌شوند.\n\n• صحت اطلاعات خوانده‌شده توسط هوش مصنوعی (از روی تصویر رسید/فیش) باید توسط کاربر بررسی و تأیید شود.\n\n• مسئولیت نگهداری از نسخه‌ی پشتیبان اطلاعات بر عهده‌ی کاربر است.'),
+            style: const TextStyle(fontSize: 13, height: 1.8),
           ),
-          _sectionTitle(context, 'پشتیبانی'),
-          const Text('برای گزارش مشکل یا پیشنهاد، می‌توانید از راه زیر با ما در ارتباط باشید:', style: TextStyle(fontSize: 13)),
+          _sectionTitle(context, loc('پشتیبانی')),
+          Text(loc('برای گزارش مشکل یا پیشنهاد، می‌توانید از راه زیر با ما در ارتباط باشید:'), style: const TextStyle(fontSize: 13)),
           const SizedBox(height: 6),
           SelectableText(ltr(kSupportEmail), style: const TextStyle(fontSize: 13, color: Colors.blue)),
           const SizedBox(height: 20),
@@ -4059,7 +4167,7 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
   Future<void> _save() async {
     await Store.saveGeminiKey(ctrl.text.trim());
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('ذخیره شد.'))));
   }
 
   @override
@@ -4070,11 +4178,11 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('کلید Gemini API', style: Theme.of(context).textTheme.titleMedium),
+          Text(tr('gemini_key'), style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          const Text(
-            'برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.',
-            style: TextStyle(color: Colors.grey),
+          Text(
+            loc('برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.'),
+            style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -4088,12 +4196,12 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.copy_outlined),
-                    tooltip: 'کپی کلید',
+                    tooltip: loc('کپی کلید'),
                     onPressed: () async {
                       if (ctrl.text.trim().isEmpty) return;
                       await Clipboard.setData(ClipboardData(text: ctrl.text.trim()));
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('کلید کپی شد.')));
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('کلید کپی شد.'))));
                       }
                     },
                   ),
@@ -4148,7 +4256,7 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) {
           return AlertDialog(
-            title: const Text('تنظیم رمز عبور'),
+            title: Text(loc('تنظیم رمز عبور')),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -4157,14 +4265,14 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
                   obscureText: true,
                   keyboardType: TextInputType.number,
                   maxLength: 8,
-                  decoration: const InputDecoration(labelText: 'رمز جدید (۴ تا ۸ رقم)'),
+                  decoration: InputDecoration(labelText: loc('رمز جدید (۴ تا ۸ رقم)')),
                 ),
                 TextField(
                   controller: ctrl2,
                   obscureText: true,
                   keyboardType: TextInputType.number,
                   maxLength: 8,
-                  decoration: const InputDecoration(labelText: 'تکرار رمز'),
+                  decoration: InputDecoration(labelText: loc('تکرار رمز')),
                 ),
                 if (err != null) Text(err!, style: const TextStyle(color: Colors.red)),
               ],
@@ -4174,11 +4282,11 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
               FilledButton(
                 onPressed: () {
                   if (ctrl1.text.length < 4) {
-                    setDialogState(() => err = 'رمز باید حداقل ۴ رقم باشد.');
+                    setDialogState(() => err = loc('رمز باید حداقل ۴ رقم باشد.'));
                     return;
                   }
                   if (ctrl1.text != ctrl2.text) {
-                    setDialogState(() => err = 'دو رمز یکسان نیستند.');
+                    setDialogState(() => err = loc('دو رمز یکسان نیستند.'));
                     return;
                   }
                   Navigator.pop(ctx, true);
@@ -4210,8 +4318,8 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
         children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('فعال بودن قفل'),
-            subtitle: const Text('هنگام باز کردن برنامه رمز یا اثرانگشت بپرسد'),
+            title: Text(loc('فعال بودن قفل')),
+            subtitle: Text(loc('هنگام باز کردن برنامه رمز یا اثرانگشت بپرسد')),
             value: lockEnabled,
             onChanged: (v) async {
               if (v && !hasPin) {
@@ -4225,8 +4333,8 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
           if (lockEnabled) ...[
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('استفاده از اثرانگشت/چهره'),
-              subtitle: const Text('در صورت پشتیبانی گوشی، به‌جای رمز از بیومتریک استفاده شود'),
+              title: Text(loc('استفاده از اثرانگشت/چهره')),
+              subtitle: Text(loc('در صورت پشتیبانی گوشی، به‌جای رمز از بیومتریک استفاده شود')),
               value: useBiometric,
               onChanged: (v) async {
                 await Store.saveUseBiometric(v);
@@ -4235,7 +4343,7 @@ class _AppLockSettingsScreenState extends State<AppLockSettingsScreen> {
             ),
             TextButton(
               onPressed: () => _promptSetPin(enableLockAfter: false),
-              child: const Text('تغییر رمز عبور'),
+              child: Text(loc('تغییر رمز عبور')),
             ),
           ],
         ],
@@ -4256,16 +4364,16 @@ Future<bool?> askKeepReceiptImage(BuildContext context, {bool recommendKeep = fa
   return showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('تصویر فیش'),
+      title: Text(loc('تصویر فیش')),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟'),
+          Text(loc('تصویر فیش/رسید هم همراه این تراکنش ذخیره شود؟')),
           if (recommendKeep) ...[
             const SizedBox(height: 8),
             Text(
-              reason?.trim().isNotEmpty == true ? reason!.trim() : 'این خرید کالایی با امکان مرجوعی یا گارانتی دارد؛ بهتر است فیش نگه داشته شود.',
+              reason?.trim().isNotEmpty == true ? reason!.trim() : loc('این خرید کالایی با امکان مرجوعی یا گارانتی دارد؛ بهتر است فیش نگه داشته شود.'),
               style: TextStyle(fontSize: 12, color: Colors.amber.shade800),
             ),
           ],
@@ -4273,12 +4381,12 @@ Future<bool?> askKeepReceiptImage(BuildContext context, {bool recommendKeep = fa
       ),
       actions: recommendKeep
           ? [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
-              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(loc('خیر'))),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بله'))),
             ]
           : [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('خیر')),
-              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله')),
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(loc('خیر'))),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بله'))),
             ],
     ),
   );
@@ -4786,30 +4894,30 @@ Future<http.Response> _geminiPost(String apiKey, String body) async {
     if (![404, 429, 500, 503].contains(resp.statusCode)) break;
   }
   final raw = resp != null
-      ? 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nHTTP ${resp.statusCode}\n${resp.body}'
-      : 'مدل‌های امتحان‌شده: ${attemptedModels.join(', ')}\nخطای شبکه: $lastNetworkError';
+      ? locf('مدل‌های امتحان‌شده: {0}\nHTTP {1}\n{2}', [(attemptedModels.join(', ')), (resp.statusCode), (resp.body)])
+      : locf('مدل‌های امتحان‌شده: {0}\nخطای شبکه: {1}', [(attemptedModels.join(', ')), lastNetworkError]);
   if (resp == null) {
-    throw GeminiException('اتصال به Gemini برقرار نشد. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.', raw);
+    throw GeminiException(loc('اتصال به Gemini برقرار نشد. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.'), raw);
   }
   if (sawPerMinuteLimit) {
     throw GeminiException(
-        'تعداد درخواست‌ها به Gemini در یک دقیقه از حد مجاز رایگان گذشت. حدود یک دقیقه صبر کنید و دوباره امتحان کنید (سهمیه‌ی روزانه تمام نشده).',
+        loc('تعداد درخواست‌ها به Gemini در یک دقیقه از حد مجاز رایگان گذشت. حدود یک دقیقه صبر کنید و دوباره امتحان کنید (سهمیه‌ی روزانه تمام نشده).'),
         raw);
   }
   if (sawOverload) {
-    throw GeminiException('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند دقیقه دیگر دوباره امتحان کنید.', raw);
+    throw GeminiException(loc('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند دقیقه دیگر دوباره امتحان کنید.'), raw);
   }
   if (sawDailyLimit) {
-    throw GeminiException('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.', raw);
+    throw GeminiException(loc('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.'), raw);
   }
   final code = resp.statusCode;
   if (code == 400 && resp.body.contains('API_KEY_INVALID')) {
-    throw GeminiException('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.', raw);
+    throw GeminiException(loc('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.'), raw);
   }
   if (code == 403) {
-    throw GeminiException('کلید API جمنای اجازه‌ی دسترسی ندارد (HTTP 403). آن را در تنظیمات بررسی کنید.', raw);
+    throw GeminiException(loc('کلید API جمنای اجازه‌ی دسترسی ندارد (HTTP 403). آن را در تنظیمات بررسی کنید.'), raw);
   }
-  throw GeminiException('خطای Gemini API ($code)', raw);
+  throw GeminiException(locf('خطای Gemini API ({0})', [code]), raw);
 }
 
 Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, String prompt) async {
@@ -4836,14 +4944,14 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   if (candidates == null || candidates is! List || candidates.isEmpty) {
     final blockReason = decoded['promptFeedback']?['blockReason'];
     if (blockReason != null) {
-      throw GeminiException('Gemini این تصویر را پردازش نکرد (دلیل: $blockReason).', rawBody);
+      throw GeminiException(locf('Gemini این تصویر را پردازش نکرد (دلیل: {0}).', [blockReason]), rawBody);
     }
-    throw GeminiException('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).', rawBody);
+    throw GeminiException(loc('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).'), rawBody);
   }
   final finishReason = candidates[0]?['finishReason'];
   var text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
   if (text == null) {
-    throw GeminiException('پاسخ Gemini قابل خواندن نبود${finishReason != null ? ' (finishReason: $finishReason)' : ''}.', rawBody);
+    throw GeminiException(locf('پاسخ Gemini قابل خواندن نبود{0}.', [(finishReason != null ? ' (finishReason: $finishReason)' : '')]), rawBody);
   }
   // The API is asked for pure JSON, but occasionally still wraps it in a
   // ```json ... ``` markdown fence - strip that defensively before parsing.
@@ -4854,7 +4962,7 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
   try {
     return jsonDecode(text) as Map<String, dynamic>;
   } on FormatException {
-    throw GeminiException('پاسخ Gemini به‌صورت JSON معتبر نبود.', text);
+    throw GeminiException(loc('پاسخ Gemini به‌صورت JSON معتبر نبود.'), text);
   }
 }
 
@@ -4926,7 +5034,7 @@ const _payslipPrompt = 'You are an expert payslip-reading assistant that underst
     'If a field is unreadable, use null.';
 
 Future<Map<String, dynamic>?> geminiExtractReceipt(String apiKey, String imagePath) =>
-    _geminiRequest(apiKey, imagePath, _receiptPrompt);
+    _geminiRequest(apiKey, imagePath, _receiptPrompt.replaceAll('in Persian', 'in $aiAnswerLanguage').replaceAll('Persian (Farsi)', aiAnswerLanguage));
 
 Future<Map<String, dynamic>?> geminiExtractPayslip(String apiKey, String imagePath) =>
     _geminiRequest(apiKey, imagePath, _payslipPrompt);
@@ -4951,13 +5059,13 @@ Future<String> geminiTextRequest(String apiKey, String prompt) async {
   if (candidates == null || candidates is! List || candidates.isEmpty) {
     final blockReason = decoded['promptFeedback']?['blockReason'];
     if (blockReason != null) {
-      throw GeminiException('Gemini این درخواست را پردازش نکرد (دلیل: $blockReason).', rawBody);
+      throw GeminiException(locf('Gemini این درخواست را پردازش نکرد (دلیل: {0}).', [blockReason]), rawBody);
     }
-    throw GeminiException('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).', rawBody);
+    throw GeminiException(loc('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).'), rawBody);
   }
   final text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
   if (text == null) {
-    throw GeminiException('پاسخ Gemini قابل خواندن نبود.', rawBody);
+    throw GeminiException(loc('پاسخ Gemini قابل خواندن نبود.'), rawBody);
   }
   return text.trim();
 }
@@ -4998,7 +5106,7 @@ String formatMoney(double amount, String currency) {
     case 'TRY':
       return ltr('₺$n');
     case 'AED':
-      return '\u2067${ltr(n)} د.إ\u2069';
+      return locf('\u2067{0} د.إ\u2069', [(ltr(n))]);
     case 'IRR':
     case 'IRT':
       final grouped = _groupThousands(amount.round().abs().toString());
@@ -5194,7 +5302,7 @@ String txMainTitle(Transaction t, String categoryName) {
 /// "first item +N", else the note. Null when there is neither.
 String? txDetailTitle(Transaction t) {
   if (t.items.length == 1) return t.items.first.name;
-  if (t.items.length > 1) return '${t.items.first.name} +${t.items.length - 1} قلم دیگر';
+  if (t.items.length > 1) return locf('{0} +{1} قلم دیگر', [(t.items.first.name), (t.items.length - 1)]);
   if (t.note.trim().isNotEmpty) return t.note.trim();
   return null;
 }
@@ -5347,14 +5455,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
 
   Future<void> _load() async {
     try {
-      _loadStep = 'خواندن تراکنش‌ها';
+      _loadStep = loc('خواندن تراکنش‌ها');
       await _reloadTx();
-      _loadStep = 'خواندن دسته‌بندی‌ها';
+      _loadStep = loc('خواندن دسته‌بندی‌ها');
       categories = await Store.loadCategories();
-      _loadStep = 'خواندن حساب‌ها';
+      _loadStep = loc('خواندن حساب‌ها');
       accounts = await Store.loadAccounts();
       _memo.clear();
-      _loadStep = 'خواندن لیست‌های خرید';
+      _loadStep = loc('خواندن لیست‌های خرید');
       shoppingPending = await _loadShoppingPending();
     } catch (e, st) {
       if (mounted) setState(() => _loadError = '$_loadStep:\n$e\n\n$st');
@@ -5405,7 +5513,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? loc('بدون‌دسته') : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -5570,13 +5678,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
-                'پرداخت‌های پیش‌رو تا آخر ${calendarMonthOf(DateTime.now()).name} '
-                '(تراکنش‌های آینده و پرداخت‌های تکرارشونده‌ی همین ماه):',
+                locf('پرداخت‌های پیش‌رو تا آخر {0} (تراکنش‌های آینده و پرداخت‌های تکرارشونده‌ی همین ماه):', [(calendarMonthOf(DateTime.now()).name)]),
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
               ),
             ),
             if (items.isEmpty)
-              const Padding(padding: EdgeInsets.all(16), child: Text('تا آخر ماه پرداختی در پیش نیست.')),
+              Padding(padding: const EdgeInsets.all(16), child: Text(loc('تا آخر ماه پرداختی در پیش نیست.'))),
             Flexible(
               child: ListView(
                 shrinkWrap: true,
@@ -5628,10 +5735,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       final stale = age != null && age > 7;
       final String text;
       if (notSet) {
-        text = 'نرخ روز ${currencyLabel(a.currency)} تنظیم نشده (جمع کل دقیق نیست) - برای تنظیم بزن';
+        text = locf('نرخ روز {0} تنظیم نشده (جمع کل دقیق نیست) - برای تنظیم بزن', [(currencyLabel(a.currency))]);
       } else {
-        final when = age == null ? '' : (age == 0 ? ' • امروز' : ' • ${persianDigits('$age')} روز پیش');
-        text = 'نرخ روز: ${dayRateText(a, mainCur)}$when${stale ? ' (به‌روز نیست)' : ''}';
+        final when = age == null ? '' : (age == 0 ? loc(' • امروز') : locf(' • {0} روز پیش', [(persianDigits('$age'))]));
+        text = locf('نرخ روز: {0}{1}{2}', [(dayRateText(a, mainCur)), when, (stale ? loc(' (به‌روز نیست)') : '')]);
       }
       lines.add(InkWell(
         onTap: () async {
@@ -5787,10 +5894,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(removed.length > 1 ? 'تراکنش‌ها حذف شدند' : 'تراکنش حذف شد'),
+        content: Text(removed.length > 1 ? loc('تراکنش‌ها حذف شدند') : loc('تراکنش حذف شد')),
         persist: false,
         action: SnackBarAction(
-          label: 'برگردون',
+          label: loc('برگردون'),
           onPressed: () async {
             for (final t in removed) {
               await Store.upsertTransaction(t);
@@ -5826,8 +5933,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              const Text('خطا در باز کردن اطلاعات برنامه. از این صفحه عکس بگیر و بفرست:',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(loc('خطا در باز کردن اطلاعات برنامه. از این صفحه عکس بگیر و بفرست:'),
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               SelectableText(_loadError!, textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 12)),
               const SizedBox(height: 12),
@@ -5836,7 +5943,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                   setState(() => _loadError = null);
                   _load();
                 },
-                child: const Text('تلاش دوباره'),
+                child: Text(loc('تلاش دوباره')),
               ),
             ],
           ),
@@ -5855,7 +5962,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
               FutureBuilder<void>(
                 future: Future<void>.delayed(const Duration(seconds: 4)),
                 builder: (context, snap) => snap.connectionState == ConnectionState.done
-                    ? Text('در حال $_loadStep…', style: TextStyle(color: Colors.grey.shade500, fontSize: 12))
+                    ? Text(locf('در حال {0}…', [_loadStep]), style: TextStyle(color: Colors.grey.shade500, fontSize: 12))
                     : const SizedBox.shrink(),
               ),
             ],
@@ -5866,7 +5973,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     final balances = totalBalanceByCurrency;
     final safeToSpend = safeToSpendByCurrency;
     final period = periodStatsByCurrency;
-    const periodLabel = 'این ماه';
+    final periodLabel = loc('این ماه');
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -5917,7 +6024,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 label: Text(persianDigits('$draftCount')),
                 backgroundColor: Colors.deepOrange,
                 isLabelVisible: draftCount > 0,
-                child: IconButton(icon: const Icon(Icons.edit_note_outlined), tooltip: 'پیش‌نویس‌ها', onPressed: _openDrafts),
+                child: IconButton(icon: const Icon(Icons.edit_note_outlined), tooltip: loc('پیش‌نویس‌ها'), onPressed: _openDrafts),
               ),
             ),
           ),
@@ -5937,7 +6044,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 child: DropdownButtonFormField<String?>(
                   initialValue: dashboardAccountFilter,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+                  decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
                   items: [
                     DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
                     ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
@@ -5954,11 +6061,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(dashboardAccountFilter == null ? 'موجودی کل' : 'موجودی حساب', style: Theme.of(context).textTheme.titleMedium),
+                        Text(dashboardAccountFilter == null ? loc('موجودی کل') : loc('موجودی حساب'), style: Theme.of(context).textTheme.titleMedium),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    if (balances.isEmpty) const Text('هنوز تراکنشی ثبت نشده.'),
+                    if (balances.isEmpty) Text(loc('هنوز تراکنشی ثبت نشده.')),
                     // One number: with accounts in several currencies, all of
                     // them converted to the main currency at their day rate.
                     if (balances.length == 1)
@@ -5986,9 +6093,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                                 Icon(Icons.shield_outlined, size: 14, color: Colors.grey.shade600),
                                 const SizedBox(width: 6),
                                 Expanded(
-                                  child: Text('امن برای خرج تا آخر ماه', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                  child: Text(loc('امن برای خرج تا آخر ماه'), style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
                                 ),
-                                Text('جزئیات', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                Text(loc('جزئیات'), style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
                                 Icon(Icons.chevron_left, size: 14, color: Colors.grey.shade600),
                               ],
                             ),
@@ -6011,7 +6118,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                                         const SizedBox(width: 4),
                                         Expanded(
                                           child: Text(
-                                            'پرداخت‌های پیش‌رو ${ltr(formatMoney(-e.value, e.key))} بیشتر از موجودی فعلیته',
+                                            locf('پرداخت‌های پیش‌رو {0} بیشتر از موجودی فعلیته', [(ltr(formatMoney(-e.value, e.key)))]),
                                             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.red.shade700),
                                           ),
                                         ),
@@ -6026,14 +6133,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                     const Divider(height: 24),
                     Text(periodLabel, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     const SizedBox(height: 6),
-                    if (period.isEmpty) const Text('در این دوره تراکنشی ثبت نشده.'),
+                    if (period.isEmpty) Text(loc('در این دوره تراکنشی ثبت نشده.')),
                     ...period.entries.map((e) => Padding(
                           padding: const EdgeInsets.only(bottom: 6),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              _MonthStat(label: 'درآمد', value: e.value['income']!, currency: e.key, color: Colors.green),
-                              _MonthStat(label: 'هزینه', value: e.value['expense']!, currency: e.key, color: Colors.red),
+                              _MonthStat(label: loc('درآمد'), value: e.value['income']!, currency: e.key, color: Colors.green),
+                              _MonthStat(label: loc('هزینه'), value: e.value['expense']!, currency: e.key, color: Colors.red),
                             ],
                           ),
                         )),
@@ -6060,7 +6167,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            '${persianDigits('$confirmedDuplicates')} مورد احتمالاً تکراری بین تراکنش‌های ثبت‌شده - بررسی کن',
+                            locf('{0} مورد احتمالاً تکراری بین تراکنش‌های ثبت‌شده - بررسی کن', [(persianDigits('$confirmedDuplicates'))]),
                             style: TextStyle(fontSize: 13, color: Colors.orange.shade900, fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -6098,7 +6205,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                           children: [
                             Text(tr('shopping_lists_title'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                             Text(
-                              shoppingPending > 0 ? '$shoppingPending کالا هنوز خریداری نشده' : 'لیست خرید بساز و کالاها را تیک بزن',
+                              shoppingPending > 0 ? locf('{0} کالا هنوز خریداری نشده', [shoppingPending]) : loc('لیست خرید بساز و کالاها را تیک بزن'),
                               style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                             ),
                           ],
@@ -6138,9 +6245,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
             Text(tr('transactions'), style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
             if (tx.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 32),
-                child: Center(child: Text('هنوز تراکنشی ثبت نشده. با دکمه + شروع کنید.')),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Center(child: Text(loc('هنوز تراکنشی ثبت نشده. با دکمه + شروع کنید.'))),
               )
             else ...[
               () {
@@ -6273,7 +6380,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                       padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
                     onPressed: () => setState(() => _monthShowNotDue[monthKey] = false),
-                    child: Text(ltr(persianDigits('سررسید شده (${dueTx.length})')), style: const TextStyle(fontSize: 12)),
+                    child: Text(ltr(persianDigits(locf('سررسید شده ({0})', [(dueTx.length)]))), style: const TextStyle(fontSize: 12)),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -6284,7 +6391,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                       padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
                     onPressed: () => setState(() => _monthShowNotDue[monthKey] = true),
-                    child: Text(ltr(persianDigits('سررسیدنشده (${notDueEntries.length})')), style: const TextStyle(fontSize: 12)),
+                    child: Text(ltr(persianDigits(locf('سررسیدنشده ({0})', [(notDueEntries.length)]))), style: const TextStyle(fontSize: 12)),
                   ),
                 ),
               ],
@@ -6292,18 +6399,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           ),
           if (!showingNotDue)
             if (dueTx.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('تراکنش سررسیدشده‌ای نیست.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(loc('تراکنش سررسیدشده‌ای نیست.'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
               )
             else
               ...dueTx.map((e) => e.isReal
                   ? _buildTxTile(e.t)
                   : _buildTxTile(e.t, projected: true, recurringDue: true, displayDate: e.date))
           else if (notDueEntries.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('تراکنش سررسیدنشده‌ای نیست.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(loc('تراکنش سررسیدنشده‌ای نیست.'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
             )
           else
             ...notDueEntries.map((e) => _buildTxTile(e.t, dimmed: true, projected: !e.isReal, displayDate: e.date)),
@@ -6389,8 +6496,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           return await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('حذف تراکنش'),
-                  content: const Text('این تراکنش حذف شود؟'),
+                  title: Text(loc('حذف تراکنش')),
+                  content: Text(loc('این تراکنش حذف شود؟')),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
                     FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -6493,7 +6600,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
     final result = <Category, double>{};
     map.forEach((id, amount) {
       final match = widget.categories.where((c) => c.id == id).toList();
-      result[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = amount;
+      result[match.isEmpty ? Category(id: id, name: loc('بدون‌دسته'), type: TxType.expense) : match.first] = amount;
     });
     return result;
   }
@@ -6521,7 +6628,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
               Icon(up ? Icons.trending_up : Icons.trending_down, color: up ? Colors.red : Colors.green, size: 18),
               const SizedBox(width: 4),
               Text(
-                'هزینه‌ی این ماه ${ltr(persianDigits('${change.abs().round()}%'))} ${up ? 'بیشتر' : 'کمتر'} از ماه قبل',
+                locf('هزینه‌ی این ماه {0} {1} از ماه قبل', [(ltr(persianDigits('${change.abs().round()}%'))), (up ? loc('بیشتر') : loc('کمتر'))]),
                 style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
               ),
             ],
@@ -6540,7 +6647,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
               if (drilldown != null)
                 IconButton(
                   icon: const Icon(Icons.arrow_back, size: 20),
-                  tooltip: 'بازگشت',
+                  tooltip: loc('بازگشت'),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                   onPressed: () => setState(() => drilldown = null),
@@ -6548,7 +6655,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
               if (drilldown != null) const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  drilldown == null ? 'هزینه‌ها بر اساس دسته‌بندی' : 'زیرمجموعه‌های «${drilldown!.name}»',
+                  drilldown == null ? loc('هزینه‌ها بر اساس دسته‌بندی') : locf('زیرمجموعه‌های «{0}»', [(drilldown!.name)]),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
@@ -6594,7 +6701,7 @@ class _DashboardChartsState extends State<DashboardCharts> {
                       children: [
                         for (var i = 0; i < top.length; i++) _legendRow(_palette[i % _palette.length], top[i].key, top[i].value),
                         if (otherSum > 0)
-                          _legendRow(Colors.grey, const Category(id: '_other_', name: 'سایر', type: TxType.expense), otherSum),
+                          _legendRow(Colors.grey, Category(id: '_other_', name: loc('سایر'), type: TxType.expense), otherSum),
                       ],
                     ),
                   ),
@@ -6602,18 +6709,18 @@ class _DashboardChartsState extends State<DashboardCharts> {
               ),
             )
           else
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text('هزینه‌ای در این دوره برای این دسته‌بندی ثبت نشده.', style: TextStyle(color: Colors.grey)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(loc('هزینه‌ای در این دوره برای این دسته‌بندی ثبت نشده.'), style: const TextStyle(color: Colors.grey)),
             ),
           const SizedBox(height: 24),
         ],
-        Text('روند ۶ ماه اخیر', style: Theme.of(context).textTheme.titleMedium),
+        Text(loc('روند ۶ ماه اخیر'), style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         SizedBox(
           height: 190,
           child: maxMonthly <= 0
-              ? const Center(child: Text('داده‌ای برای نمایش وجود ندارد.', style: TextStyle(color: Colors.grey)))
+              ? Center(child: Text(loc('داده‌ای برای نمایش وجود ندارد.'), style: const TextStyle(color: Colors.grey)))
               : BarChart(
                   BarChartData(
                     maxY: maxMonthly * 1.15,
@@ -6653,11 +6760,11 @@ class _DashboardChartsState extends State<DashboardCharts> {
           children: [
             _dot(Colors.green),
             const SizedBox(width: 4),
-            const Text('درآمد', style: TextStyle(fontSize: 12)),
+            Text(loc('درآمد'), style: const TextStyle(fontSize: 12)),
             const SizedBox(width: 16),
             _dot(Colors.red),
             const SizedBox(width: 4),
-            const Text('هزینه', style: TextStyle(fontSize: 12)),
+            Text(loc('هزینه'), style: const TextStyle(fontSize: 12)),
           ],
         ),
       ],
@@ -6742,8 +6849,8 @@ class ReceiptImageScreen extends StatelessWidget {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف تصویر'),
-        content: const Text('آیا از حذف تصویر رسید/فیش اطمینان دارید؟ خود تراکنش حذف نمی‌شود.'),
+        title: Text(loc('حذف تصویر')),
+        content: Text(loc('آیا از حذف تصویر رسید/فیش اطمینان دارید؟ خود تراکنش حذف نمی‌شود.')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(
@@ -6760,7 +6867,7 @@ class ReceiptImageScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('تصویر رسید/فیش')),
+      appBar: AppBar(title: Text(loc('تصویر رسید/فیش'))),
       body: Column(
         children: [
           Expanded(
@@ -6793,7 +6900,7 @@ class ReceiptImageScreen extends StatelessWidget {
                     child: FilledButton.icon(
                       onPressed: () => Navigator.pop(context, ReceiptImageAction.reread),
                       icon: const Icon(Icons.auto_awesome),
-                      label: const Text('خواندن اطلاعات با هوش مصنوعی', textAlign: TextAlign.center),
+                      label: Text(loc('خواندن اطلاعات با هوش مصنوعی'), textAlign: TextAlign.center),
                       style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                     ),
                   ),
@@ -6802,7 +6909,7 @@ class ReceiptImageScreen extends StatelessWidget {
                     child: OutlinedButton.icon(
                       onPressed: () => _confirmDelete(context),
                       icon: const Icon(Icons.delete_outline),
-                      label: const Text('حذف تصویر'),
+                      label: Text(loc('حذف تصویر')),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.red,
                         side: const BorderSide(color: Colors.red),
@@ -6902,7 +7009,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                         style: TextStyle(color: color.shade900, fontSize: 12),
                       ),
                     ),
-                    Text('مقایسه', style: TextStyle(color: color.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
+                    Text(loc('مقایسه'), style: TextStyle(color: color.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
                     Icon(Icons.chevron_left, size: 18, color: color.shade900),
                   ],
                 ),
@@ -6916,7 +7023,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? loc('بدون‌دسته') : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -6953,11 +7060,11 @@ class _DraftsScreenState extends State<DraftsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('ثبت نهایی موارد جدید'),
-        content: Text('${persianDigits('${fresh.length}')} تراکنش بانکی که با هیچ تراکنش ثبت‌شده‌ای جور نیست، ثبت نهایی شود؟'),
+        title: Text(loc('ثبت نهایی موارد جدید')),
+        content: Text(locf('{0} تراکنش بانکی که با هیچ تراکنش ثبت‌شده‌ای جور نیست، ثبت نهایی شود؟', [(persianDigits('${fresh.length}'))])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ثبت نهایی')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('ثبت نهایی'))),
         ],
       ),
     );
@@ -6973,10 +7080,9 @@ class _DraftsScreenState extends State<DraftsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف موارد قطعاً تکراری'),
+        title: Text(loc('حذف موارد قطعاً تکراری')),
         content: Text(
-          '${persianDigits('${sure.length}')} پیش‌نویس بانکی که مبلغ، تاریخ و حسابشان با یک تراکنش ثبت‌شده جور است حذف شود؟ '
-          'تراکنش‌های ثبت‌شده دست نمی‌خورند.',
+          locf('{0} پیش‌نویس بانکی که مبلغ، تاریخ و حسابشان با یک تراکنش ثبت‌شده جور است حذف شود؟ تراکنش‌های ثبت‌شده دست نمی‌خورند.', [(persianDigits('${sure.length}'))]),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
@@ -7010,8 +7116,8 @@ class _DraftsScreenState extends State<DraftsScreen> {
       confirmDismiss: (_) => showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('حذف پیش‌نویس'),
-          content: const Text('این پیش‌نویس حذف شود؟'),
+          title: Text(loc('حذف پیش‌نویس')),
+          content: Text(loc('این پیش‌نویس حذف شود؟')),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
             FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -7075,7 +7181,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                             style: TextStyle(color: color.shade900, fontSize: 12),
                           ),
                         ),
-                        Text('مقایسه', style: TextStyle(color: color.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
+                        Text(loc('مقایسه'), style: TextStyle(color: color.shade900, fontWeight: FontWeight.bold, fontSize: 12)),
                         Icon(Icons.chevron_left, size: 18, color: color.shade900),
                       ],
                     ),
@@ -7095,7 +7201,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                     Icon(Icons.check_circle_outline, size: 16, color: Colors.green.shade800),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text('جدید - با هیچ تراکنش ثبت‌شده‌ای جور نیست', style: TextStyle(color: Colors.green.shade900, fontSize: 12)),
+                      child: Text(loc('جدید - با هیچ تراکنش ثبت‌شده‌ای جور نیست'), style: TextStyle(color: Colors.green.shade900, fontSize: 12)),
                     ),
                     // A bank booking that's really money moved between the
                     // person's own accounts.
@@ -7104,7 +7210,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                         if (await convertDraftToTransfer(context, t, accounts)) await _load();
                       },
                       icon: const Icon(Icons.swap_horiz, size: 16),
-                      label: const Text('انتقال بین حساب', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      label: Text(loc('انتقال بین حساب'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.green.shade900,
                         backgroundColor: Colors.white,
@@ -7149,9 +7255,9 @@ class _DraftsScreenState extends State<DraftsScreen> {
           ],
           bottom: TabBar(
             tabs: [
-              Tab(text: 'اسکن و دستی (${persianDigits('${tx.length}')})'),
-              Tab(text: 'صورتحساب بانک (${persianDigits('${bankTx.length}')})'),
-              Tab(text: 'تکراری در ثبت‌شده‌ها (${persianDigits('${confirmedPairs.length}')})'),
+              Tab(text: locf('اسکن و دستی ({0})', [(persianDigits('${tx.length}'))])),
+              Tab(text: locf('صورتحساب بانک ({0})', [(persianDigits('${bankTx.length}'))])),
+              Tab(text: locf('تکراری در ثبت‌شده‌ها ({0})', [(persianDigits('${confirmedPairs.length}'))])),
             ],
             isScrollable: true,
             tabAlignment: TabAlignment.start,
@@ -7160,17 +7266,17 @@ class _DraftsScreenState extends State<DraftsScreen> {
         body: TabBarView(
           children: [
             tx.isEmpty
-                ? const Center(child: Text('پیش‌نویسی وجود ندارد.'))
+                ? Center(child: Text(loc('پیش‌نویسی وجود ندارد.')))
                 : ListView(
                     padding: const EdgeInsets.all(16),
                     children: tx.map((t) => _tile(t, duplicates: matches[t.id] ?? const <DuplicateMatch>[])).toList(),
                   ),
             bankTx.isEmpty
-                ? const Center(
+                ? Center(
                     child: Padding(
-                      padding: EdgeInsets.all(24),
+                      padding: const EdgeInsets.all(24),
                       child: Text(
-                        'تراکنشی از صورتحساب بانک منتظر بررسی نیست.\nاز منوی «بارگذاری صورتحساب بانکی» فایل CSV یا PDF را وارد کن.',
+                        loc('تراکنشی از صورتحساب بانک منتظر بررسی نیست.\nاز منوی «بارگذاری صورتحساب بانکی» فایل CSV یا PDF را وارد کن.'),
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -7185,14 +7291,12 @@ class _DraftsScreenState extends State<DraftsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Text(
-                                '${persianDigits('${fresh.length}')} جدید • ${persianDigits('${sure.length}')} تقریباً قطعاً تکراری • '
-                                '${persianDigits('${dupCount - sure.length}')} احتمالاً تکراری',
+                                locf('{0} جدید • {1} تقریباً قطعاً تکراری • {2} احتمالاً تکراری', [(persianDigits('${fresh.length}')), (persianDigits('${sure.length}')), (persianDigits('${dupCount - sure.length}'))]),
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'هر پیش‌نویس با همه‌ی تراکنش‌های ثبت‌شده و پرداخت‌های سررسیدشده‌ی تراکنش‌های تکرارشونده مقایسه می‌شود '
-                                '(مبلغ، تاریخ، حساب و نام/شرح). فقط موارد نارنجی نیاز به بررسی دارند.',
+                                loc('هر پیش‌نویس با همه‌ی تراکنش‌های ثبت‌شده و پرداخت‌های سررسیدشده‌ی تراکنش‌های تکرارشونده مقایسه می‌شود (مبلغ، تاریخ، حساب و نام/شرح). فقط موارد نارنجی نیاز به بررسی دارند.'),
                                 style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
                               ),
                               if (fresh.isNotEmpty || sure.isNotEmpty) const SizedBox(height: 8),
@@ -7200,14 +7304,14 @@ class _DraftsScreenState extends State<DraftsScreen> {
                                 FilledButton.tonalIcon(
                                   onPressed: () => _confirmAllNew(fresh),
                                   icon: const Icon(Icons.done_all, size: 18),
-                                  label: Text('ثبت نهایی ${persianDigits('${fresh.length}')} مورد جدید'),
+                                  label: Text(locf('ثبت نهایی {0} مورد جدید', [(persianDigits('${fresh.length}'))])),
                                 ),
                               if (sure.isNotEmpty)
                                 TextButton.icon(
                                   onPressed: () => _deleteAllSure(sure),
                                   icon: Icon(Icons.delete_sweep_outlined, size: 18, color: Colors.red.shade700),
                                   label: Text(
-                                    'حذف ${persianDigits('${sure.length}')} مورد تقریباً قطعاً تکراری',
+                                    locf('حذف {0} مورد تقریباً قطعاً تکراری', [(persianDigits('${sure.length}'))]),
                                     style: TextStyle(color: Colors.red.shade700),
                                   ),
                                 ),
@@ -7220,7 +7324,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                           child: ListTile(
                             dense: true,
                             leading: const Icon(Icons.auto_delete_outlined),
-                            title: Text('${persianDigits('$autoDeletedCount')} پرداخت تکرارشونده خودکار حذف شده (۶۰ روز اخیر)'),
+                            title: Text(locf('{0} پرداخت تکرارشونده خودکار حذف شده (۶۰ روز اخیر)', [(persianDigits('$autoDeletedCount'))])),
                             trailing: const Icon(Icons.chevron_left),
                             onTap: () async {
                               await Navigator.push(context, MaterialPageRoute(builder: (_) => const AutoDuplicatesScreen()));
@@ -7233,17 +7337,17 @@ class _DraftsScreenState extends State<DraftsScreen> {
                     ],
                   ),
             confirmedPairs.isEmpty
-                ? const Center(
+                ? Center(
                     child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('بین تراکنش‌های ثبت‌شده مورد تکراری پیدا نشد.', textAlign: TextAlign.center),
+                      padding: const EdgeInsets.all(24),
+                      child: Text(loc('بین تراکنش‌های ثبت‌شده مورد تکراری پیدا نشد.'), textAlign: TextAlign.center),
                     ),
                   )
                 : ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
                       Text(
-                        'تراکنش‌های ثبت‌شده‌ای که احتمالاً دو بار وارد شده‌اند. اگر بگویی تکراری نیستند، دیگر نشان داده نمی‌شوند.',
+                        loc('تراکنش‌های ثبت‌شده‌ای که احتمالاً دو بار وارد شده‌اند. اگر بگویی تکراری نیستند، دیگر نشان داده نمی‌شوند.'),
                         style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                       ),
                       const SizedBox(height: 8),
@@ -7285,15 +7389,15 @@ class DuplicateCompareScreen extends StatefulWidget {
 String recurrenceLabelOf(Transaction t) {
   switch (t.recurrence) {
     case RecurrenceFrequency.monthly:
-      return 'ماهانه (روز ${persianDigits('${t.recurrenceDay ?? '?'}')})';
+      return locf('ماهانه (روز {0})', [(persianDigits('${t.recurrenceDay ?? '?'}'))]);
     case RecurrenceFrequency.weekly:
-      return 'هفتگی (${_weekdayNames[(t.recurrenceWeekday ?? 1) - 1]})';
+      return locf('هفتگی ({0})', [(_weekdayNames[(t.recurrenceWeekday ?? 1) - 1])]);
     case RecurrenceFrequency.custom:
-      return 'هر ${persianDigits('${t.recurrenceIntervalDays ?? '?'}')} روز';
+      return locf('هر {0} روز', [(persianDigits('${t.recurrenceIntervalDays ?? '?'}'))]);
     case RecurrenceFrequency.quarterly:
-      return 'فصلی (روز ${persianDigits('${t.recurrenceDay ?? '?'}')})';
+      return locf('فصلی (روز {0})', [(persianDigits('${t.recurrenceDay ?? '?'}'))]);
     case RecurrenceFrequency.yearly:
-      return 'سالانه (${formatDayMonth(t.date)})';
+      return locf('سالانه ({0})', [(formatDayMonth(t.date))]);
     case RecurrenceFrequency.none:
       return '';
   }
@@ -7309,7 +7413,7 @@ Future<bool> convertDraftToTransfer(BuildContext context, Transaction draft, Lis
   final here = accounts.where((a) => a.id == draft.accountId).firstOrNull;
   final others = accounts.where((a) => a.id != draft.accountId).toList();
   if (here == null || others.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای انتقال، حساب دیگری لازم است.')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('برای انتقال، حساب دیگری لازم است.'))));
     return false;
   }
   final other = await showDialog<Account>(
@@ -7317,8 +7421,8 @@ Future<bool> convertDraftToTransfer(BuildContext context, Transaction draft, Lis
     builder: (ctx) => SimpleDialog(
       title: Text(
         incoming
-            ? '${formatMoney(draft.amount, here.currency)} به «${here.name}» واریز شده؛ از کدام حساب آمده؟'
-            : '${formatMoney(draft.amount, here.currency)} از «${here.name}» برداشت شده؛ به کدام حساب رفته؟',
+            ? locf('{0} به «{1}» واریز شده؛ از کدام حساب آمده؟', [(formatMoney(draft.amount, here.currency)), (here.name)])
+            : locf('{0} از «{1}» برداشت شده؛ به کدام حساب رفته؟', [(formatMoney(draft.amount, here.currency)), (here.name)]),
         style: const TextStyle(fontSize: 15),
       ),
       children: others
@@ -7380,7 +7484,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
     categories = widget.categories;
   }
 
-  String _category(String id) => categories.where((c) => c.id == id).firstOrNull?.name ?? 'بدون‌دسته';
+  String _category(String id) => categories.where((c) => c.id == id).firstOrNull?.name ?? loc('بدون‌دسته');
   Account? _account(String id) => widget.accounts.where((a) => a.id == id).firstOrNull;
   String _money(Transaction t) => formatMoney(t.amount, _account(t.accountId)?.currency ?? 'IRT');
   String _note(Transaction t) => t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim();
@@ -7393,7 +7497,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       case 'amount':
         return _money(t);
       case 'type':
-        return t.type == TxType.income ? 'درآمد' : 'هزینه';
+        return t.type == TxType.income ? loc('درآمد') : loc('هزینه');
       case 'category':
         return _category(t.categoryId);
       case 'account':
@@ -7403,7 +7507,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       case 'note':
         return _note(t);
       case 'items':
-        return t.items.map((i) => i.name).join('، ');
+        return t.items.map((i) => i.name).join(loc('، '));
       case 'recurrence':
         return t.isRecurring ? recurrenceLabelOf(t) : '';
       case 'payslip':
@@ -7411,31 +7515,31 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         if (p == null) return '';
         final cur = _account(t.accountId)?.currency ?? 'IRT';
         return [
-          if (p.brutto != null) 'ناخالص ${formatMoney(p.brutto!, cur)}',
-          if (p.netto != null) 'خالص ${formatMoney(p.netto!, cur)}',
+          if (p.brutto != null) locf('ناخالص {0}', [(formatMoney(p.brutto!, cur))]),
+          if (p.netto != null) locf('خالص {0}', [(formatMoney(p.netto!, cur))]),
           if (p.arbeitgeber != null) p.arbeitgeber!,
         ].join(' • ');
       case 'image':
-        return t.imagePath != null ? 'دارد' : '';
+        return t.imagePath != null ? loc('دارد') : '';
       case 'status':
-        return t.draft ? 'پیش‌نویس' : 'ثبت نهایی';
+        return t.draft ? loc('پیش‌نویس') : loc('ثبت نهایی');
     }
     return '';
   }
 
-  static const _labels = {
-    'date': 'تاریخ',
-    'amount': 'مبلغ',
-    'type': 'نوع',
-    'category': 'دسته‌بندی',
-    'account': 'حساب',
-    'merchant': 'فروشنده',
-    'note': 'توضیح',
-    'items': 'اقلام',
-    'recurrence': 'تکرار',
-    'payslip': 'فیش حقوقی',
-    'image': 'تصویر',
-    'status': 'وضعیت',
+  static final _labels = {
+    'date': loc('تاریخ'),
+    'amount': loc('مبلغ'),
+    'type': loc('نوع'),
+    'category': loc('دسته‌بندی'),
+    'account': loc('حساب'),
+    'merchant': loc('فروشنده'),
+    'note': loc('توضیح'),
+    'items': loc('اقلام'),
+    'recurrence': loc('تکرار'),
+    'payslip': loc('فیش حقوقی'),
+    'image': loc('تصویر'),
+    'status': loc('وضعیت'),
   };
   static const _editable = {'date', 'amount', 'category', 'account', 'merchant', 'note'};
 
@@ -7473,7 +7577,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       final pick = await showDialog<Transaction>(
         context: context,
         builder: (ctx) => SimpleDialog(
-          title: const Text('کدام حذف شود؟'),
+          title: Text(loc('کدام حذف شود؟')),
           children: [
             for (final t in [draft, other])
               SimpleDialogOption(
@@ -7522,7 +7626,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
     }
     if (!mounted) return;
     setState(() => busy = false);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ذخیره شد.')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('ذخیره شد.'))));
   }
 
   Future<void> _toTransfer() async {
@@ -7544,14 +7648,14 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
   /// new one - right in the table.
   Future<void> _editField(String field, {required bool draftSide}) async {
     if (!draftSide && _selectedIsTransfer && field != 'note') {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('این یک انتقال بین حساب‌هاست؛ برای تغییر مبلغ، تاریخ یا حساب خود انتقال را ویرایش کن.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(loc('این یک انتقال بین حساب‌هاست؛ برای تغییر مبلغ، تاریخ یا حساب خود انتقال را ویرایش کن.')),
       ));
       return;
     }
     if (!draftSide && _selectedIsRecurring && field == 'date') {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('تاریخ پرداخت‌های تکرارشونده از خود تراکنش تکرارشونده می‌آید و این‌جا تغییر نمی‌کند.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(loc('تاریخ پرداخت‌های تکرارشونده از خود تراکنش تکرارشونده می‌آید و این‌جا تغییر نمی‌کند.')),
       ));
       return;
     }
@@ -7568,13 +7672,13 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
             if (sourceValue.trim().isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.swap_horiz),
-                title: Text(draftSide ? 'استفاده از مقدار تراکنش ثبت‌شده' : 'استفاده از مقدار پیش‌نویس'),
+                title: Text(draftSide ? loc('استفاده از مقدار تراکنش ثبت‌شده') : loc('استفاده از مقدار پیش‌نویس')),
                 subtitle: Text(sourceValue, maxLines: 2, overflow: TextOverflow.ellipsis),
                 onTap: () => Navigator.pop(ctx, 'copy'),
               ),
             ListTile(
               leading: const Icon(Icons.edit_outlined),
-              title: const Text('وارد کردن مقدار جدید'),
+              title: Text(loc('وارد کردن مقدار جدید')),
               onTap: () => Navigator.pop(ctx, 'input'),
             ),
           ],
@@ -7615,7 +7719,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
         final picked = await showDialog<Account>(
           context: context,
           builder: (ctx) => SimpleDialog(
-            title: const Text('حساب'),
+            title: Text(loc('حساب')),
             children: widget.accounts
                 .map((a) => SimpleDialogOption(onPressed: () => Navigator.pop(ctx, a), child: Text('${a.name} (${currencyLabel(a.currency)})')))
                 .toList(),
@@ -7740,7 +7844,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('مقایسه‌ی تراکنش مشابه'),
+          title: Text(loc('مقایسه‌ی تراکنش مشابه')),
           actions: [
             // A quick look at the other transactions; back returns here.
             IconButton(
@@ -7754,19 +7858,19 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
           OutlinedButton(
             onPressed: busy ? null : _keepAsNew,
             style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: Text(widget.confirmedPair ? 'تکراری نیست' : 'تکراری نیست، ثبت شود', textAlign: TextAlign.center),
+            child: Text(widget.confirmedPair ? loc('تکراری نیست') : loc('تکراری نیست، ثبت شود'), textAlign: TextAlign.center),
           ),
           FilledButton(
             onPressed: busy ? null : _deleteDraft,
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: Colors.red.shade600),
-            child: const Text('تکراری است، حذف شود', textAlign: TextAlign.center),
+            child: Text(loc('تکراری است، حذف شود'), textAlign: TextAlign.center),
           ),
         ]),
         body: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             if (widget.candidates.length > 1) ...[
-              const Text('چند تراکنش مشابه پیدا شد؛ یکی را برای مقایسه انتخاب کن:', style: TextStyle(fontSize: 12)),
+              Text(loc('چند تراکنش مشابه پیدا شد؛ یکی را برای مقایسه انتخاب کن:'), style: const TextStyle(fontSize: 12)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -7798,7 +7902,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                         const SizedBox(width: 64),
                         Expanded(
                           child: Text(
-                            widget.confirmedPair ? 'این تراکنش' : 'پیش‌نویس',
+                            widget.confirmedPair ? loc('این تراکنش') : loc('پیش‌نویس'),
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                           ),
                         ),
@@ -7806,10 +7910,10 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                         Expanded(
                           child: Text(
                             _selectedIsTransfer
-                                ? 'انتقال بین حساب‌ها'
+                                ? loc('انتقال بین حساب‌ها')
                                 : _selectedIsRecurring
-                                ? 'پرداخت تکرارشونده'
-                                : (o.draft ? 'پیش‌نویس دیگر' : (widget.confirmedPair ? 'تراکنش مشابه' : 'ثبت‌شده‌ی قبلی')),
+                                ? loc('پرداخت تکرارشونده')
+                                : (o.draft ? loc('پیش‌نویس دیگر') : (widget.confirmedPair ? loc('تراکنش مشابه') : loc('ثبت‌شده‌ی قبلی'))),
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                           ),
                         ),
@@ -7826,14 +7930,14 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                         Expanded(
                           child: FilledButton.tonal(
                             onPressed: busy || editedDraft == null ? null : () => _save(draftSide: true),
-                            child: const Text('ذخیره'),
+                            child: Text(loc('ذخیره')),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: FilledButton.tonal(
                             onPressed: busy || !edited.containsKey(selected) ? null : () => _save(draftSide: false),
-                            child: const Text('ذخیره'),
+                            child: Text(loc('ذخیره')),
                           ),
                         ),
                       ],
@@ -7858,13 +7962,13 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
             if (_selectedIsRecurring) ...[
               const SizedBox(height: 8),
               Text(
-                'تغییر ستون «پرداخت تکرارشونده» روی خود تراکنش تکرارشونده (همه‌ی پرداخت‌هایش) ذخیره می‌شود.',
+                loc('تغییر ستون «پرداخت تکرارشونده» روی خود تراکنش تکرارشونده (همه‌ی پرداخت‌هایش) ذخیره می‌شود.'),
                 style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
               ),
             ],
             const SizedBox(height: 8),
             Text(
-              'ردیف‌های نارنجی با هم فرق دارند. با لمس هر خانه می‌توانی مقدار ستون دیگر را بگذاری یا مقدار تازه وارد کنی.',
+              loc('ردیف‌های نارنجی با هم فرق دارند. با لمس هر خانه می‌توانی مقدار ستون دیگر را بگذاری یا مقدار تازه وارد کنی.'),
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
             ),
             if (!widget.confirmedPair) const SizedBox(height: 12),
@@ -7872,7 +7976,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
               OutlinedButton.icon(
               onPressed: busy ? null : _toTransfer,
               icon: const Icon(Icons.swap_horiz),
-              label: const Text('این پیش‌نویس انتقال بین حساب‌هاست'),
+              label: Text(loc('این پیش‌نویس انتقال بین حساب‌هاست')),
             ),
           ],
         ),
@@ -7919,7 +8023,7 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
   String _cur(String accountId) => accounts.where((a) => a.id == accountId).firstOrNull?.currency ?? 'IRT';
 
   String _name(Transaction? t) {
-    if (t == null) return 'تراکنش تکرارشونده‌ی حذف‌شده';
+    if (t == null) return loc('تراکنش تکرارشونده‌ی حذف‌شده');
     if (t.merchant.trim().isNotEmpty) return t.merchant.trim();
     final c = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? '';
     return t.note.trim().isNotEmpty ? '$c • ${t.note.trim()}' : c;
@@ -7929,14 +8033,13 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('برگرداندن به پیش‌نویس‌ها'),
-        content: const Text(
-          'این تراکنش به پیش‌نویس‌های صورتحساب بانک برمی‌گردد. اگر نباید حذف می‌شد، یادگیری این پرداخت از نو شروع می‌شود '
-          'و تا دو تأیید دیگر خودکار حذف نمی‌کند.',
+        title: Text(loc('برگرداندن به پیش‌نویس‌ها')),
+        content: Text(
+          loc('این تراکنش به پیش‌نویس‌های صورتحساب بانک برمی‌گردد. اگر نباید حذف می‌شد، یادگیری این پرداخت از نو شروع می‌شود و تا دو تأیید دیگر خودکار حذف نمی‌کند.'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('برگرداندن')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('برگرداندن'))),
         ],
       ),
     );
@@ -7957,7 +8060,7 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final grey = TextStyle(fontSize: 12, color: Colors.grey.shade600);
     return Scaffold(
-      appBar: AppBar(title: const Text('حذف خودکار تکراری‌ها')),
+      appBar: AppBar(title: Text(loc('حذف خودکار تکراری‌ها'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -7968,26 +8071,23 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
                 await LearnedDuplicates.setEnabled(v);
                 setState(() => enabled = v);
               },
-              title: const Text('حذف خودکار پرداخت‌های تکرارشونده‌ی تکراری'),
-              subtitle: const Text(
-                'وقتی تراکنش بانکیِ یک پرداخت تکرارشونده را دو ماه (در صفحه‌ی مقایسه) تکراری تشخیص بدهی و حذف کنی، '
-                'از آن به بعد اگر دقیقاً با همان حساب، همان مبلغ و همان شرح و حداکثر ۳ روز فاصله تا سررسید بیاید، '
-                'دیگر به پیش‌نویس‌ها اضافه نمی‌شود. هر مورد ۶۰ روز این‌جا قابل برگرداندن است.',
-                style: TextStyle(fontSize: 12),
+              title: Text(loc('حذف خودکار پرداخت‌های تکرارشونده‌ی تکراری')),
+              subtitle: Text(
+                loc('وقتی تراکنش بانکیِ یک پرداخت تکرارشونده را دو ماه (در صفحه‌ی مقایسه) تکراری تشخیص بدهی و حذف کنی، از آن به بعد اگر دقیقاً با همان حساب، همان مبلغ و همان شرح و حداکثر ۳ روز فاصله تا سررسید بیاید، دیگر به پیش‌نویس‌ها اضافه نمی‌شود. هر مورد ۶۰ روز این‌جا قابل برگرداندن است.'),
+                style: const TextStyle(fontSize: 12),
               ),
             ),
           ),
           const SizedBox(height: 12),
-          Text('حذف‌شده‌های خودکار (${persianDigits('${deleted.length}')})', style: Theme.of(context).textTheme.titleSmall),
+          Text(locf('حذف‌شده‌های خودکار ({0})', [(persianDigits('${deleted.length}'))]), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 6),
-          if (deleted.isEmpty) Text('هنوز موردی خودکار حذف نشده.', style: grey),
+          if (deleted.isEmpty) Text(loc('هنوز موردی خودکار حذف نشده.'), style: grey),
           for (final e in deleted)
             Card(
               child: ListTile(
                 title: Text(_name(all.where((t) => t.id == e.seriesId).firstOrNull)),
                 subtitle: Text(
-                  'بانک: ${formatDate(e.t.date)} • سررسید: ${formatDate(e.paymentDate)}\n'
-                  '${e.t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim()}',
+                  locf('بانک: {0} • سررسید: {1}\n{2}', [(formatDate(e.t.date)), (formatDate(e.paymentDate)), (e.t.note.replaceFirst('از صورتحساب بانکی خوانده شده است.', '').trim())]),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -8001,7 +8101,7 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
                       onTap: () => _restore(e),
                       child: Padding(
                         padding: const EdgeInsets.only(top: 4),
-                        child: Text('برگرداندن', style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
+                        child: Text(loc('برگرداندن'), style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
                       ),
                     ),
                   ],
@@ -8009,9 +8109,9 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
               ),
             ),
           const SizedBox(height: 16),
-          Text('پرداخت‌های یادگرفته‌شده', style: Theme.of(context).textTheme.titleSmall),
+          Text(loc('پرداخت‌های یادگرفته‌شده'), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 6),
-          if (rules.isEmpty) Text('هنوز چیزی یاد گرفته نشده.', style: grey),
+          if (rules.isEmpty) Text(loc('هنوز چیزی یاد گرفته نشده.'), style: grey),
           for (final r in rules)
             Card(
               child: ListTile(
@@ -8026,7 +8126,7 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline),
-                  tooltip: 'فراموش کردن',
+                  tooltip: loc('فراموش کردن'),
                   onPressed: () => _deleteRule(r),
                 ),
               ),
@@ -8067,7 +8167,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
 
   String categoryName(String id) {
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? loc('بدون‌دسته') : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -8105,7 +8205,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
     return Scaffold(
       appBar: AppBar(title: Text(tr('recurring_transactions'))),
       body: tx.isEmpty
-          ? const Center(child: Text('تراکنش تکرارشونده‌ای وجود ندارد.'))
+          ? Center(child: Text(loc('تراکنش تکرارشونده‌ای وجود ندارد.')))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: tx.map((t) {
@@ -8122,8 +8222,8 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                   confirmDismiss: (_) => showDialog<bool>(
                     context: context,
                     builder: (ctx) => AlertDialog(
-                      title: const Text('حذف تراکنش تکرارشونده'),
-                      content: const Text('این تراکنش تکرارشونده حذف شود؟'),
+                      title: Text(loc('حذف تراکنش تکرارشونده')),
+                      content: Text(loc('این تراکنش تکرارشونده حذف شود؟')),
                       actions: [
                         TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
                         FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -8205,7 +8305,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
 
   String categoryName(String id) {
     final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+    return m.isEmpty ? loc('بدون‌دسته') : m.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -8235,14 +8335,14 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('انتخاب ماه'),
+          title: Text(loc('انتخاب ماه')),
           content: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Expanded(
                 child: DropdownButtonFormField<int>(
                   initialValue: m,
-                  decoration: const InputDecoration(labelText: 'ماه'),
+                  decoration: InputDecoration(labelText: loc('ماه')),
                   items: List.generate(12, (i) => i + 1).map((mo) => DropdownMenuItem(value: mo, child: Text(monthNames[mo - 1]))).toList(),
                   onChanged: (v) => setLocal(() => m = v ?? m),
                 ),
@@ -8251,7 +8351,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
               Expanded(
                 child: DropdownButtonFormField<int>(
                   initialValue: y,
-                  decoration: const InputDecoration(labelText: 'سال'),
+                  decoration: InputDecoration(labelText: loc('سال')),
                   items: years.map((yr) => DropdownMenuItem(value: yr, child: Text(ltr(persianDigits('$yr'))))).toList(),
                   onChanged: (v) => setLocal(() => y = v ?? y),
                 ),
@@ -8366,13 +8466,13 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
     final maxChart = chartMonths.fold(0.0, (m, c) => c.expense > m ? c.expense : m);
 
     final rangeLabel = switch (range) {
-      _UpcomingRange.endOfThisMonth => 'تا آخر ${calendarMonthOf(today).name}',
+      _UpcomingRange.endOfThisMonth => locf('تا آخر {0}', [(calendarMonthOf(today).name)]),
       _UpcomingRange.nextMonth => '${calendarMonthOf(today, 1).name} ${calendarMonthOf(today, 1).yearText}',
       _UpcomingRange.custom => '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}',
     };
     final customLabel = range == _UpcomingRange.custom
         ? '${calendarMonthOf(customMonth).name} ${calendarMonthOf(customMonth).yearText}'
-        : 'ماه دلخواه';
+        : loc('ماه دلخواه');
 
     return Scaffold(
       appBar: AppBar(
@@ -8380,7 +8480,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
         actions: [
           IconButton(
             icon: Icon(showChart ? Icons.bar_chart : Icons.bar_chart_outlined),
-            tooltip: showChart ? 'پنهان کردن نمودار' : 'نمایش نمودار',
+            tooltip: showChart ? loc('پنهان کردن نمودار') : loc('نمایش نمودار'),
             isSelected: showChart,
             onPressed: () => setState(() => showChart = !showChart),
           ),
@@ -8397,14 +8497,14 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('بازه‌ی زمانی', style: Theme.of(context).textTheme.labelLarge),
+                  Text(loc('بازه‌ی زمانی'), style: Theme.of(context).textTheme.labelLarge),
                   const SizedBox(height: 8),
                   SegmentedButton<_UpcomingRange>(
                     showSelectedIcon: false,
                     style: const ButtonStyle(visualDensity: VisualDensity.compact),
                     segments: [
-                      const ButtonSegment(value: _UpcomingRange.endOfThisMonth, label: Text('تا آخر این ماه')),
-                      const ButtonSegment(value: _UpcomingRange.nextMonth, label: Text('ماه بعد')),
+                      ButtonSegment(value: _UpcomingRange.endOfThisMonth, label: Text(loc('تا آخر این ماه'))),
+                      ButtonSegment(value: _UpcomingRange.nextMonth, label: Text(loc('ماه بعد'))),
                       ButtonSegment(
                         value: _UpcomingRange.custom,
                         icon: const Icon(Icons.calendar_month_outlined, size: 16),
@@ -8425,10 +8525,10 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                   DropdownButtonFormField<String?>(
                     initialValue: accountFilter,
                     isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'حساب',
-                      prefixIcon: Icon(Icons.account_balance_wallet_outlined),
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: loc('حساب'),
+                      prefixIcon: const Icon(Icons.account_balance_wallet_outlined),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                     items: [
@@ -8454,27 +8554,27 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                       children: [
                         IconButton(
                           icon: const Icon(Icons.chevron_left, size: 20),
-                          tooltip: 'یک ماه بعد',
+                          tooltip: loc('یک ماه بعد'),
                           onPressed: () => setState(() => chartMonthOffset++),
                           visualDensity: VisualDensity.compact,
                         ),
                         Expanded(
                           child: Text(
-                            'کل هزینه‌های پیش‌رو و تکرارشونده‌ی هر ماه',
+                            loc('کل هزینه‌های پیش‌رو و تکرارشونده‌ی هر ماه'),
                             style: Theme.of(context).textTheme.titleSmall,
                             textAlign: TextAlign.center,
                           ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.chevron_right, size: 20),
-                          tooltip: 'یک ماه قبل',
+                          tooltip: loc('یک ماه قبل'),
                           onPressed: () => setState(() => chartMonthOffset--),
                           visualDensity: VisualDensity.compact,
                         ),
                       ],
                     ),
                     Text(
-                      'همه‌ی پرداخت‌های تکرارشونده‌ی هر ماه (در ماه جاری کل ماه، حتی موارد پرداخت‌شده) به‌علاوه‌ی تراکنش‌های تاریخ‌دار آینده',
+                      loc('همه‌ی پرداخت‌های تکرارشونده‌ی هر ماه (در ماه جاری کل ماه، حتی موارد پرداخت‌شده) به‌علاوه‌ی تراکنش‌های تاریخ‌دار آینده'),
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                       textAlign: TextAlign.center,
                     ),
@@ -8482,7 +8582,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                     SizedBox(
                       height: 200,
                       child: maxChart <= 0
-                          ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
+                          ? Center(child: Text(loc('داده‌ای برای نمایش نیست.'), style: const TextStyle(color: Colors.grey)))
                           : Row(
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
@@ -8533,7 +8633,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
             Card(
               child: ListTile(
                 leading: const Icon(Icons.summarize_outlined),
-                title: Text('جمع هزینه‌های پیش‌رو $rangeLabel', style: const TextStyle(fontWeight: FontWeight.bold)),
+                title: Text(locf('جمع هزینه‌های پیش‌رو {0}', [rangeLabel]), style: const TextStyle(fontWeight: FontWeight.bold)),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: totalsByCurrency.entries
@@ -8545,9 +8645,9 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
           ],
           const SizedBox(height: 8),
           if (entries.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: Center(child: Text('در این بازه هزینه‌ی پیش‌رویی وجود ندارد.')),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 32),
+              child: Center(child: Text(loc('در این بازه هزینه‌ی پیش‌رویی وجود ندارد.'))),
             )
           else
             ...entries.map((e) => _entryCard(e, today)),
@@ -8594,7 +8694,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(daysLeft == 0 ? 'امروز' : '${formatDate(e.date)} • ${ltr(persianDigits('$daysLeft'))} روز دیگر'),
+            Text(daysLeft == 0 ? loc('امروز') : locf('{0} • {1} روز دیگر', [(formatDate(e.date)), (ltr(persianDigits('$daysLeft')))])),
             if (last != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
@@ -8603,8 +8703,8 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                   decoration: BoxDecoration(color: Colors.teal.shade600, borderRadius: BorderRadius.circular(10)),
                   child: Text(
                     e.t.installments != null
-                        ? 'آخرین قسط (${persianDigits('${last.n}')} از ${persianDigits('${last.total}')}) - از ماه بعد تمام است'
-                        : 'آخرین پرداخت - از ماه بعد تمام است',
+                        ? locf('آخرین قسط ({0} از {1}) - از ماه بعد تمام است', [(persianDigits('${last.n}')), (persianDigits('${last.total}'))])
+                        : loc('آخرین پرداخت - از ماه بعد تمام است'),
                     style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -8657,7 +8757,13 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
 
   Future<void> _load() async {
     final all = await Store.loadTransactions();
-    tx = all.where((t) => t.categoryId == '_uncategorized_' || t.note.contains('دسته‌بندی قبلی:')).toList()
+    // The note is written in the app language at the time of the deletion.
+    bool movedByDelete(String note) {
+      final n = note.toLowerCase();
+      return n.contains('دسته‌بندی قبلی:') || n.contains('previous category:') || n.contains('vorherige kategorie:');
+    }
+
+    tx = all.where((t) => t.categoryId == '_uncategorized_' || movedByDelete(t.note)).toList()
       ..sort((a, b) => b.date.compareTo(a.date));
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
@@ -8665,9 +8771,9 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
   }
 
   String categoryName(String id) {
-    if (id == '_uncategorized_') return 'بدون‌دسته';
+    if (id == '_uncategorized_') return loc('بدون‌دسته');
     final c = categories.where((c) => c.id == id).toList();
-    return c.isEmpty ? 'بدون‌دسته' : c.first.name;
+    return c.isEmpty ? loc('بدون‌دسته') : c.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -8695,7 +8801,7 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
     return Scaffold(
       appBar: AppBar(title: Text(tr('affected_by_category_delete'))),
       body: tx.isEmpty
-          ? const Center(child: Text('تراکنشی که تحت‌تأثیر حذف دسته‌بندی قرار گرفته باشد وجود ندارد.'))
+          ? Center(child: Text(loc('تراکنشی که تحت‌تأثیر حذف دسته‌بندی قرار گرفته باشد وجود ندارد.')))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: tx
@@ -8737,10 +8843,10 @@ enum AutoBackupFrequency { off, weekly, monthly, quarterly }
 
 extension AutoBackupFrequencyX on AutoBackupFrequency {
   String get label => switch (this) {
-        AutoBackupFrequency.off => 'خاموش',
-        AutoBackupFrequency.weekly => 'هفتگی',
-        AutoBackupFrequency.monthly => 'ماهانه',
-        AutoBackupFrequency.quarterly => 'فصلی (هر ۳ ماه)',
+        AutoBackupFrequency.off => loc('خاموش'),
+        AutoBackupFrequency.weekly => loc('هفتگی'),
+        AutoBackupFrequency.monthly => loc('ماهانه'),
+        AutoBackupFrequency.quarterly => loc('فصلی (هر ۳ ماه)'),
       };
   int get days => switch (this) {
         AutoBackupFrequency.off => 0,
@@ -8795,12 +8901,12 @@ Future<String> _buildExcelFile() async {
   final categories = await Store.loadCategories();
   final accounts = await Store.loadAccounts();
   final wb = xls.Excel.createExcel();
-  final sheet = wb['تراکنش‌ها'];
+  final sheet = wb[loc('تراکنش‌ها')];
   if (wb.tables.containsKey('Sheet1')) wb.delete('Sheet1');
 
   String categoryName(String id) {
     final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+    return m.isEmpty ? loc('بدون‌دسته') : m.first.name;
   }
 
   String accountName(String id) {
@@ -8814,31 +8920,31 @@ Future<String> _buildExcelFile() async {
   }
 
   sheet.appendRow([
-    xls.TextCellValue('تاریخ'),
-    xls.TextCellValue('نوع'),
-    xls.TextCellValue('دسته‌بندی'),
-    xls.TextCellValue('حساب'),
-    xls.TextCellValue('ارز'),
-    xls.TextCellValue('مبلغ'),
-    xls.TextCellValue('توضیحات'),
-    xls.TextCellValue('تکرارشونده'),
-    xls.TextCellValue('پیش‌نویس'),
+    xls.TextCellValue(loc('تاریخ')),
+    xls.TextCellValue(loc('نوع')),
+    xls.TextCellValue(loc('دسته‌بندی')),
+    xls.TextCellValue(loc('حساب')),
+    xls.TextCellValue(loc('ارز')),
+    xls.TextCellValue(loc('مبلغ')),
+    xls.TextCellValue(loc('توضیحات')),
+    xls.TextCellValue(loc('تکرارشونده')),
+    xls.TextCellValue(loc('پیش‌نویس')),
   ]);
   for (final t in tx) {
     sheet.appendRow([
       xls.TextCellValue(ltr(DateFormat('yyyy-MM-dd').format(t.date))),
-      xls.TextCellValue(t.type == TxType.income ? 'درآمد' : 'هزینه'),
+      xls.TextCellValue(t.type == TxType.income ? loc('درآمد') : loc('هزینه')),
       xls.TextCellValue(categoryName(t.categoryId)),
       xls.TextCellValue(accountName(t.accountId)),
       xls.TextCellValue(currencyOf(t.accountId)),
       xls.DoubleCellValue(t.amount),
       xls.TextCellValue(t.note),
-      xls.TextCellValue(t.isRecurring ? 'بله' : 'خیر'),
-      xls.TextCellValue(t.draft ? 'بله' : 'خیر'),
+      xls.TextCellValue(t.isRecurring ? loc('بله') : loc('خیر')),
+      xls.TextCellValue(t.draft ? loc('بله') : loc('خیر')),
     ]);
   }
   final bytes = wb.encode();
-  if (bytes == null) throw Exception('ساخت فایل اکسل ممکن نشد.');
+  if (bytes == null) throw Exception(loc('ساخت فایل اکسل ممکن نشد.'));
   final dir = await getTemporaryDirectory();
   final path = '${dir.path}/money_management_export_${DateTime.now().millisecondsSinceEpoch}.xlsx';
   await File(path).writeAsBytes(bytes);
@@ -8951,7 +9057,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
           'this person\'s recent monthly averages (in $primaryCurrency): income ${avg.income.toStringAsFixed(0)}, '
           'expenses ${avg.expense.toStringAsFixed(0)}, monthly surplus ${surplus.toStringAsFixed(0)}, and their '
           'savings goals with current progress:\n$goalLines\n\n'
-          'Write a short (120-180 words), warm, practical note in Persian. Cover, at a general/educational level '
+          'Write a short (120-180 words), warm, practical note in $aiAnswerLanguage. Cover, at a general/educational level '
           'only: (1) a rough split for the surplus between an emergency buffer, their stated goals, and general '
           'long-term investing (e.g. broad index funds) - as a starting point to think about, not a directive; '
           '(2) one habit suggestion (like automating a monthly transfer); (3) a closing reminder that this is '
@@ -8963,7 +9069,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
     } on GeminiException catch (e) {
       setState(() => errorMessage = e.friendlyMessage);
     } catch (e) {
-      setState(() => errorMessage = 'خطای غیرمنتظره: $e');
+      setState(() => errorMessage = locf('خطای غیرمنتظره: {0}', [e]));
     } finally {
       if (mounted) setState(() => requesting = false);
     }
@@ -8986,12 +9092,12 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('میانگین ۳ ماه اخیر', style: Theme.of(context).textTheme.titleMedium),
+                  Text(loc('میانگین ۳ ماه اخیر'), style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('میانگین درآمد'),
+                      Text(loc('میانگین درآمد')),
                       Text(ltr(formatMoney(avg.income, currency)), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
                     ],
                   ),
@@ -8999,7 +9105,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('میانگین هزینه'),
+                      Text(loc('میانگین هزینه')),
                       Text(ltr(formatMoney(avg.expense, currency)), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
                     ],
                   ),
@@ -9007,7 +9113,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('مازاد قابل پس‌انداز', style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text(loc('مازاد قابل پس‌انداز'), style: const TextStyle(fontWeight: FontWeight.bold)),
                       Text(
                         ltr(formatMoney(surplus, currency)),
                         style: TextStyle(fontWeight: FontWeight.bold, color: surplus >= 0 ? Colors.indigo : Colors.red),
@@ -9026,13 +9132,10 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('یک نقطه‌ی شروع ساده', style: Theme.of(context).textTheme.titleMedium),
+                    Text(loc('یک نقطه‌ی شروع ساده'), style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 8),
                     Text(
-                      'با مازاد ماهانه‌ی حدود ${ltr(formatMoney(surplus, currency))}، یک شروع رایج اینه: '
-                      'حدود نیمی رو برای اهداف نزدیک‌مدت (مثل چیزهایی که توی «اهداف پس‌انداز» تعریف کردی) '
-                      'کنار بذاری، و باقی رو به‌صورت ماهانه و خودکار وارد یه حساب سرمایه‌گذاری بلندمدت کنی. '
-                      'این فقط یه نقطه‌ی شروعه، نه یه قانون ثابت.',
+                      locf('با مازاد ماهانه‌ی حدود {0}، یک شروع رایج اینه: حدود نیمی رو برای اهداف نزدیک‌مدت (مثل چیزهایی که توی «اهداف پس‌انداز» تعریف کردی) کنار بذاری، و باقی رو به‌صورت ماهانه و خودکار وارد یه حساب سرمایه‌گذاری بلندمدت کنی. این فقط یه نقطه‌ی شروعه، نه یه قانون ثابت.', [(ltr(formatMoney(surplus, currency)))]),
                       style: const TextStyle(fontSize: 13, height: 1.6),
                     ),
                   ],
@@ -9040,12 +9143,12 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
               ),
             )
           else
-            const Card(
+            Card(
               child: Padding(
-                padding: EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
                 child: Text(
-                  'در ۳ ماه اخیر، میانگین هزینه‌هات از درآمدت بیشتر بوده. قبل از فکر به پس‌انداز/سرمایه‌گذاری، شاید بهتر باشه اول روی کم‌کردن هزینه‌ها یا افزایش درآمد تمرکز کنی.',
-                  style: TextStyle(fontSize: 13, height: 1.6),
+                  loc('در ۳ ماه اخیر، میانگین هزینه‌هات از درآمدت بیشتر بوده. قبل از فکر به پس‌انداز/سرمایه‌گذاری، شاید بهتر باشه اول روی کم‌کردن هزینه‌ها یا افزایش درآمد تمرکز کنی.'),
+                  style: const TextStyle(fontSize: 13, height: 1.6),
                 ),
               ),
             ),
@@ -9055,7 +9158,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
             icon: requesting
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.auto_awesome),
-            label: Text(requesting ? 'در حال دریافت...' : 'پیشنهاد هوشمند‌تر (با هوش مصنوعی)'),
+            label: Text(requesting ? loc('در حال دریافت...') : loc('پیشنهاد هوشمند‌تر (با هوش مصنوعی)')),
           ),
           if (errorMessage != null)
             Padding(
@@ -9080,7 +9183,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
             ),
           const SizedBox(height: 8),
           Text(
-            'این صفحه اطلاعات آموزشی و کلی ارائه می‌دهد و جایگزین مشاوره‌ی مالی رسمی نیست.',
+            loc('این صفحه اطلاعات آموزشی و کلی ارائه می‌دهد و جایگزین مشاوره‌ی مالی رسمی نیست.'),
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
           ),
         ],
@@ -9164,7 +9267,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
           }
         }
         return AlertDialog(
-          title: const Text('ارز مرجع و نرخ تبدیل'),
+          title: Text(loc('ارز مرجع و نرخ تبدیل')),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -9172,15 +9275,15 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
               children: [
                 DropdownButtonFormField<String>(
                   initialValue: localBase,
-                  decoration: const InputDecoration(labelText: 'ارز مرجع'),
+                  decoration: InputDecoration(labelText: loc('ارز مرجع')),
                   items: kCurrencies.map((c) => DropdownMenuItem(value: c, child: Text(currencyLabel(c)))).toList(),
                   onChanged: (v) => setLocal(() => localBase = v ?? localBase),
                 ),
                 const SizedBox(height: 12),
                 if (ctrls.isEmpty)
-                  const Text('حساب دیگری با ارز متفاوت نداری.', style: TextStyle(fontSize: 12, color: Colors.grey))
+                  Text(loc('حساب دیگری با ارز متفاوت نداری.'), style: const TextStyle(fontSize: 12, color: Colors.grey))
                 else ...[
-                  const Text('نرخ تبدیل هر واحد به ارز مرجع:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  Text(loc('نرخ تبدیل هر واحد به ارز مرجع:'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
                   const SizedBox(height: 8),
                   ...ctrls.entries
                       .where((e) => e.key != localBase)
@@ -9189,7 +9292,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                             child: TextField(
                               controller: e.value,
                               keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-                              decoration: InputDecoration(labelText: '۱ ${currencyLabel(e.key)} = ? ${currencyLabel(localBase)}', isDense: true),
+                              decoration: InputDecoration(labelText: locf('۱ {0} = ? {1}', [(currencyLabel(e.key)), (currencyLabel(localBase))]), isDense: true),
                             ),
                           )),
                 ],
@@ -9238,13 +9341,12 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('روند ارزش خالص دارایی'),
+        title: Text(loc('روند ارزش خالص دارایی')),
         actions: [
           infoButton(
             context,
-            'روند ارزش خالص دارایی',
-            'ارزش خالص دارایی یعنی مجموع موجودی همه‌ی حساب‌هات با هم. این نمودار این عدد رو برای ۱۲ ماه اخیر نشون می‌ده تا ببینی کل دارایی‌ت در طول زمان داره بیشتر می شه یا کمتر.\n\n'
-            'اگه چند حساب با ارزهای مختلف داری، می‌تونی نرخ تبدیل دستی تنظیم کنی (دکمه‌ی تنظیمات) تا همه با هم جمع بسته بشن.',
+            loc('روند ارزش خالص دارایی'),
+            loc('ارزش خالص دارایی یعنی مجموع موجودی همه‌ی حساب‌هات با هم. این نمودار این عدد رو برای ۱۲ ماه اخیر نشون می‌ده تا ببینی کل دارایی‌ت در طول زمان داره بیشتر می شه یا کمتر.\n\nاگه چند حساب با ارزهای مختلف داری، می‌تونی نرخ تبدیل دستی تنظیم کنی (دکمه‌ی تنظیمات) تا همه با هم جمع بسته بشن.'),
           ),
           IconButton(icon: const Icon(Icons.settings_outlined), onPressed: _editSettings),
         ],
@@ -9258,7 +9360,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('ارزش خالص فعلی (تقریبی، بر اساس ${currencyLabel(baseCurrency)})', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  Text(locf('ارزش خالص فعلی (تقریبی، بر اساس {0})', [(currencyLabel(baseCurrency))]), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                   const SizedBox(height: 4),
                   Text(
                     ltr(formatMoney(current, baseCurrency)),
@@ -9279,7 +9381,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'برای ${missingRates.join('، ')} نرخ تبدیل تنظیم نشده (فعلاً ۱:۱ حساب شده). برای تنظیم بزن.',
+                        locf('برای {0} نرخ تبدیل تنظیم نشده (فعلاً ۱:۱ حساب شده). برای تنظیم بزن.', [(missingRates.join(loc('، ')))]),
                         style: const TextStyle(fontSize: 11, color: Colors.grey, decoration: TextDecoration.underline),
                       ),
                     ),
@@ -9294,7 +9396,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
               child: SizedBox(
                 height: 220,
                 child: maxVal <= 0
-                    ? const Center(child: Text('داده‌ای برای نمایش نیست.', style: TextStyle(color: Colors.grey)))
+                    ? Center(child: Text(loc('داده‌ای برای نمایش نیست.'), style: const TextStyle(color: Colors.grey)))
                     : Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -9408,15 +9510,15 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
     final result = await showDialog<double?>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('تخصیص ${c.name}'),
+        title: Text(locf('تخصیص {0}', [(c.name)])),
         content: TextField(
           controller: ctrl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-          decoration: InputDecoration(labelText: 'مبلغ تخصیص‌یافته در ماه (${currencyLabel(primaryCurrency)})'),
+          decoration: InputDecoration(labelText: locf('مبلغ تخصیص‌یافته در ماه ({0})', [(currencyLabel(primaryCurrency))])),
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, 0.0), child: const Text('صفر کن')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 0.0), child: Text(loc('صفر کن'))),
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, parseAmount(ctrl.text)), child: Text(tr('save'))),
         ],
@@ -9445,8 +9547,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
           infoButton(
             context,
             tr('zero_based_budget_title'),
-            'روش بودجه‌بندی صفر-پایه یعنی هر تومان/ریالی که درآمد داری، از قبل به یه دسته‌بندی یا هدف مشخص اختصاص بدی، طوری که چیزی بدون برنامه نمونه.\n\n'
-            'این صفحه درآمد این ماه رو با مجموع تخصیص‌هایی که برای دسته‌بندی‌های هزینه گذاشتی مقایسه می‌کنه؛ اگه چیزی «تخصیص‌نیافته» بمونه یعنی هنوز مشخص نکردی اون بخش از پول قراره کجا بره.',
+            loc('روش بودجه‌بندی صفر-پایه یعنی هر تومان/ریالی که درآمد داری، از قبل به یه دسته‌بندی یا هدف مشخص اختصاص بدی، طوری که چیزی بدون برنامه نمونه.\n\nاین صفحه درآمد این ماه رو با مجموع تخصیص‌هایی که برای دسته‌بندی‌های هزینه گذاشتی مقایسه می‌کنه؛ اگه چیزی «تخصیص‌نیافته» بمونه یعنی هنوز مشخص نکردی اون بخش از پول قراره کجا بره.'),
           ),
         ],
       ),
@@ -9461,7 +9562,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(incomeIsEstimate ? 'درآمد این ماه (برآورد: میانگین ۳ ماه قبل)' : 'درآمد این ماه'),
+                      Expanded(child: Text(incomeIsEstimate ? loc('درآمد این ماه (برآورد: میانگین ۳ ماه قبل)') : loc('درآمد این ماه'))),
                       Text(ltr(formatMoney(income, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
                     ],
                   ),
@@ -9469,7 +9570,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('تخصیص‌یافته'),
+                      Text(loc('تخصیص‌یافته')),
                       Text(ltr(formatMoney(allocated, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
                     ],
                   ),
@@ -9478,7 +9579,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        unallocated.abs() < 0.01 ? 'همه‌چیز تخصیص یافته' : (unallocated > 0 ? 'هنوز تخصیص‌نیافته' : 'بیش از درآمد تخصیص یافته'),
+                        unallocated.abs() < 0.01 ? loc('همه‌چیز تخصیص یافته') : (unallocated > 0 ? loc('هنوز تخصیص‌نیافته') : loc('بیش از درآمد تخصیص یافته')),
                         style: TextStyle(fontWeight: FontWeight.bold, color: unallocatedColor),
                       ),
                       Text(
@@ -9521,13 +9622,13 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
                                 ),
                                 const SizedBox(height: 3),
                                 Text(
-                                  '${formatMoney(spend, primaryCurrency)} از ${formatMoney(alloc, primaryCurrency)} خرج شده',
+                                  locf('{0} از {1} خرج شده', [(formatMoney(spend, primaryCurrency)), (formatMoney(alloc, primaryCurrency))]),
                                   style: const TextStyle(fontSize: 11),
                                 ),
                               ],
                             ),
                           )
-                        : const Text('تخصیصی داده نشده', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                        : Text(loc('تخصیصی داده نشده'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
                     trailing: const Icon(Icons.edit_outlined, size: 18),
                     onTap: () => _editAllocation(c),
                   ),
@@ -9582,18 +9683,18 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
     final result = await showDialog<double?>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('هدف هزینه‌ی ${c.name}'),
+        title: Text(locf('هدف هزینه‌ی {0}', [(c.name)])),
         content: TextField(
           controller: ctrl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-          decoration: InputDecoration(labelText: 'مبلغ هدف در ماه (${currencyLabel(mainCurrency)})', hintText: 'مثلاً ۲۰۰,۰۰۰'),
+          decoration: InputDecoration(labelText: locf('مبلغ هدف در ماه ({0})', [(currencyLabel(mainCurrency))]), hintText: loc('مثلاً ۲۰۰,۰۰۰')),
           autofocus: true,
         ),
         actions: [
           if (existing.isNotEmpty)
             TextButton(
               onPressed: () => Navigator.pop(ctx, 0.0),
-              child: const Text('حذف هدف', style: TextStyle(color: Colors.red)),
+              child: Text(loc('حذف هدف'), style: const TextStyle(color: Colors.red)),
             ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(
@@ -9622,8 +9723,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
           infoButton(
             context,
             tr('budget_goals'),
-            'برای هر دسته‌بندی هزینه یه سقف ماهانه تعیین می‌کنی. برنامه خرج این ماه رو با اون سقف مقایسه می‌کنه و وقتی نزدیک یا رد شده باشی، هشدار می‌ده.\n\n'
-            'این ابزار مناسبه اگه می‌خوای جلوی خرج زیاد توی یه دسته‌بندی خاص (مثلاً خوراک یا خرید) رو بگیری.',
+            loc('برای هر دسته‌بندی هزینه یه سقف ماهانه تعیین می‌کنی. برنامه خرج این ماه رو با اون سقف مقایسه می‌کنه و وقتی نزدیک یا رد شده باشی، هشدار می‌ده.\n\nاین ابزار مناسبه اگه می‌خوای جلوی خرج زیاد توی یه دسته‌بندی خاص (مثلاً خوراک یا خرید) رو بگیری.'),
           ),
         ],
       ),
@@ -9635,7 +9735,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(
-                'هدف‌ها به واحد حساب اصلی (${currencyLabel(mainCurrency)}) هستند؛ هزینه‌های حساب‌هایی با واحد دیگر با نرخ روز همان حساب تبدیل و حساب می‌شوند.',
+                locf('هدف‌ها به واحد حساب اصلی ({0}) هستند؛ هزینه‌های حساب‌هایی با واحد دیگر با نرخ روز همان حساب تبدیل و حساب می‌شوند.', [(currencyLabel(mainCurrency))]),
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
             );
@@ -9651,7 +9751,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
               leading: Icon(iconForCategory(c, categories)),
               title: Text(c.name),
               subtitle: goal == null
-                  ? const Text('هدفی تنظیم نشده', style: TextStyle(color: Colors.grey, fontSize: 12))
+                  ? Text(loc('هدفی تنظیم نشده'), style: const TextStyle(color: Colors.grey, fontSize: 12))
                   : Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Column(
@@ -9668,7 +9768,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${formatMoney(spend, mainCurrency)} از ${formatMoney(goal.monthlyAmount, mainCurrency)} (${ltr(persianDigits('${(ratio * 100).round()}%'))})',
+                            locf('{0} از {1} ({2})', [(formatMoney(spend, mainCurrency)), (formatMoney(goal.monthlyAmount, mainCurrency)), (ltr(persianDigits('${(ratio * 100).round()}%')))]),
                             style: TextStyle(fontSize: 12, color: color),
                           ),
                         ],
@@ -9741,23 +9841,23 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
         return AlertDialog(
-          title: Text(existing == null ? 'هدف پس‌انداز جدید' : 'ویرایش هدف'),
+          title: Text(existing == null ? loc('هدف پس‌انداز جدید') : loc('ویرایش هدف')),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام هدف (مثلاً خرید ماشین)'), autofocus: true),
+                TextField(controller: nameCtrl, decoration: InputDecoration(labelText: loc('نام هدف (مثلاً خرید ماشین)')), autofocus: true),
                 const SizedBox(height: 12),
                 TextField(
                   controller: amountCtrl,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: const [AmountInputFormatter()],
-                  decoration: InputDecoration(labelText: 'مبلغ هدف (${currencyLabel(mainCurrency)})'),
+                  decoration: InputDecoration(labelText: locf('مبلغ هدف ({0})', [(currencyLabel(mainCurrency))])),
                 ),
                 const SizedBox(height: 12),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(targetDate == null ? 'تاریخ هدف (اختیاری)' : formatDate(targetDate!)),
+                  title: Text(targetDate == null ? loc('تاریخ هدف (اختیاری)') : formatDate(targetDate!)),
                   trailing: const Icon(Icons.calendar_today, size: 18),
                   onTap: () async {
                     final picked = await showAppDatePicker(
@@ -9775,7 +9875,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
           ),
           actions: [
             if (existing != null)
-              TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('حذف هدف', style: TextStyle(color: Colors.red))),
+              TextButton(onPressed: () => Navigator.pop(ctx, null), child: Text(loc('حذف هدف'), style: const TextStyle(color: Colors.red))),
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
             FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('save'))),
           ],
@@ -9812,14 +9912,14 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
         return AlertDialog(
-          title: Text('واریز به «${g.name}»'),
+          title: Text(locf('واریز به «{0}»', [(g.name)])),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: amountCtrl,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-                decoration: InputDecoration(labelText: 'مبلغ واریزی (${currencyLabel(mainCurrency)})'),
+                decoration: InputDecoration(labelText: locf('مبلغ واریزی ({0})', [(currencyLabel(mainCurrency))])),
                 autofocus: true,
               ),
               const SizedBox(height: 12),
@@ -9875,11 +9975,11 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('واریزی\u200cهای «${g.name}»', style: Theme.of(context).textTheme.titleMedium),
+              Text(locf('واریزی\u200cهای «{0}»', [(g.name)]), style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 12),
               Expanded(
                 child: list.isEmpty
-                    ? const Center(child: Text('هنوز واریزی\u200cای ثبت نشده.'))
+                    ? Center(child: Text(loc('هنوز واریزی\u200cای ثبت نشده.')))
                     : ListView.builder(
                         controller: scrollController,
                         itemCount: list.length,
@@ -9918,8 +10018,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
           infoButton(
             context,
             tr('savings_goals'),
-            'برای یه هدف مشخص (مثلاً خرید ماشین یا سفر) یه مبلغ هدف تعیین می‌کنی و هر بار که پس‌انداز می‌کنی، یه واریزی ثبت می‌کنی.\n\n'
-            'این هدف مستقل از حساب‌هاته - فقط پیشرفتت به سمت اون مبلغ رو پیگیری می‌کنه، بدون اینکه به تراکنش‌های روزمره‌ربط داشته باشه.',
+            loc('برای یه هدف مشخص (مثلاً خرید ماشین یا سفر) یه مبلغ هدف تعیین می‌کنی و هر بار که پس‌انداز می‌کنی، یه واریزی ثبت می‌کنی.\n\nاین هدف مستقل از حساب‌هاته - فقط پیشرفتت به سمت اون مبلغ رو پیگیری می‌کنه، بدون اینکه به تراکنش‌های روزمره‌ربط داشته باشه.'),
           ),
         ],
       ),
@@ -9929,7 +10028,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
         label: Text(tr('new_goal')),
       ),
       body: goals.isEmpty
-          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز هدف پس\u200cاندازی تعریف نشده.')))
+          ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(loc('هنوز هدف پس\u200cاندازی تعریف نشده.'))))
           : ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
               itemCount: goals.length,
@@ -9942,11 +10041,11 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 String? needed;
                 var onTrack = true;
                 if (current >= g.targetAmount) {
-                  projection = 'به هدف رسیدی! \u{1F389}';
+                  projection = '${loc('به هدف رسیدی!')} \u{1F389}';
                 } else {
                   if (growth > 0) {
                     final monthsLeft = ((g.targetAmount - current) / growth).ceil();
-                    projection = 'با روند فعلی، حدود ${persianDigits('$monthsLeft')} ماه دیگر به هدف می\u200cرسی.';
+                    projection = locf('با روند فعلی، حدود {0} ماه دیگر به هدف می\u200cرسی.', [(persianDigits('$monthsLeft'))]);
                   }
                   // With a target date: how much is needed each month from
                   // now on to make it, and whether the current pace does.
@@ -9954,9 +10053,8 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                     final perMonth = (g.targetAmount - current) / _monthsUntil(g.targetDate!);
                     onTrack = growth >= perMonth;
                     needed = g.targetDate!.isBefore(DateTime.now())
-                        ? 'تاریخ هدف گذشته است.'
-                        : 'برای رسیدن تا تاریخ هدف، ماهی ${ltr(formatMoney(perMonth, mainCurrency))} لازم است'
-                            '${growth > 0 ? (onTrack ? ' - روند فعلی کافی است.' : ' - روند فعلی کمتر از این است.') : '.'}';
+                        ? loc('تاریخ هدف گذشته است.')
+                        : locf('برای رسیدن تا تاریخ هدف، ماهی {0} لازم است{1}', [(ltr(formatMoney(perMonth, mainCurrency))), (growth > 0 ? (onTrack ? loc(' - روند فعلی کافی است.') : loc(' - روند فعلی کمتر از این است.')) : '.')]);
                     if (g.targetDate!.isBefore(DateTime.now())) onTrack = false;
                   }
                 }
@@ -9988,12 +10086,12 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${ltr(formatMoney(current, mainCurrency))} از ${ltr(formatMoney(g.targetAmount, mainCurrency))} (${ltr(persianDigits('${(ratio * 100).round()}%'))})',
+                          locf('{0} از {1} ({2})', [(ltr(formatMoney(current, mainCurrency))), (ltr(formatMoney(g.targetAmount, mainCurrency))), (ltr(persianDigits('${(ratio * 100).round()}%')))]),
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         ),
                         if (g.targetDate != null)
                           Text(
-                            'تا ${formatDate(g.targetDate!)}',
+                            locf('تا {0}', [(formatDate(g.targetDate!))]),
                             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                           ),
                         if (projection != null)
@@ -10015,12 +10113,12 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                             TextButton.icon(
                               onPressed: () => _addContribution(g),
                               icon: const Icon(Icons.add, size: 16),
-                              label: const Text('واریز'),
+                              label: Text(loc('واریز')),
                             ),
                             TextButton.icon(
                               onPressed: () => _showContributions(g),
                               icon: const Icon(Icons.history, size: 16),
-                              label: const Text('تاریخچه'),
+                              label: Text(loc('تاریخچه')),
                             ),
                           ],
                         ),
@@ -10176,35 +10274,35 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
   final diff = (x.amount - d.amount).abs();
   if (diff < 0.01) {
     score += 0.5;
-    reasons.add('مبلغ یکسان');
+    reasons.add(loc('مبلغ یکسان'));
   } else if (diff / (d.amount == 0 ? 1 : d.amount) <= 0.02) {
     score += 0.3;
-    reasons.add('مبلغ تقریباً یکسان');
+    reasons.add(loc('مبلغ تقریباً یکسان'));
   } else {
     return null;
   }
   final days = DateTime(x.date.year, x.date.month, x.date.day).difference(DateTime(d.date.year, d.date.month, d.date.day)).inDays.abs();
   if (days == 0) {
     score += 0.3;
-    reasons.add('همان روز');
+    reasons.add(loc('همان روز'));
   } else if (days <= 3) {
     score += 0.25;
-    reasons.add('${persianDigits('$days')} روز فاصله');
+    reasons.add(locf('{0} روز فاصله', [(persianDigits('$days'))]));
   } else if (days <= 7) {
     score += 0.15;
-    reasons.add('${persianDigits('$days')} روز فاصله');
+    reasons.add(locf('{0} روز فاصله', [(persianDigits('$days'))]));
   } else if (days <= 10 && recurring) {
     score += 0.1;
-    reasons.add('${persianDigits('$days')} روز فاصله');
+    reasons.add(locf('{0} روز فاصله', [(persianDigits('$days'))]));
   } else {
     return null;
   }
   if (x.accountId == d.accountId) {
     score += 0.15;
-    reasons.add('همان حساب');
+    reasons.add(loc('همان حساب'));
   } else {
     score -= 0.1;
-    reasons.add('حساب دیگر');
+    reasons.add(loc('حساب دیگر'));
   }
   final dText = _matchText(d);
   final xText = '${_matchText(x)} ${x.items.map((i) => i.name).join(' ')}';
@@ -10224,10 +10322,10 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
   }
   if (common.isNotEmpty) {
     score += 0.15;
-    reasons.add('نام/شرح مشابه');
+    reasons.add(loc('نام/شرح مشابه'));
   }
-  if (recurring) reasons.add('پرداخت تکرارشونده');
-  if (transfer) reasons.add('انتقال بین حساب‌ها');
+  if (recurring) reasons.add(loc('پرداخت تکرارشونده'));
+  if (transfer) reasons.add(loc('انتقال بین حساب‌ها'));
   // What the person decided before for a look-alike pair.
   if (learnedPairVerdicts.isNotEmpty) {
     final a = LearnedDuplicates.signature(d), b = LearnedDuplicates.signature(x);
@@ -10240,7 +10338,7 @@ DuplicateMatch? scoreDuplicate(Transaction d, Transaction x, {bool recurring = f
           if (!(days == 0 && !v.sameDay)) return null;
         } else {
           score += 0.2;
-          reasons.add('مشابه موردی که قبلاً تکراری تشخیص دادی');
+          reasons.add(loc('مشابه موردی که قبلاً تکراری تشخیص دادی'));
         }
       }
     }
@@ -10258,7 +10356,7 @@ List<DuplicateMatch> findDuplicateMatches(Transaction d, List<Transaction> pool,
       if (m == null || !(d.draft && x.draft)) return m;
       // Two drafts: shown, but marked as such and never counted as "almost
       // surely a duplicate" (the bulk delete must not remove both).
-      return DuplicateMatch(t: x, recurring: false, score: min(m.score, 0.84), reasons: ['هر دو پیش‌نویس هستند', ...m.reasons]);
+      return DuplicateMatch(t: x, recurring: false, score: min(m.score, 0.84), reasons: [loc('هر دو پیش‌نویس هستند'), ...m.reasons]);
     }).whereType<DuplicateMatch>(),
     ...recurringPayments.map((x) => scoreDuplicate(d, x, recurring: true)).whereType<DuplicateMatch>(),
   ]..sort((a, b) => b.score.compareTo(a.score));
@@ -11014,7 +11112,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     final detectedDelimiter = _detectDelimiter(content.split('\n').first);
     final parsed = _parseCsv(content, detectedDelimiter);
     if (parsed.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('فایل خالی یا نامعتبر است.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('فایل خالی یا نامعتبر است.'))));
       return;
     }
     setState(() {
@@ -11035,7 +11133,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   Future<void> _openPdf(String path, String name, {PendingStatement? entry}) async {
     setState(() {
       readingPdf = true;
-      pdfProgress = 'در حال آماده‌سازی صفحات...';
+      pdfProgress = loc('در حال آماده‌سازی صفحات...');
       rows = null;
       preview = null;
       detectedCurrency = entry?.currency;
@@ -11060,7 +11158,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
         readingPdf = false;
         pdfPath = null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('باز کردن فایل PDF ممکن نشد.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('باز کردن فایل PDF ممکن نشد.'))));
       return;
     }
     final key = (await Store.loadGeminiKey())?.trim();
@@ -11082,7 +11180,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       if (!mounted) return;
       setState(() {
         readingPdf = true;
-        pdfProgress = 'خواندن خودکار صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pdfPages.length}')}...';
+        pdfProgress = locf('خواندن خودکار صفحه‌ی {0} از {1}...', [(persianDigits('${i + 1}')), (persianDigits('${pdfPages.length}'))]);
       });
       try {
         result.addAll(parseStatementText(await extractTextFromImage(pdfPages[i])));
@@ -11137,14 +11235,14 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       if (aiPageRows.containsKey(i) || importedPages.contains(i)) continue;
       if (!mounted) return;
       setState(() => pdfProgress =
-          'خواندن صفحه‌ی ${persianDigits('${i + 1}')} از ${persianDigits('${pdfPages.length}')} با هوش مصنوعی...');
+          locf('خواندن صفحه‌ی {0} از {1} با هوش مصنوعی...', [(persianDigits('${i + 1}')), (persianDigits('${pdfPages.length}'))]));
       try {
         final json = await _geminiRequest(key, pdfPages[i], _bankStatementPrompt(categories));
         detectedCurrency ??= normalizeCurrency(json?['currency']);
         aiPageRows[i] = json == null ? [] : _statementRowsFromJson(json);
         await _persistProgress();
       } catch (e) {
-        aiError = e is GeminiException ? e.friendlyMessage : 'خواندن با هوش مصنوعی ممکن نشد.';
+        aiError = e is GeminiException ? e.friendlyMessage : loc('خواندن با هوش مصنوعی ممکن نشد.');
         break;
       }
     }
@@ -11160,8 +11258,8 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     if (pdfPath == null) return;
     await _ensurePending();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('صورتحساب ذخیره شد. بعداً از همین صفحه می‌توانی آن را با هوش مصنوعی بخوانی.'),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(loc('صورتحساب ذخیره شد. بعداً از همین صفحه می‌توانی آن را با هوش مصنوعی بخوانی.')),
     ));
     Navigator.pop(context);
   }
@@ -11341,17 +11439,13 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     final open = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('نتیجه‌ی بارگذاری'),
+        title: Text(loc('نتیجه‌ی بارگذاری')),
         content: Text(
-          '${persianDigits('$imported')} تراکنش به‌صورت پیش‌نویس در بخش «صورتحساب بانک» پیش‌نویس‌ها ذخیره شد.'
-          '${possibleDup > 0 ? '\n${persianDigits('$possibleDup')} مورد احتمالاً تکراری است؛ آن‌جا می‌توانی با تراکنش ثبت‌شده مقایسه‌اش کنی.' : ''}'
-          '${skipped > 0 ? '\n${persianDigits('$skipped')} مورد قبلاً از صورتحساب بارگذاری شده بود و دوباره اضافه نشد.' : ''}'
-          '${autoDeleted > 0 ? '\n${persianDigits('$autoDeleted')} مورد پرداخت تکرارشونده‌ی ثبت‌شده بود و طبق آن‌چه قبلاً تأیید کرده بودی خودکار حذف شد '
-              '(در «حذف خودکار تکراری‌ها» قابل برگرداندن است).' : ''}',
+          locf('{0} تراکنش به‌صورت پیش‌نویس در بخش «صورتحساب بانک» پیش‌نویس‌ها ذخیره شد.{1}{2}{3}', [(persianDigits('$imported')), (possibleDup > 0 ? locf('\n{0} مورد احتمالاً تکراری است؛ آن‌جا می‌توانی با تراکنش ثبت‌شده مقایسه‌اش کنی.', [(persianDigits('$possibleDup'))]) : ''), (skipped > 0 ? locf('\n{0} مورد قبلاً از صورتحساب بارگذاری شده بود و دوباره اضافه نشد.', [(persianDigits('$skipped'))]) : ''), (autoDeleted > 0 ? locf('\n{0} مورد پرداخت تکرارشونده‌ی ثبت‌شده بود و طبق آن‌چه قبلاً تأیید کرده بودی خودکار حذف شد (در «حذف خودکار تکراری‌ها» قابل برگرداندن است).', [(persianDigits('$autoDeleted'))]) : '')]),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('confirm'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('مشاهده‌ی پیش‌نویس‌ها')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('مشاهده‌ی پیش‌نویس‌ها'))),
         ],
       ),
     );
@@ -11369,20 +11463,17 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
     final aiDone = pdfAllDone && !readOffline;
     final total = pdfPages.length;
     final done = {...aiPageRows.keys, ...importedPages}.length;
-    final progress = '${persianDigits('$done')} از ${persianDigits('$total')} صفحه با هوش مصنوعی خوانده شده'
-        '${importedPages.isNotEmpty ? ' (${persianDigits('${importedPages.length}')} صفحه قبلاً بارگذاری شده)' : ''}.';
+    final progress = locf('{0} از {1} صفحه با هوش مصنوعی خوانده شده{2}.', [(persianDigits('$done')), (persianDigits('$total')), (importedPages.isNotEmpty ? locf(' ({0} صفحه قبلاً بارگذاری شده)', [(persianDigits('${importedPages.length}'))]) : '')]);
     final String status;
     final Color color;
     if (readOffline) {
-      status = 'این پیش‌نمایش از خواندن خودکار ساده است و برای PDF معمولاً دقیق نیست. برای نتیجه‌ی درست با هوش مصنوعی بخوان.';
+      status = loc('این پیش‌نمایش از خواندن خودکار ساده است و برای PDF معمولاً دقیق نیست. برای نتیجه‌ی درست با هوش مصنوعی بخوان.');
       color = Colors.orange;
     } else if (aiDone) {
-      status = 'همه‌ی صفحات با هوش مصنوعی خوانده شد. $progress';
+      status = locf('همه‌ی صفحات با هوش مصنوعی خوانده شد. {0}', [progress]);
       color = Colors.green;
     } else {
-      status = '${aiError != null ? '$aiError\n' : ''}$progress\n'
-          'تراکنش‌های صفحه‌های خوانده‌شده ذخیره شده‌اند و همین حالا قابل بارگذاری‌اند؛ '
-          'بقیه‌ی صفحات را با «ادامه با هوش مصنوعی» یا بعداً از فهرست صورتحساب‌های ذخیره‌شده بخوان.';
+      status = locf('{0}{1}\nتراکنش‌های صفحه‌های خوانده‌شده ذخیره شده‌اند و همین حالا قابل بارگذاری‌اند؛ بقیه‌ی صفحات را با «ادامه با هوش مصنوعی» یا بعداً از فهرست صورتحساب‌های ذخیره‌شده بخوان.', [(aiError != null ? '$aiError\n' : ''), progress]);
       color = Colors.orange;
     }
     return Card(
@@ -11415,7 +11506,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                           },
                     icon: const Icon(Icons.auto_awesome, size: 18),
                     label: Text(
-                      aiDone ? 'خواندن دوباره با هوش مصنوعی' : (done > 0 ? 'ادامه با هوش مصنوعی' : 'خواندن با هوش مصنوعی'),
+                      aiDone ? loc('خواندن دوباره با هوش مصنوعی') : (done > 0 ? loc('ادامه با هوش مصنوعی') : loc('خواندن با هوش مصنوعی')),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -11426,7 +11517,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                     child: OutlinedButton.icon(
                       onPressed: readingPdf ? null : _saveForLater,
                       icon: const Icon(Icons.schedule, size: 18),
-                      label: const Text('ذخیره برای بعد', textAlign: TextAlign.center),
+                      label: Text(loc('ذخیره برای بعد'), textAlign: TextAlign.center),
                     ),
                   ),
                 ],
@@ -11461,19 +11552,17 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
           else if (rows == null && preview == null)
             Column(
               children: [
-                const Text(
-                  'فایل CSV یا PDF صورتحساب بانک را انتخاب کن.\n\n'
-                  'PDF فقط با هوش مصنوعی (کلید Gemini) درست خوانده می‌شود. صفحه به صفحه خوانده و ذخیره می‌شود؛ '
-                  'اگر همه‌ی صفحات یک‌جا خوانده نشد، صفحه‌های خوانده‌شده را بارگذاری کن و بقیه را بعداً ادامه بده.',
-                  style: TextStyle(fontSize: 13),
+                Text(
+                  loc('فایل CSV یا PDF صورتحساب بانک را انتخاب کن.\n\nPDF فقط با هوش مصنوعی (کلید Gemini) درست خوانده می‌شود. صفحه به صفحه خوانده و ذخیره می‌شود؛ اگر همه‌ی صفحات یک‌جا خوانده نشد، صفحه‌های خوانده‌شده را بارگذاری کن و بقیه را بعداً ادامه بده.'),
+                  style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 16),
-                FilledButton.icon(onPressed: _pickFile, icon: const Icon(Icons.upload_file), label: const Text('انتخاب فایل CSV یا PDF')),
+                FilledButton.icon(onPressed: _pickFile, icon: const Icon(Icons.upload_file), label: Text(loc('انتخاب فایل CSV یا PDF'))),
                 if (pending.isNotEmpty) ...[
                   const SizedBox(height: 24),
-                  const Align(
+                  Align(
                     alignment: AlignmentDirectional.centerStart,
-                    child: Text('صورتحساب‌های در حال خواندن با هوش مصنوعی', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: Text(loc('صورتحساب‌های در حال خواندن با هوش مصنوعی'), style: const TextStyle(fontWeight: FontWeight.bold)),
                   ),
                   const SizedBox(height: 8),
                   ...pending.map((p) => Card(
@@ -11481,12 +11570,11 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                           leading: const Icon(Icons.picture_as_pdf_outlined),
                           title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
                           subtitle: Text(
-                            'ذخیره در ${formatDate(p.addedAt)}'
-                            '${p.pageCount != null ? ' • ${persianDigits('${p.pagesDone}')} از ${persianDigits('${p.pageCount}')} صفحه خوانده شده' : ''}',
+                            locf('ذخیره در {0}{1}', [(formatDate(p.addedAt)), (p.pageCount != null ? locf(' • {0} از {1} صفحه خوانده شده', [(persianDigits('${p.pagesDone}')), (persianDigits('${p.pageCount}'))]) : '')]),
                           ),
                           trailing: IconButton(
                             icon: const Icon(Icons.delete_outline),
-                            tooltip: 'حذف',
+                            tooltip: loc('حذف'),
                             onPressed: () async {
                               await PendingStatement.remove(p.id);
                               final list = await PendingStatement.load();
@@ -11501,11 +11589,11 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             )
           else ...[
             if (rows != null) ...[
-            Text('${rows!.length - 1} ردیف پیدا شد. ستون‌های مربوطه رو مشخص کن:', style: const TextStyle(fontSize: 13)),
+            Text(locf('{0} ردیف پیدا شد. ستون‌های مربوطه رو مشخص کن:', [(rows!.length - 1)]), style: const TextStyle(fontSize: 13)),
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
               initialValue: dateCol,
-              decoration: const InputDecoration(labelText: 'ستون تاریخ', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: loc('ستون تاریخ'), border: const OutlineInputBorder(), isDense: true),
               items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
               onChanged: (v) => setState(() {
                 dateCol = v;
@@ -11515,7 +11603,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               initialValue: dateFormat,
-              decoration: const InputDecoration(labelText: 'فرمت تاریخ', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: loc('فرمت تاریخ'), border: const OutlineInputBorder(), isDense: true),
               items: _csvDateFormats.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
               onChanged: (v) => setState(() {
                 dateFormat = v ?? dateFormat;
@@ -11525,7 +11613,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             const SizedBox(height: 10),
             DropdownButtonFormField<int>(
               initialValue: descCol,
-              decoration: const InputDecoration(labelText: 'ستون توضیحات', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: loc('ستون توضیحات'), border: const OutlineInputBorder(), isDense: true),
               items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
               onChanged: (v) => setState(() {
                 descCol = v;
@@ -11535,7 +11623,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             const SizedBox(height: 10),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('بدهکار/بستانکار در دو ستون جدا هستند', style: TextStyle(fontSize: 13)),
+              title: Text(loc('بدهکار/بستانکار در دو ستون جدا هستند'), style: const TextStyle(fontSize: 13)),
               value: useSeparateDebitCredit,
               onChanged: (v) => setState(() {
                 useSeparateDebitCredit = v;
@@ -11545,7 +11633,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             if (!useSeparateDebitCredit)
               DropdownButtonFormField<int>(
                 initialValue: amountCol,
-                decoration: const InputDecoration(labelText: 'ستون مبلغ (منفی=هزینه، مثبت=درآمد)', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: loc('ستون مبلغ (منفی=هزینه، مثبت=درآمد)'), border: const OutlineInputBorder(), isDense: true),
                 items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
                 onChanged: (v) => setState(() {
                   amountCol = v;
@@ -11555,7 +11643,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             else ...[
               DropdownButtonFormField<int>(
                 initialValue: debitCol,
-                decoration: const InputDecoration(labelText: 'ستون بدهکار (خروج پول)', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: loc('ستون بدهکار (خروج پول)'), border: const OutlineInputBorder(), isDense: true),
                 items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
                 onChanged: (v) => setState(() {
                   debitCol = v;
@@ -11565,7 +11653,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               const SizedBox(height: 10),
               DropdownButtonFormField<int>(
                 initialValue: creditCol,
-                decoration: const InputDecoration(labelText: 'ستون بستانکار (ورود پول)', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: loc('ستون بستانکار (ورود پول)'), border: const OutlineInputBorder(), isDense: true),
                 items: header.asMap().entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
                 onChanged: (v) => setState(() {
                   creditCol = v;
@@ -11574,7 +11662,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               ),
             ],
             const SizedBox(height: 16),
-            OutlinedButton(onPressed: _buildPreview, child: const Text('پیش‌نمایش')),
+            OutlinedButton(onPressed: _buildPreview, child: Text(loc('پیش‌نمایش'))),
             ],
             if (pdfPath != null) _pdfStatusCard(),
             if (preview != null) ...[
@@ -11588,13 +11676,12 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${persianDigits('${preview!.length - already}')} تراکنش جدید برای بارگذاری'
-                      '${already > 0 ? ' (${persianDigits('$already')} مورد قبلاً بارگذاری شده و دوباره اضافه نمی‌شود)' : ''}',
+                      locf('{0} تراکنش جدید برای بارگذاری{1}', [(persianDigits('${preview!.length - already}')), (already > 0 ? locf(' ({0} مورد قبلاً بارگذاری شده و دوباره اضافه نمی‌شود)', [(persianDigits('$already'))]) : '')]),
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     if (last != null)
                       Text(
-                        'از این حساب قبلاً تا تراکنش ${formatDate(last)} بارگذاری شده است.',
+                        locf('از این حساب قبلاً تا تراکنش {0} بارگذاری شده است.', [(formatDate(last))]),
                         style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                       ),
                   ],
@@ -11604,7 +11691,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    '${persianDigits('${_possibleDuplicateCount()}')} مورد احتمالاً قبلاً ثبت شده؛ بعد از ذخیره می‌توانی مقایسه‌شان کنی.',
+                    locf('{0} مورد احتمالاً قبلاً ثبت شده؛ بعد از ذخیره می‌توانی مقایسه‌شان کنی.', [(persianDigits('${_possibleDuplicateCount()}'))]),
                     style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
                   ),
                 ),
@@ -11613,14 +11700,14 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               const SizedBox(height: 12),
               DropdownButtonFormField<Account>(
                 initialValue: targetAccount,
-                decoration: const InputDecoration(labelText: 'حساب مقصد', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: loc('حساب مقصد'), border: const OutlineInputBorder(), isDense: true),
                 items: accounts.map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})'))).toList(),
                 onChanged: (v) => setState(() => targetAccount = v),
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<Category>(
                 initialValue: defaultExpenseCategory,
-                decoration: const InputDecoration(labelText: 'دسته‌بندی پیش‌فرض هزینه‌ها', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: loc('دسته‌بندی پیش‌فرض هزینه‌ها'), border: const OutlineInputBorder(), isDense: true),
                 items: categoriesInHierarchicalOrder(categories, TxType.expense)
                     .map((c) => DropdownMenuItem(value: c, child: Text(c.parentId == null ? c.name : '　　${c.name}')))
                     .toList(),
@@ -11629,23 +11716,23 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               const SizedBox(height: 10),
               DropdownButtonFormField<Category>(
                 initialValue: defaultIncomeCategory,
-                decoration: const InputDecoration(labelText: 'دسته‌بندی پیش‌فرض درآمدها', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: loc('دسته‌بندی پیش‌فرض درآمدها'), border: const OutlineInputBorder(), isDense: true),
                 items: categoriesInHierarchicalOrder(categories, TxType.income)
                     .map((c) => DropdownMenuItem(value: c, child: Text(c.parentId == null ? c.name : '　　${c.name}')))
                     .toList(),
                 onChanged: (v) => setState(() => defaultIncomeCategory = v),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'هر تراکنش در صورت امکان دسته‌بندی حدس‌زده‌ی خودش را می‌گیرد؛ این‌ها فقط برای بقیه است. بعداً هم می‌توانی هرکدام را اصلاح کنی.',
-                style: TextStyle(fontSize: 11, color: Colors.grey),
+              Text(
+                loc('هر تراکنش در صورت امکان دسته‌بندی حدس‌زده‌ی خودش را می‌گیرد؛ این‌ها فقط برای بقیه است. بعداً هم می‌توانی هرکدام را اصلاح کنی.'),
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
               ),
               const SizedBox(height: 12),
               ...preview!.take(5).map((p) => Card(
                     child: ListTile(
                       dense: true,
                       title: Text(
-                        p.merchant ?? (p.desc.isEmpty ? '(بدون توضیح)' : p.desc),
+                        p.merchant ?? (p.desc.isEmpty ? loc('(بدون توضیح)') : p.desc),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -11659,7 +11746,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
               if (preview!.length > 5)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text('و ${preview!.length - 5} مورد دیگر...', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  child: Text(locf('و {0} مورد دیگر...', [(preview!.length - 5)]), style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 ),
               const SizedBox(height: 16),
               FilledButton.icon(
@@ -11667,7 +11754,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
                 icon: importing
                     ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.download_done),
-                label: Text(importing ? 'در حال ذخیره...' : 'ذخیره به‌صورت پیش‌نویس'),
+                label: Text(importing ? loc('در حال ذخیره...') : loc('ذخیره به‌صورت پیش‌نویس')),
               ),
             ],
           ],
@@ -11705,8 +11792,8 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('لیست خرید جدید'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام لیست (مثلاً خرید هفتگی)'), autofocus: true),
+        title: Text(loc('لیست خرید جدید')),
+        content: TextField(controller: ctrl, decoration: InputDecoration(labelText: loc('نام لیست (مثلاً خرید هفتگی)')), autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
@@ -11725,8 +11812,8 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('ویرایش نام لیست'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام لیست'), autofocus: true),
+        title: Text(loc('ویرایش نام لیست')),
+        content: TextField(controller: ctrl, decoration: InputDecoration(labelText: loc('نام لیست')), autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
@@ -11743,8 +11830,8 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف لیست'),
-        content: Text('لیست «${l.name}» حذف شود؟'),
+        title: Text(loc('حذف لیست')),
+        content: Text(locf('لیست «{0}» حذف شود؟', [(l.name)])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -11762,9 +11849,9 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
       appBar: AppBar(title: Text(tr('shopping_lists_title'))),
-      floatingActionButton: FloatingActionButton.extended(onPressed: _addList, icon: const Icon(Icons.add), label: const Text('لیست جدید')),
+      floatingActionButton: FloatingActionButton.extended(onPressed: _addList, icon: const Icon(Icons.add), label: Text(loc('لیست جدید'))),
       body: lists.isEmpty
-          ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('هنوز لیست خریدی نساختی.')))
+          ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(loc('هنوز لیست خریدی نساختی.'))))
           : ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
               itemCount: lists.length,
@@ -11775,7 +11862,7 @@ class _ShoppingListsScreenState extends State<ShoppingListsScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.shopping_cart_outlined),
                     title: Text(l.name),
-                    subtitle: Text('$done/${l.items.length} خریداری‌شده'),
+                    subtitle: Text(locf('{0}/{1} خریداری‌شده', [done, (l.items.length)])),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -11838,18 +11925,18 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(existing == null ? 'افزودن کالا' : 'ویرایش کالا'),
+        title: Text(existing == null ? loc('افزودن کالا') : loc('ویرایش کالا')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(controller: nameCtrl, decoration: InputDecoration(labelText: tr('item_name')), autofocus: true),
             const SizedBox(height: 8),
-            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()], decoration: InputDecoration(labelText: '${tr('quantity')} (اختیاری)')),
+            TextField(controller: qtyCtrl, keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()], decoration: InputDecoration(labelText: locf('{0} (اختیاری)', [(tr('quantity'))]))),
             const SizedBox(height: 8),
             TextField(
               controller: priceCtrl,
               keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-              decoration: const InputDecoration(labelText: 'قیمت تقریبی (اختیاری)'),
+              decoration: InputDecoration(labelText: loc('قیمت تقریبی (اختیاری)')),
             ),
           ],
         ),
@@ -11887,7 +11974,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
   Future<void> _convertCheckedToTransaction() async {
     final checked = list.items.where((i) => i.checked).toList();
     if (checked.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('اول کالاهایی که خریدی رو تیک بزن.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('اول کالاهایی که خریدی رو تیک بزن.'))));
       return;
     }
     final receiptItems = checked.map((i) => ReceiptItemEntry(name: i.name, quantity: i.quantity, price: i.estimatedPrice)).toList();
@@ -11899,7 +11986,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
       categoryId: '_uncategorized_',
       accountId: accounts.isNotEmpty ? accounts.first.id : 'default',
       date: DateTime.now(),
-      note: 'از لیست خرید «${list.name}»',
+      note: locf('از لیست خرید «{0}»', [(list.name)]),
       items: receiptItems,
       draft: true,
     );
@@ -11913,7 +12000,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
       final remaining = list.items.where((i) => !i.checked).toList();
       _updateList(list.copyWith(items: remaining));
       await _persist();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تراکنش ثبت شد.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('تراکنش ثبت شد.'))));
     }
   }
 
@@ -11929,14 +12016,14 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_outlined),
-            tooltip: 'ویرایش نام لیست',
+            tooltip: loc('ویرایش نام لیست'),
             onPressed: () async {
               final ctrl = TextEditingController(text: currentList.name);
               final name = await showDialog<String>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('ویرایش نام لیست'),
-                  content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام لیست'), autofocus: true),
+                  title: Text(loc('ویرایش نام لیست')),
+                  content: TextField(controller: ctrl, decoration: InputDecoration(labelText: loc('نام لیست')), autofocus: true),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
                     FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
@@ -11964,8 +12051,8 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('$checkedCount از ${currentList.items.length} خریداری‌شده'),
-                          if (estimatedTotal > 0) Text('جمع تقریبی: ${formatAmountInput(estimatedTotal)}'),
+                          Text(locf('{0} از {1} خریداری‌شده', [checkedCount, (currentList.items.length)])),
+                          if (estimatedTotal > 0) Text(locf('جمع تقریبی: {0}', [(formatAmountInput(estimatedTotal))])),
                         ],
                       ),
                       if (checkedCount > 0) ...[
@@ -11973,7 +12060,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
                         FilledButton.icon(
                           onPressed: _convertCheckedToTransaction,
                           icon: const Icon(Icons.receipt_long_outlined, size: 18),
-                          label: const Text('ثبت خریداری‌شده‌ها به‌عنوان تراکنش'),
+                          label: Text(loc('ثبت خریداری‌شده‌ها به‌عنوان تراکنش')),
                         ),
                       ],
                     ],
@@ -11983,7 +12070,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
             ),
           Expanded(
             child: currentList.items.isEmpty
-                ? const Center(child: Text('این لیست خالیه. با دکمه‌ی + کالا اضافه کن.'))
+                ? Center(child: Text(loc('این لیست خالیه. با دکمه‌ی + کالا اضافه کن.')))
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 88),
                     itemCount: currentList.items.length,
@@ -12124,15 +12211,15 @@ class _TransferScreenState extends State<TransferScreen> {
   Future<void> _save() async {
     final amount = parseAmount(amountCtrl.text);
     if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('مبلغ معتبر وارد کنید.'))));
       return;
     }
     if (fromAccount == null || toAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حساب مبدأ و مقصد را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('حساب مبدأ و مقصد را انتخاب کنید.'))));
       return;
     }
     if (fromAccount!.id == toAccount!.id) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حساب مبدأ و مقصد نمی‌توانند یکسان باشند.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('حساب مبدأ و مقصد نمی‌توانند یکسان باشند.'))));
       return;
     }
     var convertedAmount = amount;
@@ -12140,7 +12227,7 @@ class _TransferScreenState extends State<TransferScreen> {
       final rate = parseAmount(exchangeRateCtrl.text);
       if (rate == null || rate <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('برای انتقال بین ${currencyLabel(fromAccount!.currency)} و ${currencyLabel(toAccount!.currency)}، نرخ تبدیل را وارد کنید.'),
+          content: Text(locf('برای انتقال بین {0} و {1}، نرخ تبدیل را وارد کنید.', [(currencyLabel(fromAccount!.currency)), (currencyLabel(toAccount!.currency))])),
         ));
         return;
       }
@@ -12155,7 +12242,7 @@ class _TransferScreenState extends State<TransferScreen> {
     if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
       recDay = parseInt(dayCtrl.text);
       if (recDay == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('روز سررسید در ماه را وارد کنید.'))));
         return;
       }
       if (recDay < 1) recDay = 1;
@@ -12165,7 +12252,7 @@ class _TransferScreenState extends State<TransferScreen> {
     } else if (recurrence == RecurrenceFrequency.custom) {
       recInterval = parseInt(intervalCtrl.text);
       if (recInterval == null || recInterval <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('تعداد روز بازه را درست وارد کنید.'))));
         return;
       }
     }
@@ -12173,12 +12260,12 @@ class _TransferScreenState extends State<TransferScreen> {
       if (endMode == 'installments') {
         recInstallments = parseInt(installmentsCtrl.text);
         if (recInstallments == null || recInstallments <= 0) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد کل اقساط را درست وارد کنید.')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('تعداد کل اقساط را درست وارد کنید.'))));
           return;
         }
       } else if (endMode == 'date') {
         if (endDate == null) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تاریخ پایان را انتخاب کنید.')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('تاریخ پایان را انتخاب کنید.'))));
           return;
         }
         recEndDate = endDate;
@@ -12194,7 +12281,7 @@ class _TransferScreenState extends State<TransferScreen> {
       categoryId: '_transfer_out_',
       accountId: fromAccount!.id,
       date: date,
-      note: note.isEmpty ? 'انتقال به ${toAccount!.name}' : note,
+      note: note.isEmpty ? locf('انتقال به {0}', [(toAccount!.name)]) : note,
       recurrence: recurrence,
       recurrenceDay: recDay,
       recurrenceWeekday: recWeekday,
@@ -12209,7 +12296,7 @@ class _TransferScreenState extends State<TransferScreen> {
       categoryId: '_transfer_in_',
       accountId: toAccount!.id,
       date: date,
-      note: note.isEmpty ? 'انتقال از ${fromAccount!.name}' : note,
+      note: note.isEmpty ? locf('انتقال از {0}', [(fromAccount!.name)]) : note,
       recurrence: recurrence,
       recurrenceDay: recDay,
       recurrenceWeekday: recWeekday,
@@ -12230,7 +12317,7 @@ class _TransferScreenState extends State<TransferScreen> {
     if (accounts.length < 2) {
       return Scaffold(
         appBar: AppBar(title: Text(tr('transfer_between_accounts'))),
-        body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('برای انتقال، حداقل به دو حساب نیاز دارید.'))),
+        body: Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(loc('برای انتقال، حداقل به دو حساب نیاز دارید.')))),
       );
     }
     return Scaffold(
@@ -12257,7 +12344,7 @@ class _TransferScreenState extends State<TransferScreen> {
           TextField(
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-            decoration: InputDecoration(labelText: tr('amount'), hintText: 'مثلاً 100.00', border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('amount'), hintText: loc('مثلاً 100.00'), border: const OutlineInputBorder()),
             onChanged: (_) => setState(() {
               // Known amount received: the rate follows from the amount sent.
               final amt = parseAmount(amountCtrl.text);
@@ -12270,7 +12357,7 @@ class _TransferScreenState extends State<TransferScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
-                'به «${toAccount!.name}» ${ltr(formatMoney(receivedHint!, toAccount!.currency))} رسیده؛ مبلغ برداشت‌شده از حساب مبدأ را وارد کن.',
+                locf('به «{0}» {1} رسیده؛ مبلغ برداشت‌شده از حساب مبدأ را وارد کن.', [(toAccount!.name), (ltr(formatMoney(receivedHint!, toAccount!.currency)))]),
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
             ),
@@ -12280,8 +12367,8 @@ class _TransferScreenState extends State<TransferScreen> {
               controller: exchangeRateCtrl,
               keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
               decoration: InputDecoration(
-                labelText: '۱ ${currencyLabel(fromAccount!.currency)} = ? ${currencyLabel(toAccount!.currency)}',
-                hintText: 'نرخ تبدیل',
+                labelText: locf('۱ {0} = ? {1}', [(currencyLabel(fromAccount!.currency)), (currencyLabel(toAccount!.currency))]),
+                hintText: loc('نرخ تبدیل'),
                 border: const OutlineInputBorder(),
               ),
               onChanged: (_) => setState(() {}),
@@ -12293,7 +12380,7 @@ class _TransferScreenState extends State<TransferScreen> {
               return Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'معادل: ${ltr(formatMoney(amt * rate, toAccount!.currency))}',
+                  locf('معادل: {0}', [(ltr(formatMoney(amt * rate, toAccount!.currency)))]),
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
               );
@@ -12304,9 +12391,9 @@ class _TransferScreenState extends State<TransferScreen> {
                 controlAffinity: ListTileControlAffinity.leading,
                 value: useAsDayRate,
                 onChanged: (v) => setState(() => useAsDayRate = v ?? false),
-                title: const Text('این نرخ، نرخ روز برای محاسبه‌ی موجودی کل باشد', style: TextStyle(fontSize: 13)),
+                title: Text(loc('این نرخ، نرخ روز برای محاسبه‌ی موجودی کل باشد'), style: const TextStyle(fontSize: 13)),
                 subtitle: Text(
-                  'نرخ روز ${_dayRateTarget()!.name} با این نرخ به‌روز می‌شود.',
+                  locf('نرخ روز {0} با این نرخ به‌روز می‌شود.', [(_dayRateTarget()!.name)]),
                   style: const TextStyle(fontSize: 11),
                 ),
               ),
@@ -12323,13 +12410,13 @@ class _TransferScreenState extends State<TransferScreen> {
           DropdownButtonFormField<RecurrenceFrequency>(
             initialValue: recurrence,
             decoration: InputDecoration(labelText: tr('recurrence_type'), border: const OutlineInputBorder()),
-            items: const [
-              DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
-              DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی')),
-              DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه')),
-              DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text('فصلی (هر سه ماه)')),
-              DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('سالانه')),
-              DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
+            items: [
+              DropdownMenuItem(value: RecurrenceFrequency.none, child: Text(loc('بدون تکرار'))),
+              DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text(loc('هفتگی'))),
+              DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text(loc('ماهانه'))),
+              DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text(loc('فصلی (هر سه ماه)'))),
+              DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text(loc('سالانه'))),
+              DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text(loc('بازه‌ی دلخواه (هر N روز)'))),
             ],
             onChanged: (v) => setState(() => recurrence = v ?? RecurrenceFrequency.none),
           ),
@@ -12338,7 +12425,7 @@ class _TransferScreenState extends State<TransferScreen> {
             TextField(
               controller: dayCtrl,
               keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
-              decoration: const InputDecoration(labelText: 'روز سررسید در ماه (۱ تا ۳۱) *', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: loc('روز سررسید در ماه (۱ تا ۳۱) *'), border: const OutlineInputBorder()),
             ),
           ],
           if (recurrence == RecurrenceFrequency.weekly) ...[
@@ -12355,16 +12442,16 @@ class _TransferScreenState extends State<TransferScreen> {
             TextField(
               controller: intervalCtrl,
               keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
-              decoration: const InputDecoration(labelText: 'هر چند روز یک‌بار؟', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: loc('هر چند روز یک‌بار؟'), border: const OutlineInputBorder()),
             ),
           ],
           if (recurrence != RecurrenceFrequency.none) ...[
             const SizedBox(height: 12),
             SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'unlimited', label: Text('نامحدود')),
-                ButtonSegment(value: 'installments', label: Text('تعداد قسط')),
-                ButtonSegment(value: 'date', label: Text('تاریخ پایان')),
+              segments: [
+                ButtonSegment(value: 'unlimited', label: Text(loc('نامحدود'))),
+                ButtonSegment(value: 'installments', label: Text(loc('تعداد قسط'))),
+                ButtonSegment(value: 'date', label: Text(loc('تاریخ پایان'))),
               ],
               selected: {endMode},
               onSelectionChanged: (s) => setState(() => endMode = s.first),
@@ -12381,7 +12468,7 @@ class _TransferScreenState extends State<TransferScreen> {
               const SizedBox(height: 12),
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(endDate == null ? 'تاریخ پایان را انتخاب کنید' : formatDate(endDate!)),
+                title: Text(endDate == null ? loc('تاریخ پایان را انتخاب کنید') : formatDate(endDate!)),
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
                   final picked = await showAppDatePicker(
@@ -12399,7 +12486,7 @@ class _TransferScreenState extends State<TransferScreen> {
           const SizedBox(height: 8),
           TextField(
             controller: noteCtrl,
-            decoration: const InputDecoration(labelText: 'توضیحات (اختیاری)', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: loc('توضیحات (اختیاری)'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 24),
           FilledButton.icon(
@@ -12492,7 +12579,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
     setState(() => loading = false);
   }
 
-  String categoryName(String id) => _categoryNames[id] ?? 'بدون‌دسته';
+  String categoryName(String id) => _categoryNames[id] ?? loc('بدون‌دسته');
 
   /// The search text as a number (Persian/Arabic digits and thousands
   /// separators allowed), or null when it isn't one.
@@ -12528,10 +12615,10 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(removed.length > 1 ? 'تراکنش\u200cها حذف شدند' : 'تراکنش حذف شد'),
+            content: Text(removed.length > 1 ? loc('تراکنش\u200cها حذف شدند') : loc('تراکنش حذف شد')),
             persist: false,
             action: SnackBarAction(
-              label: 'برگردون',
+              label: loc('برگردون'),
               onPressed: () async {
                 for (final t in removed) {
                   await Store.upsertTransaction(t);
@@ -12551,12 +12638,12 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
   }
 
   String _sortLabel(_TxSortMode m) => switch (m) {
-        _TxSortMode.dateDesc => 'تاریخ تراکنش (جدیدترین)',
-        _TxSortMode.dateAsc => 'تاریخ تراکنش (قدیمی‌ترین)',
-        _TxSortMode.createdDesc => 'زمان ثبت (جدیدترین)',
-        _TxSortMode.createdAsc => 'زمان ثبت (قدیمی‌ترین)',
-        _TxSortMode.amountDesc => 'مبلغ (بیشترین)',
-        _TxSortMode.amountAsc => 'مبلغ (کمترین)',
+        _TxSortMode.dateDesc => loc('تاریخ تراکنش (جدیدترین)'),
+        _TxSortMode.dateAsc => loc('تاریخ تراکنش (قدیمی‌ترین)'),
+        _TxSortMode.createdDesc => loc('زمان ثبت (جدیدترین)'),
+        _TxSortMode.createdAsc => loc('زمان ثبت (قدیمی‌ترین)'),
+        _TxSortMode.amountDesc => loc('مبلغ (بیشترین)'),
+        _TxSortMode.amountAsc => loc('مبلغ (کمترین)'),
       };
 
   int get _activeFilterCount =>
@@ -12598,70 +12685,70 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                         localDraft = 'exclude';
                         localReturnable = null;
                       }),
-                      child: const Text('پاک‌کردن همه'),
+                      child: Text(loc('پاک‌کردن همه')),
                     ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                Text('نوع تراکنش', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(loc('نوع تراکنش'), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<TxType?>(
                   initialValue: localType,
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('همه‌ی انواع')),
-                    DropdownMenuItem(value: TxType.income, child: Text('درآمد')),
-                    DropdownMenuItem(value: TxType.expense, child: Text('هزینه')),
+                  items: [
+                    DropdownMenuItem(value: null, child: Text(loc('همه‌ی انواع'))),
+                    DropdownMenuItem(value: TxType.income, child: Text(loc('درآمد'))),
+                    DropdownMenuItem(value: TxType.expense, child: Text(loc('هزینه'))),
                   ],
                   onChanged: (v) => setLocal(() => localType = v),
                 ),
                 const SizedBox(height: 16),
-                Text('تکرارشوندگی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(loc('تکرارشوندگی'), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<bool?>(
                   initialValue: localRecurring,
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('همه')),
-                    DropdownMenuItem(value: true, child: Text('فقط تکرارشونده')),
-                    DropdownMenuItem(value: false, child: Text('فقط غیرتکرارشونده')),
+                  items: [
+                    DropdownMenuItem(value: null, child: Text(loc('همه'))),
+                    DropdownMenuItem(value: true, child: Text(loc('فقط تکرارشونده'))),
+                    DropdownMenuItem(value: false, child: Text(loc('فقط غیرتکرارشونده'))),
                   ],
                   onChanged: (v) => setLocal(() => localRecurring = v),
                 ),
                 const SizedBox(height: 16),
-                Text('وضعیت تراکنش', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(loc('وضعیت تراکنش'), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
                   initialValue: localDraft,
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-                  items: const [
-                    DropdownMenuItem(value: 'exclude', child: Text('تراکنش‌های تأیید شده')),
-                    DropdownMenuItem(value: 'only', child: Text('تراکنش‌های پیش‌نویس')),
-                    DropdownMenuItem(value: 'all', child: Text('همه‌ی تراکنش‌ها')),
+                  items: [
+                    DropdownMenuItem(value: 'exclude', child: Text(loc('تراکنش‌های تأیید شده'))),
+                    DropdownMenuItem(value: 'only', child: Text(loc('تراکنش‌های پیش‌نویس'))),
+                    DropdownMenuItem(value: 'all', child: Text(loc('همه‌ی تراکنش‌ها'))),
                   ],
                   onChanged: (v) => setLocal(() => localDraft = v ?? localDraft),
                 ),
                 const SizedBox(height: 16),
-                Text('مهلت مرجوعی کالا', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(loc('مهلت مرجوعی کالا'), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<bool?>(
                   initialValue: localReturnable,
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('همه')),
-                    DropdownMenuItem(value: true, child: Text('دارای مهلت مرجوعی')),
-                    DropdownMenuItem(value: false, child: Text('بدون مهلت مرجوعی')),
+                  items: [
+                    DropdownMenuItem(value: null, child: Text(loc('همه'))),
+                    DropdownMenuItem(value: true, child: Text(loc('دارای مهلت مرجوعی'))),
+                    DropdownMenuItem(value: false, child: Text(loc('بدون مهلت مرجوعی'))),
                   ],
                   onChanged: (v) => setLocal(() => localReturnable = v),
                 ),
                 const SizedBox(height: 16),
-                Text('دسته‌بندی', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(loc('دسته‌بندی'), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String?>(
                   initialValue: localCategory,
                   decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
+                    DropdownMenuItem(value: null, child: Text(loc('همه‌ی دسته‌بندی‌ها'))),
                     ...categoriesInHierarchicalOrder(categories, TxType.expense).map((c) => DropdownMenuItem(
                           value: c.id,
                           child: Text(c.parentId == null ? c.name : '　　${c.name}'),
@@ -12674,7 +12761,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                   onChanged: (v) => setLocal(() => localCategory = v),
                 ),
                 const SizedBox(height: 16),
-                Text('حساب', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                Text(loc('حساب'), style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String?>(
                   initialValue: localAccount,
@@ -12699,7 +12786,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     });
                     Navigator.pop(ctx);
                   },
-                  child: const Text('اعمال فیلتر'),
+                  child: Text(loc('اعمال فیلتر')),
                 ),
               ],
             ),
@@ -12820,12 +12907,12 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
             ),
             child: TextField(
               controller: queryCtrl,
-              decoration: const InputDecoration(
-                hintText: 'جستجو در فروشگاه، دسته‌بندی، توضیحات، اقلام یا مبلغ...',
-                prefixIcon: Icon(Icons.search),
+              decoration: InputDecoration(
+                hintText: loc('جستجو در فروشگاه، دسته‌بندی، توضیحات، اقلام یا مبلغ...'),
+                prefixIcon: const Icon(Icons.search),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: EdgeInsets.symmetric(vertical: 14),
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
               ),
               // Wait for a short pause in typing before filtering, so long
               // lists don't re-filter on every key press.
@@ -12874,32 +12961,32 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                 children: [
                   if (typeFilter != null)
                     _appliedFilterChip(
-                      typeFilter == TxType.income ? 'نوع: درآمد' : 'نوع: هزینه',
+                      typeFilter == TxType.income ? loc('نوع: درآمد') : loc('نوع: هزینه'),
                       () => setState(() => typeFilter = null),
                     ),
                   if (recurringFilter != null)
                     _appliedFilterChip(
-                      recurringFilter! ? 'فقط تکرارشونده' : 'فقط غیرتکرارشونده',
+                      recurringFilter! ? loc('فقط تکرارشونده') : loc('فقط غیرتکرارشونده'),
                       () => setState(() => recurringFilter = null),
                     ),
                   if (draftFilter != 'exclude')
                     _appliedFilterChip(
-                      draftFilter == 'only' ? 'تراکنش‌های پیش‌نویس' : 'همه‌ی تراکنش‌ها',
+                      draftFilter == 'only' ? loc('تراکنش‌های پیش‌نویس') : loc('همه‌ی تراکنش‌ها'),
                       () => setState(() => draftFilter = 'exclude'),
                     ),
                   if (returnableFilter != null)
                     _appliedFilterChip(
-                      returnableFilter! ? 'دارای مهلت مرجوعی' : 'بدون مهلت مرجوعی',
+                      returnableFilter! ? loc('دارای مهلت مرجوعی') : loc('بدون مهلت مرجوعی'),
                       () => setState(() => returnableFilter = null),
                     ),
                   if (categoryFilter != null)
                     _appliedFilterChip(
-                      'دسته‌بندی: ${categoryName(categoryFilter!)}',
+                      locf('دسته‌بندی: {0}', [(categoryName(categoryFilter!))]),
                       () => setState(() => categoryFilter = null),
                     ),
                   if (accountFilter != null)
                     _appliedFilterChip(
-                      'حساب: ${accounts.where((a) => a.id == accountFilter).isEmpty ? '' : accounts.firstWhere((a) => a.id == accountFilter).name}',
+                      locf('حساب: {0}', [(accounts.where((a) => a.id == accountFilter).isEmpty ? '' : accounts.firstWhere((a) => a.id == accountFilter).name)]),
                       () => setState(() => accountFilter = null),
                     ),
                 ],
@@ -12911,13 +12998,13 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Align(
               alignment: Alignment.centerRight,
-              child: Text('${persianDigits('${filtered.length}')} تراکنش', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+              child: Text(locf('{0} تراکنش', [(persianDigits('${filtered.length}'))]), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
             ),
           ),
           const SizedBox(height: 8),
           Expanded(
             child: filtered.isEmpty
-                ? const Center(child: Text('تراکنشی با این شرایط پیدا نشد.'))
+                ? Center(child: Text(loc('تراکنشی با این شرایط پیدا نشد.')))
                 : ListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: filtered.length,
@@ -13001,7 +13088,7 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
 
   String categoryName(String id) {
     final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+    return m.isEmpty ? loc('بدون‌دسته') : m.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -13043,14 +13130,14 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
         title: TextField(
           controller: queryCtrl,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'جستجوی کالا (مثلاً یخچال، کفش...)', border: InputBorder.none),
+          decoration: InputDecoration(hintText: loc('جستجوی کالا (مثلاً یخچال، کفش...)'), border: InputBorder.none),
           onChanged: (v) => setState(() => query = v),
         ),
       ),
       body: q.isEmpty
-          ? const Center(child: Text('نام کالایی را که دنبالشی تایپ کن.', style: TextStyle(color: Colors.grey)))
+          ? Center(child: Text(loc('نام کالایی را که دنبالشی تایپ کن.'), style: const TextStyle(color: Colors.grey)))
           : matches.isEmpty
-              ? const Center(child: Text('کالایی با این نام پیدا نشد.'))
+              ? Center(child: Text(loc('کالایی با این نام پیدا نشد.')))
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
                   itemCount: matches.length,
@@ -13074,14 +13161,14 @@ class _ItemSearchScreenState extends State<ItemSearchScreen> {
                                 children: [
                                   if (m.item.warrantyUntil != null)
                                     Chip(
-                                      label: Text('گارانتی تا ${formatDate(m.item.warrantyUntil!)}',
+                                      label: Text(locf('گارانتی تا {0}', [(formatDate(m.item.warrantyUntil!))]),
                                           style: const TextStyle(fontSize: 11)),
                                       visualDensity: VisualDensity.compact,
                                       backgroundColor: Colors.blue.shade50,
                                     ),
                                   if (m.item.returnUntil != null)
                                     Chip(
-                                      label: Text('مرجوعی تا ${formatDate(m.item.returnUntil!)}',
+                                      label: Text(locf('مرجوعی تا {0}', [(formatDate(m.item.returnUntil!))]),
                                           style: const TextStyle(fontSize: 11)),
                                       visualDensity: VisualDensity.compact,
                                       backgroundColor: Colors.orange.shade50,
@@ -13117,11 +13204,11 @@ class ReportTransactionsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final list = List.of(transactions)..sort((a, b) => b.date.compareTo(a.date));
     String cur(String id) => accounts.where((a) => a.id == id).firstOrNull?.currency ?? 'IRT';
-    String cat(String id) => categories.where((c) => c.id == id).firstOrNull?.name ?? 'بدون‌دسته';
+    String cat(String id) => categories.where((c) => c.id == id).firstOrNull?.name ?? loc('بدون‌دسته');
     return Scaffold(
       appBar: AppBar(title: Text('$title (${persianDigits('${list.length}')})')),
       body: list.isEmpty
-          ? const Center(child: Text('تراکنشی نیست.'))
+          ? Center(child: Text(loc('تراکنشی نیست.')))
           : ListView.builder(
               padding: const EdgeInsets.all(12),
               itemCount: list.length,
@@ -13268,7 +13355,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   String categoryName(String id) {
     final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+    return m.isEmpty ? loc('بدون‌دسته') : m.first.name;
   }
 
   String currencyOf(String accountId) {
@@ -13294,7 +13381,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final result = <Category, double>{};
     map.forEach((id, amount) {
       final match = categories.where((c) => c.id == id).toList();
-      result[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = amount;
+      result[match.isEmpty ? Category(id: id, name: loc('بدون‌دسته'), type: TxType.expense) : match.first] = amount;
     });
     return result;
   }
@@ -13306,7 +13393,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     for (final t in list) {
       if (t.type != TxType.expense) continue;
       if (currencyOf(t.accountId) != currency) continue;
-      final key = t.merchant.trim().isEmpty ? 'بدون‌نام' : t.merchant.trim();
+      final key = t.merchant.trim().isEmpty ? loc('بدون‌نام') : t.merchant.trim();
       map[key] = (map[key] ?? 0) + t.amount;
     }
     return map;
@@ -13322,13 +13409,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   String _presetLabel(_ReportPreset p) => switch (p) {
-        _ReportPreset.thisMonth => 'این ماه',
-        _ReportPreset.lastMonth => 'ماه قبل',
-        _ReportPreset.thisQuarter => 'این فصل',
-        _ReportPreset.lastQuarter => 'فصل قبل',
-        _ReportPreset.thisYear => 'امسال',
-        _ReportPreset.lastYear => 'پارسال',
-        _ReportPreset.custom => 'بازه‌ی دلخواه',
+        _ReportPreset.thisMonth => loc('این ماه'),
+        _ReportPreset.lastMonth => loc('ماه قبل'),
+        _ReportPreset.thisQuarter => loc('این فصل'),
+        _ReportPreset.lastQuarter => loc('فصل قبل'),
+        _ReportPreset.thisYear => loc('امسال'),
+        _ReportPreset.lastYear => loc('پارسال'),
+        _ReportPreset.custom => loc('بازه‌ی دلخواه'),
       };
 
   @override
@@ -13371,7 +13458,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final up = change >= 0;
         final bad = higherIsBad ? up : !up;
         changeColor = bad ? Colors.red.shade700 : Colors.green.shade700;
-        changeText = '${ltr(persianDigits('${up ? '+' : ''}${change.round()}%'))} نسبت به دوره‌ی قبل';
+        changeText = locf('{0} نسبت به دوره‌ی قبل', [(ltr(persianDigits('${up ? '+' : ''}${change.round()}%')))]);
       }
       return InkWell(
         onTap: () => _openList(
@@ -13411,7 +13498,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ActionChip(
                 label: Text(preset == _ReportPreset.custom
                     ? '${formatDate(rangeStart)} - ${formatDate(rangeEnd)}'
-                    : 'بازه‌ی دلخواه'),
+                    : loc('بازه‌ی دلخواه')),
                 avatar: const Icon(Icons.date_range, size: 18),
                 onPressed: _pickCustomRange,
               ),
@@ -13424,12 +13511,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 child: DropdownButtonFormField<String?>(
                   initialValue: categoryFilter,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'دسته‌بندی', border: OutlineInputBorder(), isDense: true),
+                  decoration: InputDecoration(labelText: loc('دسته‌بندی'), border: const OutlineInputBorder(), isDense: true),
                   // Same order as the filter in All transactions: expense
                   // categories then income ones, each subcategory indented
                   // under its parent.
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('همه‌ی دسته‌بندی‌ها')),
+                    DropdownMenuItem(value: null, child: Text(loc('همه‌ی دسته‌بندی‌ها'))),
                     for (final type in [TxType.expense, TxType.income])
                       ...categoriesInHierarchicalOrder(categories, type).map((c) => DropdownMenuItem(
                             value: c.id,
@@ -13444,9 +13531,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 child: DropdownButtonFormField<String?>(
                   initialValue: accountFilter,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+                  decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('همه')),
+                    DropdownMenuItem(value: null, child: Text(loc('همه'))),
                     ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis))),
                   ],
                   onChanged: (v) => setState(() => accountFilter = v),
@@ -13456,10 +13543,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ),
           const SizedBox(height: 8),
           SegmentedButton<TxType?>(
-            segments: const [
-              ButtonSegment(value: null, label: Text('همه')),
-              ButtonSegment(value: TxType.income, label: Text('درآمد')),
-              ButtonSegment(value: TxType.expense, label: Text('هزینه')),
+            segments: [
+              ButtonSegment(value: null, label: Text(loc('همه'))),
+              ButtonSegment(value: TxType.income, label: Text(loc('درآمد'))),
+              ButtonSegment(value: TxType.expense, label: Text(loc('هزینه'))),
             ],
             selected: {typeFilter},
             onSelectionChanged: (s) => setState(() => typeFilter = s.first),
@@ -13471,12 +13558,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('خلاصه (${currentTx.length} تراکنش)', style: Theme.of(context).textTheme.titleMedium),
+                  Text(locf('خلاصه ({0} تراکنش)', [(currentTx.length)]), style: Theme.of(context).textTheme.titleMedium),
                   const Divider(),
-                  if (typeFilter != TxType.expense) comparisonRow('درآمد', curIncome, prevIncome, higherIsBad: false, type: TxType.income),
-                  if (typeFilter != TxType.income) comparisonRow('هزینه', curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
+                  if (typeFilter != TxType.expense) comparisonRow(loc('درآمد'), curIncome, prevIncome, higherIsBad: false, type: TxType.income),
+                  if (typeFilter != TxType.income) comparisonRow(loc('هزینه'), curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
                   if (typeFilter == null)
-                    comparisonRow('خالص', curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
+                    comparisonRow(loc('خالص'), curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
                 ],
               ),
             ),
@@ -13486,11 +13573,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(groupByMerchant ? 'هزینه بر اساس فروشگاه' : 'هزینه بر اساس دسته‌بندی', style: Theme.of(context).textTheme.titleMedium),
+                Text(groupByMerchant ? loc('هزینه بر اساس فروشگاه') : loc('هزینه بر اساس دسته‌بندی'), style: Theme.of(context).textTheme.titleMedium),
                 TextButton.icon(
                   onPressed: () => setState(() => groupByMerchant = !groupByMerchant),
                   icon: const Icon(Icons.swap_horiz, size: 16),
-                  label: Text(groupByMerchant ? 'نمایش بر اساس دسته‌بندی' : 'نمایش بر اساس فروشگاه', style: const TextStyle(fontSize: 12)),
+                  label: Text(groupByMerchant ? loc('نمایش بر اساس دسته‌بندی') : loc('نمایش بر اساس فروشگاه'), style: const TextStyle(fontSize: 12)),
                 ),
               ],
             ),
@@ -13535,9 +13622,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                   ))
             else if (byMerchant.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(loc('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
               )
             else
               ...byMerchant.map((e) => InkWell(
@@ -13547,7 +13634,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           .where((t) =>
                               t.type == TxType.expense &&
                               currencyOf(t.accountId) == primaryCurrency &&
-                              (t.merchant.trim().isEmpty ? 'بدون‌نام' : t.merchant.trim()) == e.key)
+                              (t.merchant.trim().isEmpty ? loc('بدون‌نام') : t.merchant.trim()) == e.key)
                           .toList(),
                     ),
                     child: Padding(
@@ -13585,7 +13672,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
 // ============================== Expense forecast ==============================
 
-const _gregorianMonthNames = [
+List<String> get _gregorianMonthNames => switch (currentLanguage.value) {
+      AppLanguage.fa => _gregorianMonthNamesFa,
+      AppLanguage.en => const ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+      AppLanguage.de => const ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'],
+    };
+
+const _gregorianMonthNamesFa = [
   'ژانویه',
   'فوریه',
   'مارس',
@@ -13680,7 +13773,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
     categoryYearTotal.forEach((id, yearMap) {
       final avg = yearMap.values.fold(0.0, (a, b) => a + b) / years.length;
       final match = categories.where((c) => c.id == id).toList();
-      categoryAverages[match.isEmpty ? Category(id: id, name: 'بدون‌دسته', type: TxType.expense) : match.first] = avg;
+      categoryAverages[match.isEmpty ? Category(id: id, name: loc('بدون‌دسته'), type: TxType.expense) : match.first] = avg;
     });
     final sortedCategories = categoryAverages.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     final maxCategoryAvg = sortedCategories.isEmpty ? 0.0 : sortedCategories.first.value;
@@ -13700,7 +13793,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('ماه مورد نظر برای پیش‌بینی:', style: TextStyle(color: Colors.grey)),
+          Text(loc('ماه مورد نظر برای پیش‌بینی:'), style: const TextStyle(color: Colors.grey)),
           const SizedBox(height: 8),
           Wrap(
             spacing: 6,
@@ -13716,11 +13809,11 @@ class _ForecastScreenState extends State<ForecastScreen> {
           ),
           const SizedBox(height: 20),
           if (years.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
-                'برای این ماه، داده‌ی کافی از سال‌های قبل ثبت نشده تا بشه پیش‌بینی کرد.',
-                style: TextStyle(color: Colors.grey),
+                loc('برای این ماه، داده‌ی کافی از سال‌های قبل ثبت نشده تا بشه پیش‌بینی کرد.'),
+                style: const TextStyle(color: Colors.grey),
               ),
             )
           else ...[
@@ -13731,7 +13824,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'میانگین هزینه‌ی ${_gregorianMonthNames[targetMonth - 1]} بر اساس ${years.length} سال گذشته',
+                      locf('میانگین هزینه‌ی {0} بر اساس {1} سال گذشته', [(_gregorianMonthNames[targetMonth - 1]), (years.length)]),
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
@@ -13741,15 +13834,15 @@ class _ForecastScreenState extends State<ForecastScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text('هزینه‌ی این ماه تا الان'),
+                          Text(loc('هزینه‌ی این ماه تا الان')),
                           Text(ltr(formatMoney(spentSoFar, currency)), style: const TextStyle(fontWeight: FontWeight.bold)),
                         ],
                       ),
                       const SizedBox(height: 4),
                       Text(
                         spentSoFar > avgTotal
-                            ? 'تا الان بیشتر از میانگین سال‌های قبل خرج شده.'
-                            : 'تا الان کمتر از میانگین سال‌های قبل خرج شده.',
+                            ? loc('تا الان بیشتر از میانگین سال‌های قبل خرج شده.')
+                            : loc('تا الان کمتر از میانگین سال‌های قبل خرج شده.'),
                         style: TextStyle(fontSize: 12, color: spentSoFar > avgTotal ? Colors.red.shade700 : Colors.green.shade700),
                       ),
                     ],
@@ -13759,7 +13852,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
             ),
             if (sortedCategories.isNotEmpty) ...[
               const SizedBox(height: 20),
-              Text('میانگین بر اساس دسته‌بندی', style: Theme.of(context).textTheme.titleMedium),
+              Text(loc('میانگین بر اساس دسته‌بندی'), style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               ...sortedCategories.map((e) => Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -13831,7 +13924,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
 
   String categoryName(String id) {
     final m = categories.where((c) => c.id == id).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+    return m.isEmpty ? loc('بدون‌دسته') : m.first.name;
   }
 
   Future<void> _showDayTransactions(DateTime date) async {
@@ -13850,7 +13943,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     if (dayEntries.isEmpty) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text('در ${formatDate(day)} تراکنشی نیست.'), duration: const Duration(seconds: 2)));
+        ..showSnackBar(SnackBar(content: Text(locf('در {0} تراکنشی نیست.', [(formatDate(day))])), duration: const Duration(seconds: 2)));
       return;
     }
     await showModalBottomSheet(
@@ -13884,8 +13977,8 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                           title: Text('${categoryName(t.categoryId)}$name'),
                           subtitle: Text(
                             [
-                              if (notDue) 'سررسیدنشده' else if (!e.isReal) 'سررسید شده',
-                              if (t.isRecurring) 'تکرارشونده',
+                              if (notDue) loc('سررسیدنشده') else if (!e.isReal) loc('سررسید شده'),
+                              if (t.isRecurring) loc('تکرارشونده'),
                               if (e.isReal && t.note.isNotEmpty) t.note,
                             ].join(' • '),
                             maxLines: 1,
@@ -13979,7 +14072,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
               children: [
                 IconButton(
                   icon: const Icon(Icons.arrow_back_ios, size: 18),
-                  tooltip: 'ماه بعد',
+                  tooltip: loc('ماه بعد'),
                   onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
                 ),
                 Text(
@@ -13993,7 +14086,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.arrow_forward_ios, size: 18),
-                  tooltip: 'ماه قبل',
+                  tooltip: loc('ماه قبل'),
                   onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
                 ),
               ],
@@ -14004,7 +14097,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
             child: DropdownButtonFormField<String?>(
               initialValue: accountFilter,
               isExpanded: true,
-              decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
               items: [
                 DropdownMenuItem(value: null, child: Text(tr('all_accounts'))),
                 ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
@@ -14024,7 +14117,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('جمع تا امروز', style: TextStyle(fontWeight: FontWeight.bold)),
+                        Text(loc('جمع تا امروز'), style: const TextStyle(fontWeight: FontWeight.bold)),
                         Row(
                           children: [
                             Text(ltr('+${formatMoney(dueIncome, currency)}'),
@@ -14041,7 +14134,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('جمع سررسیدنشده', style: TextStyle(color: Colors.grey.shade600)),
+                          Text(loc('جمع سررسیدنشده'), style: TextStyle(color: Colors.grey.shade600)),
                           Row(
                             children: [
                               Text(ltr('+${formatMoney(plannedIncome, currency)}'),
@@ -14064,9 +14157,9 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: (currentCalendarSystem.value == CalendarSystem.jalali
-                      ? const ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج']
+                      ? [loc('ش'), loc('ی'), loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج')]
                       : currentLanguage.value == AppLanguage.fa
-                          ? const ['د', 'س', 'چ', 'پ', 'ج', 'ش', 'ی']
+                          ? [loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج'), loc('ش'), loc('ی')]
                           : const ['M', 'T', 'W', 'T', 'F', 'S', 'S'])
                   .map((d) => Expanded(child: Center(child: Text(d, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)))))
                   .toList(),
@@ -14156,9 +14249,9 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     setState(() => busy = true);
     try {
       final path = await _buildBackupFile();
-      await Share.shareXFiles([XFile(path)], text: 'نسخه‌ی پشتیبان مدیریت مالی شخصی');
+      await Share.shareXFiles([XFile(path)], text: loc('نسخه‌ی پشتیبان مدیریت مالی شخصی'));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(locf('خطا: {0}', [e]))));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -14168,9 +14261,9 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     setState(() => busy = true);
     try {
       final path = await _buildExcelFile();
-      await Share.shareXFiles([XFile(path)], text: 'خروجی اکسل تراکنش‌ها');
+      await Share.shareXFiles([XFile(path)], text: loc('خروجی اکسل تراکنش‌ها'));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(locf('خطا: {0}', [e]))));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -14183,13 +14276,13 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('بازیابی نسخه‌ی پشتیبان'),
-        content: const Text(
-          'همه‌ی اطلاعات فعلی برنامه (تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها) با محتوای این فایل جایگزین می‌شود. این کار قابل بازگشت نیست. ادامه می‌دهید؟',
+        title: Text(loc('بازیابی نسخه‌ی پشتیبان')),
+        content: Text(
+          loc('همه‌ی اطلاعات فعلی برنامه (تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها) با محتوای این فایل جایگزین می‌شود. این کار قابل بازگشت نیست. ادامه می‌دهید؟'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بازیابی')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بازیابی'))),
         ],
       ),
     );
@@ -14200,10 +14293,10 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       final data = jsonDecode(content) as Map<String, dynamic>;
       await Store.restoreBackupData(data);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('بازیابی با موفقیت انجام شد.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('بازیابی با موفقیت انجام شد.'))));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا در بازیابی: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(locf('خطا در بازیابی: {0}', [e]))));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -14219,8 +14312,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.cloud_upload_outlined),
-              title: const Text('تهیه‌ی نسخه‌ی پشتیبان'),
-              subtitle: const Text('خروجی کامل تراکنش‌ها، دسته‌بندی‌ها و حساب‌ها'),
+              title: Text(loc('تهیه‌ی نسخه‌ی پشتیبان')),
+              subtitle: Text(loc('خروجی کامل تراکنش‌ها، دسته‌بندی‌ها و حساب‌ها')),
               trailing: busy
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.chevron_left),
@@ -14230,8 +14323,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.cloud_download_outlined),
-              title: const Text('بازیابی از نسخه‌ی پشتیبان'),
-              subtitle: const Text('جایگزینی اطلاعات فعلی با یک فایل پشتیبان'),
+              title: Text(loc('بازیابی از نسخه‌ی پشتیبان')),
+              subtitle: Text(loc('جایگزینی اطلاعات فعلی با یک فایل پشتیبان')),
               trailing: busy ? null : const Icon(Icons.chevron_left),
               onTap: busy ? null : _restore,
             ),
@@ -14239,8 +14332,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.table_chart_outlined),
-              title: const Text('خروجی اکسل'),
-              subtitle: const Text('خروجی تراکنش‌ها به فایل اکسل'),
+              title: Text(loc('خروجی اکسل')),
+              subtitle: Text(loc('خروجی تراکنش‌ها به فایل اکسل')),
               trailing: busy ? null : const Icon(Icons.chevron_left),
               onTap: busy ? null : _exportExcel,
             ),
@@ -14252,17 +14345,17 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
                     children: [
-                      Icon(Icons.schedule_outlined, size: 20),
-                      SizedBox(width: 10),
-                      Expanded(child: Text('پشتیبان‌گیری خودکار', style: TextStyle(fontWeight: FontWeight.w600))),
+                      const Icon(Icons.schedule_outlined, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(loc('پشتیبان‌گیری خودکار'), style: const TextStyle(fontWeight: FontWeight.w600))),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  const Text(
-                    'در بازه‌ی انتخابی، یه نسخه‌ی پشتیبان به‌طور خودکار روی حافظه‌ی گوشی ذخیره می‌شه (بدون نیاز به کار دستی). فقط ۵ نسخه‌ی آخر نگه داشته می‌شه.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  Text(
+                    loc('در بازه‌ی انتخابی، یه نسخه‌ی پشتیبان به‌طور خودکار روی حافظه‌ی گوشی ذخیره می‌شه (بدون نیاز به کار دستی). فقط ۵ نسخه‌ی آخر نگه داشته می‌شه.'),
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<AutoBackupFrequency>(
@@ -14288,7 +14381,12 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
 
 // ============================== Transaction editor ==============================
 
-const _weekdayNames = ['دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه', 'یکشنبه'];
+// Monday first, like DateTime.weekday.
+List<String> get _weekdayNames => switch (currentLanguage.value) {
+      AppLanguage.fa => const ['دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه', 'یکشنبه'],
+      AppLanguage.en => const ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+      AppLanguage.de => const ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'],
+    };
 
 // ============================== Scan entry ==============================
 
@@ -14330,7 +14428,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       await Future.delayed(const Duration(milliseconds: 300));
       final imgFile = File(imagePath);
       if (!await imgFile.exists() || await imgFile.length() == 0) {
-        throw Exception('فایل تصویر خوانده نشد. لطفاً دوباره امتحان کنید.');
+        throw Exception(loc('فایل تصویر خوانده نشد. لطفاً دوباره امتحان کنید.'));
       }
       final text = await extractTextFromImage(imagePath);
       if (!context.mounted) return;
@@ -14347,7 +14445,7 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
       if (!context.mounted) return;
       if (result != null) Navigator.pop(context, result);
     } catch (e) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطا: $e')));
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(locf('خطا: {0}', [e]))));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -14415,21 +14513,21 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
           ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _section('رسید جدید', 'تشخیص آفلاین + امکان بهبود با هوش مصنوعی', Icons.receipt_long, false),
+              _section(loc('رسید جدید'), loc('تشخیص آفلاین + امکان بهبود با هوش مصنوعی'), Icons.receipt_long, false),
               const SizedBox(height: 16),
-              _section('فیش حقوقی جدید', 'استخراج درآمد ناخالص و خالص، مالیات، بیمه و کلاس مالیاتی', Icons.badge_outlined, true),
+              _section(loc('فیش حقوقی جدید'), loc('استخراج درآمد ناخالص و خالص، مالیات، بیمه و کلاس مالیاتی'), Icons.badge_outlined, true),
             ],
           ),
           if (busy)
             Container(
               color: Colors.black26,
-              child: const Center(
+              child: Center(
                 child: Card(
                   child: Padding(
-                    padding: EdgeInsets.all(24),
+                    padding: const EdgeInsets.all(24),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      children: [CircularProgressIndicator(), SizedBox(height: 12), Text('در حال تشخیص متن...')],
+                      children: [const CircularProgressIndicator(), const SizedBox(height: 12), Text(loc('در حال تشخیص متن...'))],
                     ),
                   ),
                 ),
@@ -14590,12 +14688,12 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e is GeminiException
               ? e.friendlyMessage
-              : 'خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
+              : loc('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.')),
           duration: const Duration(seconds: 5),
           // A snackbar with an action stays until dismissed by default;
           // let this one disappear by itself.
           persist: false,
-          action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
+          action: SnackBarAction(label: loc('جزئیات خطا'), onPressed: () => _showGeminiErrorDetail(context)),
         ));
       }
     } finally {
@@ -14607,17 +14705,17 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('جزئیات خطای هوش مصنوعی'),
+        title: Text(loc('جزئیات خطای هوش مصنوعی')),
         content: SingleChildScrollView(
-          child: SelectableText(lastGeminiErrorDetail ?? 'جزئیاتی موجود نیست.'),
+          child: SelectableText(lastGeminiErrorDetail ?? loc('جزئیاتی موجود نیست.')),
         ),
         actions: [
           TextButton(
             onPressed: () {
               Clipboard.setData(ClipboardData(text: lastGeminiErrorDetail ?? ''));
-              ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('کپی شد.')));
+              ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(loc('کپی شد.'))));
             },
-            child: const Text('کپی'),
+            child: Text(loc('کپی')),
           ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
         ],
@@ -14663,7 +14761,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(editIndex == null ? 'افزودن کالا' : 'ویرایش کالا'),
+        title: Text(editIndex == null ? loc('افزودن کالا') : loc('ویرایش کالا')),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -14676,7 +14774,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: warrantyCtrl,
-                decoration: const InputDecoration(labelText: 'یادداشت گارانتی/مرجوعی (اختیاری)', border: OutlineInputBorder()),
+                decoration: InputDecoration(labelText: loc('یادداشت گارانتی/مرجوعی (اختیاری)'), border: const OutlineInputBorder()),
                 maxLines: 2,
               ),
             ],
@@ -14684,7 +14782,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? 'افزودن' : 'ذخیره')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? loc('افزودن') : loc('ذخیره'))),
         ],
       ),
     );
@@ -14711,27 +14809,27 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     // matter for the final save.
     final parsedTotal = parseAmount(totalCtrl.text);
     if (!draft && (parsedTotal == null || parsedTotal <= 0)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ کل معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('مبلغ کل معتبر وارد کنید.'))));
       return;
     }
     final total = parsedTotal ?? 0;
     if (!draft && selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.'))));
       return;
     }
     if (!draft && selectedAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('برای ثبت نهایی، حساب را انتخاب کنید.'))));
       return;
     }
     if (!draft && !dateConfirmed) {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تاریخ خوانده نشد'),
-          content: Text('از درست بودن تاریخ ${formatDate(date)} اطمینان حاصل کنید.'),
+          title: Text(loc('تاریخ خوانده نشد')),
+          content: Text(locf('از درست بودن تاریخ {0} اطمینان حاصل کنید.', [(formatDate(date))])),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('درست است')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('درست است'))),
           ],
         ),
       );
@@ -14748,11 +14846,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تراکنش مشابه'),
-          content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین رسید باشد. باز هم ثبت شود؟'),
+          title: Text(loc('تراکنش مشابه')),
+          content: Text(loc('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین رسید باشد. باز هم ثبت شود؟')),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بله، ثبت شود'))),
           ],
         ),
       );
@@ -14851,25 +14949,25 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               OutlinedButton(
                 onPressed: () => _save(draft: true),
                 style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ذخیره پیش‌نویس'),
+                child: Text(loc('ذخیره پیش‌نویس')),
               )
             else if (widget.existing!.draft)
               OutlinedButton(
                 onPressed: changed ? () => _save(draft: true) : null,
                 style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ذخیره تغییرات'),
+                child: Text(loc('ذخیره تغییرات')),
               )
             else
               FilledButton(
                 onPressed: changed ? () => _save(draft: false) : null,
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ذخیره تغییرات'),
+                child: Text(loc('ذخیره تغییرات')),
               ),
             if (widget.existing == null || widget.existing!.draft)
               FilledButton(
                 onPressed: () => _save(draft: false),
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ثبت نهایی'),
+                child: Text(loc('ثبت نهایی')),
               ),
           ]);
         },
@@ -14911,38 +15009,38 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             icon: improving
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
-            label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
+            label: Text(improving ? loc('در حال بهبود...') : (geminiFailed ? loc('تلاش مجدد با هوش مصنوعی') : loc('بهبود با هوش مصنوعی'))),
           ),
           if (geminiFailed)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'خواندن هوشمند ممکن نشد.',
-                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                      loc('خواندن هوشمند ممکن نشد.'),
+                      style: const TextStyle(color: Colors.orange, fontSize: 12),
                     ),
                   ),
                   TextButton(
                     onPressed: () => _showGeminiErrorDetail(context),
-                    child: const Text('جزئیات خطا', style: TextStyle(fontSize: 12)),
+                    child: Text(loc('جزئیات خطا'), style: const TextStyle(fontSize: 12)),
                   ),
                 ],
               ),
             ),
           const SizedBox(height: 16),
-          MerchantField(controller: merchantCtrl, label: 'فروشگاه'),
+          MerchantField(controller: merchantCtrl, label: loc('فروشگاه')),
           const SizedBox(height: 12),
           TextField(
             controller: totalCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-            decoration: const InputDecoration(labelText: 'مبلغ کل', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: loc('مبلغ کل'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${formatDate(date)}'),
+            title: Text(locf('تاریخ: {0}', [(formatDate(date))])),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showAppDatePicker(
@@ -14993,7 +15091,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          keepReceipt! ? 'بهتر است فیش را نگه دارید' : 'نیازی به نگه‌داشتن فیش نیست',
+                          keepReceipt! ? loc('بهتر است فیش را نگه دارید') : loc('نیازی به نگه‌داشتن فیش نیست'),
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: keepReceipt! ? (Theme.of(context).brightness == Brightness.dark ? Colors.amber.shade200 : Colors.amber.shade900) : (Theme.of(context).brightness == Brightness.dark ? Colors.green.shade200 : Colors.green.shade900),
@@ -15042,7 +15140,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           if (it.warrantyUntil != null)
                             Chip(
                               avatar: const Icon(Icons.verified_outlined, size: 14),
-                              label: Text('گارانتی تا ${formatDate(it.warrantyUntil!)}', style: const TextStyle(fontSize: 11)),
+                              label: Text(locf('گارانتی تا {0}', [(formatDate(it.warrantyUntil!))]), style: const TextStyle(fontSize: 11)),
                               visualDensity: VisualDensity.compact,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               backgroundColor: Colors.blue.shade50,
@@ -15050,7 +15148,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           if (it.returnUntil != null)
                             Chip(
                               avatar: const Icon(Icons.assignment_return_outlined, size: 14),
-                              label: Text('مرجوعی تا ${formatDate(it.returnUntil!)}', style: const TextStyle(fontSize: 11)),
+                              label: Text(locf('مرجوعی تا {0}', [(formatDate(it.returnUntil!))]), style: const TextStyle(fontSize: 11)),
                               visualDensity: VisualDensity.compact,
                               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               backgroundColor: Colors.orange.shade50,
@@ -15079,7 +15177,9 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 
 // ============================== Payslip review ==============================
 
-const _payslipLabels = <String, String>{
+Map<String, String> get _payslipLabels => {for (final e in _payslipLabelsFa.entries) e.key: loc(e.value)};
+
+const _payslipLabelsFa = <String, String>{
   'brutto': 'حقوق ناخالص',
   'netto': 'حقوق خالص',
   'depositedAmount': 'مبلغ واریز شده به حساب',
@@ -15230,12 +15330,12 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e is GeminiException
               ? e.friendlyMessage
-              : 'خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.'),
+              : loc('خواندن هوشمند ممکن نشد. دوباره امتحان کنید یا دستی تکمیل کنید.')),
           duration: const Duration(seconds: 5),
           // A snackbar with an action stays until dismissed by default;
           // let this one disappear by itself.
           persist: false,
-          action: SnackBarAction(label: 'جزئیات خطا', onPressed: () => _showGeminiErrorDetail(context)),
+          action: SnackBarAction(label: loc('جزئیات خطا'), onPressed: () => _showGeminiErrorDetail(context)),
         ));
       }
     } finally {
@@ -15247,17 +15347,17 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('جزئیات خطای هوش مصنوعی'),
+        title: Text(loc('جزئیات خطای هوش مصنوعی')),
         content: SingleChildScrollView(
-          child: SelectableText(lastGeminiErrorDetail ?? 'جزئیاتی موجود نیست.'),
+          child: SelectableText(lastGeminiErrorDetail ?? loc('جزئیاتی موجود نیست.')),
         ),
         actions: [
           TextButton(
             onPressed: () {
               Clipboard.setData(ClipboardData(text: lastGeminiErrorDetail ?? ''));
-              ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('کپی شد.')));
+              ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(loc('کپی شد.'))));
             },
-            child: const Text('کپی'),
+            child: Text(loc('کپی')),
           ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
         ],
@@ -15284,7 +15384,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     // matter for the final save.
     final netto = parseAmount(numCtrls['netto']!.text);
     if (!draft && (netto == null || netto <= 0)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ Netto معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('مبلغ Netto معتبر وارد کنید.'))));
       return;
     }
     final depositedAmount = parseAmount(numCtrls['depositedAmount']!.text);
@@ -15292,22 +15392,22 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     // advances or other payroll-side deductions) - prefer it when present.
     final transactionAmount = (depositedAmount != null && depositedAmount > 0) ? depositedAmount : (netto ?? 0);
     if (!draft && selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('برای ثبت نهایی، دسته‌بندی را انتخاب کنید.'))));
       return;
     }
     if (!draft && selectedAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('برای ثبت نهایی، حساب را انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('برای ثبت نهایی، حساب را انتخاب کنید.'))));
       return;
     }
     if (!draft && !dateConfirmed) {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تاریخ خوانده نشد'),
-          content: Text('از درست بودن تاریخ ${formatDate(date)} اطمینان حاصل کنید.'),
+          title: Text(loc('تاریخ خوانده نشد')),
+          content: Text(locf('از درست بودن تاریخ {0} اطمینان حاصل کنید.', [(formatDate(date))])),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('درست است')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('درست است'))),
           ],
         ),
       );
@@ -15344,11 +15444,11 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تراکنش مشابه'),
-          content: const Text('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین فیش باشد. باز هم ثبت شود؟'),
+          title: Text(loc('تراکنش مشابه')),
+          content: Text(loc('یک تراکنش با همین مبلغ و تاریخ قبلاً ثبت شده. این ممکن است اسکن تکراری همین فیش باشد. باز هم ثبت شود؟')),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بله، ثبت شود'))),
           ],
         ),
       );
@@ -15441,25 +15541,25 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
               OutlinedButton(
                 onPressed: () => _save(draft: true),
                 style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ذخیره پیش‌نویس'),
+                child: Text(loc('ذخیره پیش‌نویس')),
               )
             else if (widget.existing!.draft)
               OutlinedButton(
                 onPressed: changed ? () => _save(draft: true) : null,
                 style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ذخیره تغییرات'),
+                child: Text(loc('ذخیره تغییرات')),
               )
             else
               FilledButton(
                 onPressed: changed ? () => _save(draft: false) : null,
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ذخیره تغییرات'),
+                child: Text(loc('ذخیره تغییرات')),
               ),
             if (widget.existing == null || widget.existing!.draft)
               FilledButton(
                 onPressed: () => _save(draft: false),
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                child: const Text('ثبت نهایی'),
+                child: Text(loc('ثبت نهایی')),
               ),
           ]);
         },
@@ -15501,32 +15601,32 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
             icon: improving
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : Icon(geminiFailed ? Icons.refresh : Icons.auto_awesome),
-            label: Text(improving ? 'در حال بهبود...' : (geminiFailed ? 'تلاش مجدد با هوش مصنوعی' : 'بهبود با هوش مصنوعی')),
+            label: Text(improving ? loc('در حال بهبود...') : (geminiFailed ? loc('تلاش مجدد با هوش مصنوعی') : loc('بهبود با هوش مصنوعی'))),
           ),
           if (geminiFailed)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'خواندن هوشمند ممکن نشد.',
-                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                      loc('خواندن هوشمند ممکن نشد.'),
+                      style: const TextStyle(color: Colors.orange, fontSize: 12),
                     ),
                   ),
                   TextButton(
                     onPressed: () => _showGeminiErrorDetail(context),
-                    child: const Text('جزئیات خطا', style: TextStyle(fontSize: 12)),
+                    child: Text(loc('جزئیات خطا'), style: const TextStyle(fontSize: 12)),
                   ),
                 ],
               ),
             ),
           const SizedBox(height: 16),
-          TextField(controller: arbeitgeberCtrl, decoration: const InputDecoration(labelText: 'کارفرما', border: OutlineInputBorder())),
+          TextField(controller: arbeitgeberCtrl, decoration: InputDecoration(labelText: loc('کارفرما'), border: const OutlineInputBorder())),
           const SizedBox(height: 12),
-          TextField(controller: monatCtrl, decoration: const InputDecoration(labelText: 'ماه', border: OutlineInputBorder())),
+          TextField(controller: monatCtrl, decoration: InputDecoration(labelText: loc('ماه'), border: const OutlineInputBorder())),
           const SizedBox(height: 12),
-          TextField(controller: steuerklasseCtrl, decoration: const InputDecoration(labelText: 'کلاس مالیاتی', border: OutlineInputBorder())),
+          TextField(controller: steuerklasseCtrl, decoration: InputDecoration(labelText: loc('کلاس مالیاتی'), border: const OutlineInputBorder())),
           const SizedBox(height: 12),
           PayslipFieldsEditor(
             controllers: numCtrls,
@@ -15537,7 +15637,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
           const SizedBox(height: 12),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${formatDate(date)}'),
+            title: Text(locf('تاریخ: {0}', [(formatDate(date))])),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showAppDatePicker(
@@ -15589,7 +15689,7 @@ class TransactionDetailScreen extends StatelessWidget {
 
   String get _categoryName {
     final m = categories.where((c) => c.id == t.categoryId).toList();
-    return m.isEmpty ? 'بدون‌دسته' : m.first.name;
+    return m.isEmpty ? loc('بدون‌دسته') : m.first.name;
   }
 
   String get _accountName {
@@ -15621,7 +15721,7 @@ class TransactionDetailScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('جزئیات تراکنش'),
+        title: Text(loc('جزئیات تراکنش')),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_outlined),
@@ -15642,7 +15742,7 @@ class TransactionDetailScreen extends StatelessWidget {
                 context: context,
                 builder: (ctx) => AlertDialog(
                   title: Text(tr('delete_transaction_confirm')),
-                  content: const Text('این کار قابل بازگشت نیست (مگر با برگردون).'),
+                  content: Text(loc('این کار قابل بازگشت نیست (مگر با برگردون).')),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
                     FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -15680,32 +15780,32 @@ class TransactionDetailScreen extends StatelessWidget {
               child: Column(
                 children: [
                   if (t.merchant.trim().isNotEmpty) ...[
-                    _row(context, 'فروشگاه', t.merchant.trim()),
+                    _row(context, loc('فروشگاه'), t.merchant.trim()),
                     const Divider(height: 1),
                   ],
-                  _row(context, 'دسته‌بندی', _categoryName),
+                  _row(context, loc('دسته‌بندی'), _categoryName),
                   const Divider(height: 1),
-                  _row(context, 'حساب', _accountName),
+                  _row(context, loc('حساب'), _accountName),
                   const Divider(height: 1),
-                  _row(context, 'تاریخ', formatDate(t.date)),
+                  _row(context, loc('تاریخ'), formatDate(t.date)),
                   if (t.note.trim().isNotEmpty) ...[
                     const Divider(height: 1),
-                    _row(context, 'توضیحات', t.note.trim()),
+                    _row(context, loc('توضیحات'), t.note.trim()),
                   ],
                   if (t.isRecurring) ...[
                     const Divider(height: 1),
-                    _row(context, 'تکرار', switch (t.recurrence) {
-                      RecurrenceFrequency.weekly => 'هفتگی',
-                      RecurrenceFrequency.monthly => 'ماهانه',
-                      RecurrenceFrequency.quarterly => 'فصلی',
-                      RecurrenceFrequency.yearly => 'سالانه',
-                      RecurrenceFrequency.custom => 'هر ${t.recurrenceIntervalDays ?? '?'} روز',
+                    _row(context, loc('تکرار'), switch (t.recurrence) {
+                      RecurrenceFrequency.weekly => loc('هفتگی'),
+                      RecurrenceFrequency.monthly => loc('ماهانه'),
+                      RecurrenceFrequency.quarterly => loc('فصلی'),
+                      RecurrenceFrequency.yearly => loc('سالانه'),
+                      RecurrenceFrequency.custom => locf('هر {0} روز', [(t.recurrenceIntervalDays ?? '?')]),
                       RecurrenceFrequency.none => '—',
                     }),
                   ],
                   if (t.draft) ...[
                     const Divider(height: 1),
-                    _row(context, 'وضعیت', 'پیش‌نویس'),
+                    _row(context, loc('وضعیت'), loc('پیش‌نویس')),
                   ],
                 ],
               ),
@@ -15713,7 +15813,7 @@ class TransactionDetailScreen extends StatelessWidget {
           ),
           if (t.items.isNotEmpty) ...[
             const SizedBox(height: 16),
-            Text('اقلام', style: Theme.of(context).textTheme.titleSmall),
+            Text(loc('اقلام'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             ...t.items.map((it) => Card(
                   child: ListTile(
@@ -15735,7 +15835,7 @@ class TransactionDetailScreen extends StatelessWidget {
           ],
           if (t.payslipDetails != null) ...[
             const SizedBox(height: 16),
-            Text('جزئیات فیش حقوقی', style: Theme.of(context).textTheme.titleSmall),
+            Text(loc('جزئیات فیش حقوقی'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             Card(
               child: Padding(
@@ -15887,7 +15987,7 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(title),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'نام فیلد')),
+        content: TextField(controller: ctrl, autofocus: true, decoration: InputDecoration(labelText: loc('نام فیلد'))),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('confirm'))),
@@ -15902,8 +16002,8 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف فیلد'),
-        content: Text('فیلد «$name» حذف شود؟'),
+        title: Text(loc('حذف فیلد')),
+        content: Text(locf('فیلد «{0}» حذف شود؟', [name])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -15914,7 +16014,7 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
   }
 
   Future<void> _renameBuiltIn(String key) async {
-    final name = await _askName('تغییر نام فیلد', prefs.labelOf(key));
+    final name = await _askName(loc('تغییر نام فیلد'), prefs.labelOf(key));
     if (name == null) return;
     final p = PayslipFieldPrefs(hidden: prefs.hidden, labels: {...prefs.labels, key: name});
     await PayslipFieldPrefs.save(p);
@@ -15938,7 +16038,7 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
     final picked = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('افزودن فیلد'),
+        title: Text(loc('افزودن فیلد')),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -15947,11 +16047,11 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
               TextField(
                 controller: nameCtrl,
                 autofocus: hiddenKeys.isEmpty,
-                decoration: const InputDecoration(labelText: 'نام فیلد جدید (مثلاً حق مسکن)'),
+                decoration: InputDecoration(labelText: loc('نام فیلد جدید (مثلاً حق مسکن)')),
               ),
               if (hiddenKeys.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                const Text('یا برگرداندن فیلدهای حذف‌شده:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                Text(loc('یا برگرداندن فیلدهای حذف‌شده:'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -16003,11 +16103,11 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
           border: const OutlineInputBorder(),
           suffixIcon: PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, size: 20),
-            tooltip: 'گزینه‌های فیلد',
+            tooltip: loc('گزینه‌های فیلد'),
             onSelected: (v) => v == 'rename' ? onRename() : onRemove(),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'rename', child: Text('تغییر نام')),
-              PopupMenuItem(value: 'remove', child: Text('حذف فیلد')),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'rename', child: Text(loc('تغییر نام'))),
+              PopupMenuItem(value: 'remove', child: Text(loc('حذف فیلد'))),
             ],
           ),
         ),
@@ -16037,7 +16137,7 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
             label: widget.customFields[i].label,
             onChanged: (v) => _updateCustom(i, PayslipCustomField(label: widget.customFields[i].label, value: parseAmount(v) ?? 0)),
             onRename: () async {
-              final name = await _askName('تغییر نام فیلد', widget.customFields[i].label);
+              final name = await _askName(loc('تغییر نام فیلد'), widget.customFields[i].label);
               if (name != null) _updateCustom(i, PayslipCustomField(label: name, value: widget.customFields[i].value));
             },
             onRemove: () async {
@@ -16047,7 +16147,7 @@ class _PayslipFieldsEditorState extends State<PayslipFieldsEditor> {
           ),
         Align(
           alignment: AlignmentDirectional.centerStart,
-          child: TextButton.icon(onPressed: _add, icon: const Icon(Icons.add, size: 18), label: const Text('افزودن فیلد')),
+          child: TextButton.icon(onPressed: _add, icon: const Icon(Icons.add, size: 18), label: Text(loc('افزودن فیلد'))),
         ),
       ],
     );
@@ -16221,16 +16321,16 @@ class _TransactionEditorState extends State<TransactionEditor> {
     // matter for the final save.
     final parsedAmount = parseAmount(amountCtrl.text);
     if (!draft && (parsedAmount == null || parsedAmount <= 0)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مبلغ معتبر وارد کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('مبلغ معتبر وارد کنید.'))));
       return false;
     }
     final amount = parsedAmount ?? 0;
     if (!draft && selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک دسته‌بندی انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('یک دسته‌بندی انتخاب کنید.'))));
       return false;
     }
     if (!draft && selectedAccount == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('یک حساب انتخاب کنید.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('یک حساب انتخاب کنید.'))));
       return false;
     }
     final existingList = draft ? const <Transaction>[] : await Store.loadTransactions();
@@ -16247,11 +16347,11 @@ class _TransactionEditorState extends State<TransactionEditor> {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('تراکنش مشابه'),
-          content: const Text('یک تراکنش با همین مبلغ، تاریخ و دسته‌بندی قبلاً ثبت شده. ممکن است این تراکنش تکراری باشد. باز هم ثبت شود؟'),
+          title: Text(loc('تراکنش مشابه')),
+          content: Text(loc('یک تراکنش با همین مبلغ، تاریخ و دسته‌بندی قبلاً ثبت شده. ممکن است این تراکنش تکراری باشد. باز هم ثبت شود؟')),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بله، ثبت شود')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('بله، ثبت شود'))),
           ],
         ),
       );
@@ -16265,7 +16365,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) {
       recDay = parseInt(dayCtrl.text);
       if (recDay == null && !draft) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('روز سررسید در ماه را وارد کنید.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('روز سررسید در ماه را وارد کنید.'))));
         return false;
       }
       if (recDay != null && recDay < 1) recDay = 1;
@@ -16275,7 +16375,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     } else if (recurrence == RecurrenceFrequency.custom) {
       recInterval = parseInt(intervalCtrl.text);
       if (!draft && (recInterval == null || recInterval <= 0)) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تعداد روز بازه را درست وارد کنید.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('تعداد روز بازه را درست وارد کنید.'))));
         return false;
       }
     }
@@ -16440,7 +16540,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     final added = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(editIndex == null ? 'افزودن کالا' : 'ویرایش کالا'),
+        title: Text(editIndex == null ? loc('افزودن کالا') : loc('ویرایش کالا')),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -16453,7 +16553,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               const SizedBox(height: 8),
               TextField(
                 controller: warrantyCtrl,
-                decoration: const InputDecoration(labelText: 'یادداشت گارانتی/مرجوعی (اختیاری)', border: OutlineInputBorder()),
+                decoration: InputDecoration(labelText: loc('یادداشت گارانتی/مرجوعی (اختیاری)'), border: const OutlineInputBorder()),
                 maxLines: 2,
               ),
             ],
@@ -16461,7 +16561,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? 'افزودن' : 'ذخیره')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(editIndex == null ? loc('افزودن') : loc('ذخیره'))),
         ],
       ),
     );
@@ -16505,13 +16605,13 @@ class _TransactionEditorState extends State<TransactionEditor> {
         DropdownButtonFormField<RecurrenceFrequency>(
           initialValue: recurrence,
           decoration: InputDecoration(labelText: tr('recurrence_type'), border: const OutlineInputBorder()),
-          items: const [
-            DropdownMenuItem(value: RecurrenceFrequency.none, child: Text('بدون تکرار')),
-            DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text('هفتگی (روز مشخصی از هفته)')),
-            DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text('ماهانه (روز مشخصی از ماه)')),
-            DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text('فصلی (هر سه ماه)')),
-            DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text('سالانه (در همین تاریخ هر سال)')),
-            DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text('بازه‌ی دلخواه (هر N روز)')),
+          items: [
+            DropdownMenuItem(value: RecurrenceFrequency.none, child: Text(loc('بدون تکرار'))),
+            DropdownMenuItem(value: RecurrenceFrequency.weekly, child: Text(loc('هفتگی (روز مشخصی از هفته)'))),
+            DropdownMenuItem(value: RecurrenceFrequency.monthly, child: Text(loc('ماهانه (روز مشخصی از ماه)'))),
+            DropdownMenuItem(value: RecurrenceFrequency.quarterly, child: Text(loc('فصلی (هر سه ماه)'))),
+            DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text(loc('سالانه (در همین تاریخ هر سال)'))),
+            DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text(loc('بازه‌ی دلخواه (هر N روز)'))),
           ],
           onChanged: (v) => setState(() {
             recurrence = v ?? RecurrenceFrequency.none;
@@ -16523,10 +16623,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: dayCtrl,
             keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
-            decoration: const InputDecoration(
-              labelText: 'روز سررسید در ماه (۱ تا ۳۱) *',
-              helperText: 'برای ماه‌های کوتاه‌تر، به‌صورت خودکار آخرین روز همان ماه در نظر گرفته می‌شود.',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: loc('روز سررسید در ماه (۱ تا ۳۱) *'),
+              helperText: loc('برای ماه‌های کوتاه‌تر، به‌صورت خودکار آخرین روز همان ماه در نظر گرفته می‌شود.'),
+              border: const OutlineInputBorder(),
             ),
           ),
         ],
@@ -16550,18 +16650,18 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: intervalCtrl,
             keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
-            decoration: const InputDecoration(labelText: 'هر چند روز یک‌بار؟', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: loc('هر چند روز یک‌بار؟'), border: const OutlineInputBorder()),
           ),
         ],
         if (recurrence != RecurrenceFrequency.none) ...[
           const SizedBox(height: 12),
-          Text('پایان تکرار', style: Theme.of(context).textTheme.bodyMedium),
+          Text(loc('پایان تکرار'), style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 6),
           SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'unlimited', label: Text('نامحدود')),
-              ButtonSegment(value: 'count', label: Text('تعداد قسط')),
-              ButtonSegment(value: 'date', label: Text('تا تاریخ')),
+            segments: [
+              ButtonSegment(value: 'unlimited', label: Text(loc('نامحدود'))),
+              ButtonSegment(value: 'count', label: Text(loc('تعداد قسط'))),
+              ButtonSegment(value: 'date', label: Text(loc('تا تاریخ'))),
             ],
             selected: {endMode},
             onSelectionChanged: (s) => setState(() {
@@ -16574,7 +16674,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-              title: Text(endDate == null ? 'انتخاب تاریخ آخرین پرداخت' : 'تا: ${formatDate(endDate!)}'),
+              title: Text(endDate == null ? loc('انتخاب تاریخ آخرین پرداخت') : locf('تا: {0}', [(formatDate(endDate!))])),
               trailing: const Icon(Icons.event),
               onTap: () async {
                 final d = await showAppDatePicker(
@@ -16603,7 +16703,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           if (preview != null) ...[
             const SizedBox(height: 8),
             Text(
-              'سررسید بعدی: ${formatDate(preview)}',
+              locf('سررسید بعدی: {0}', [(formatDate(preview))]),
               style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.w600),
             ),
           ],
@@ -16625,7 +16725,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
-                title: const Text('یادآوری روز قبل از دو قسط آخر'),
+                title: Text(loc('یادآوری روز قبل از دو قسط آخر')),
                 value: notifyLastTwoEnabled,
                 onChanged: (v) => setState(() {
                   notifyLastTwoEnabled = v ?? false;
@@ -16637,7 +16737,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               controlAffinity: ListTileControlAffinity.leading,
               title: Row(
                 children: [
-                  const Text('یادآوری '),
+                  Text(loc('یادآوری ')),
                   SizedBox(
                     width: 48,
                     child: TextField(
@@ -16648,7 +16748,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                       decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4)),
                     ),
                   ),
-                  const Text(' روز قبل از هر قسط'),
+                  Text(loc(' روز قبل از هر قسط')),
                 ],
               ),
               value: notifyEachEnabled,
@@ -16662,7 +16762,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
               controller: notifyMessageCtrl,
               decoration: InputDecoration(
                 labelText: tr('reminder_note'),
-                hintText: 'مثلاً: یادت نره اشتراک رو کنسل کنی',
+                hintText: loc('مثلاً: یادت نره اشتراک رو کنسل کنی'),
                 border: const OutlineInputBorder(),
               ),
             ),
@@ -16713,25 +16813,25 @@ class _TransactionEditorState extends State<TransactionEditor> {
           OutlinedButton(
             onPressed: _dirty ? () => _save(asDraft: true) : null,
             style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('ذخیره تغییرات', textAlign: TextAlign.center),
+            child: Text(loc('ذخیره تغییرات'), textAlign: TextAlign.center),
           ),
         if (widget.existing != null && !widget.existing!.draft)
           FilledButton(
             onPressed: _dirty ? () => _save(asDraft: false) : null,
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('ذخیره تغییرات', textAlign: TextAlign.center),
+            child: Text(loc('ذخیره تغییرات'), textAlign: TextAlign.center),
           )
         else
           FilledButton(
             onPressed: () => _save(asDraft: false),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('ثبت نهایی', textAlign: TextAlign.center),
+            child: Text(loc('ثبت نهایی'), textAlign: TextAlign.center),
           ),
       ], trailing: [
         if (_currentImagePath != null)
           IconButton(
             icon: const Icon(Icons.receipt_long_outlined),
-            tooltip: 'تصویر رسید/فیش',
+            tooltip: loc('تصویر رسید/فیش'),
             onPressed: () async {
               final action = await Navigator.push<ReceiptImageAction>(
                 context,
@@ -16759,13 +16859,13 @@ class _TransactionEditorState extends State<TransactionEditor> {
         if (widget.existing != null)
           IconButton(
             icon: Icon(Icons.delete_outline, color: Colors.red.shade400),
-            tooltip: 'حذف تراکنش',
+            tooltip: loc('حذف تراکنش'),
             onPressed: () async {
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('حذف تراکنش'),
-                  content: const Text('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.'),
+                  title: Text(loc('حذف تراکنش')),
+                  content: Text(loc('این تراکنش حذف شود؟ این کار قابل بازگشت نیست.')),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
                     FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -16780,7 +16880,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ),
       ]),
       appBar: AppBar(
-        title: Text(widget.existing == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
+        title: Text(widget.existing == null ? loc('تراکنش جدید') : loc('ویرایش تراکنش')),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -16789,7 +16889,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.document_scanner_outlined),
-              label: const Text('خواندن از عکس یا فایل رسید/فیش حقوقی', style: TextStyle(fontSize: 15)),
+              label: Text(loc('خواندن از عکس یا فایل رسید/فیش حقوقی'), style: const TextStyle(fontSize: 15)),
               onPressed: () async {
                 final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
                 if (result == null) return;
@@ -16802,19 +16902,19 @@ class _TransactionEditorState extends State<TransactionEditor> {
               },
             ),
             const SizedBox(height: 16),
-            const Row(
+            Row(
               children: [
-                Expanded(child: Divider()),
-                Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('یا وارد کنید', style: TextStyle(color: Colors.grey, fontSize: 12))),
-                Expanded(child: Divider()),
+                const Expanded(child: Divider()),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(loc('یا وارد کنید'), style: const TextStyle(color: Colors.grey, fontSize: 12))),
+                const Expanded(child: Divider()),
               ],
             ),
             const SizedBox(height: 16),
           ],
           SegmentedButton<TxType>(
-            segments: const [
-              ButtonSegment(value: TxType.expense, label: Text('هزینه'), icon: Icon(Icons.arrow_upward)),
-              ButtonSegment(value: TxType.income, label: Text('درآمد'), icon: Icon(Icons.arrow_downward)),
+            segments: [
+              ButtonSegment(value: TxType.expense, label: Text(loc('هزینه')), icon: const Icon(Icons.arrow_upward)),
+              ButtonSegment(value: TxType.income, label: Text(loc('درآمد')), icon: const Icon(Icons.arrow_downward)),
             ],
             selected: {type},
             onSelectionChanged: (s) => setState(() {
@@ -16827,7 +16927,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-            decoration: InputDecoration(labelText: type == TxType.income ? 'مبلغ واریز شده به حساب' : tr('amount'), hintText: 'مثلاً 250,000', border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: type == TxType.income ? loc('مبلغ واریز شده به حساب') : tr('amount'), hintText: loc('مثلاً 250,000'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
@@ -16851,7 +16951,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           const SizedBox(height: 16),
           ListTile(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text('تاریخ: ${formatDate(date)}'),
+            title: Text(locf('تاریخ: {0}', [(formatDate(date))])),
             trailing: const Icon(Icons.calendar_month),
             onTap: () async {
               final d = await showAppDatePicker(
@@ -16871,7 +16971,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ),
           const SizedBox(height: 16),
           if (type == TxType.expense) ...[
-            MerchantField(controller: merchantCtrl, label: 'نام فروشگاه'),
+            MerchantField(controller: merchantCtrl, label: loc('نام فروشگاه')),
             const SizedBox(height: 16),
           ],
           TextField(
@@ -16915,7 +17015,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                             if (it.warrantyUntil != null)
                               Chip(
                                 avatar: const Icon(Icons.verified_outlined, size: 14),
-                                label: Text('گارانتی تا ${formatDate(it.warrantyUntil!)}', style: const TextStyle(fontSize: 11)),
+                                label: Text(locf('گارانتی تا {0}', [(formatDate(it.warrantyUntil!))]), style: const TextStyle(fontSize: 11)),
                                 visualDensity: VisualDensity.compact,
                                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 backgroundColor: Colors.blue.shade50,
@@ -16923,7 +17023,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                             if (it.returnUntil != null)
                               Chip(
                                 avatar: const Icon(Icons.assignment_return_outlined, size: 14),
-                                label: Text('مرجوعی تا ${formatDate(it.returnUntil!)}', style: const TextStyle(fontSize: 11)),
+                                label: Text(locf('مرجوعی تا {0}', [(formatDate(it.returnUntil!))]), style: const TextStyle(fontSize: 11)),
                                 visualDensity: VisualDensity.compact,
                                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 backgroundColor: Colors.orange.shade50,
@@ -16948,21 +17048,21 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ],
           if (type == TxType.income) ...[
             const SizedBox(height: 16),
-            Text('جزئیات فیش حقوقی (اختیاری)', style: Theme.of(context).textTheme.titleMedium),
+            Text(loc('جزئیات فیش حقوقی (اختیاری)'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             TextField(
               controller: payslipArbeitgeberCtrl,
-              decoration: const InputDecoration(labelText: 'کارفرما', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: loc('کارفرما'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: payslipMonatCtrl,
-              decoration: const InputDecoration(labelText: 'ماه تسویه', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: loc('ماه تسویه'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: payslipSteuerklasseCtrl,
-              decoration: const InputDecoration(labelText: 'کلاس مالیاتی', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: loc('کلاس مالیاتی'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             PayslipFieldsEditor(
@@ -16981,7 +17081,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           _recurrenceSection(),
           const SizedBox(height: 8),
           Text(
-            'پیش‌نویس‌ها در هیچ محاسبه‌ای لحاظ نمی‌شوند تا زمانی که ثبت نهایی شوند.',
+            loc('پیش‌نویس‌ها در هیچ محاسبه‌ای لحاظ نمی‌شوند تا زمانی که ثبت نهایی شوند.'),
             style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
           ),
           const SizedBox(height: 8),
@@ -17019,8 +17119,8 @@ class _CategoryPickerState extends State<CategoryPicker> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید در «$parentName»'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
+        title: Text(parentId == null ? loc('دسته‌بندی جدید') : locf('زیرمجموعه‌ی جدید در «{0}»', [parentName])),
+        content: TextField(controller: ctrl, decoration: InputDecoration(labelText: loc('نام دسته‌بندی')), autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('add'))),
@@ -17032,7 +17132,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
         (c) => c.parentId == parentId && c.type == widget.type && c.name.trim().toLowerCase() == name.trim().toLowerCase());
     if (duplicate) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('این نام قبلاً در همین گروه استفاده شده است.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('این نام قبلاً در همین گروه استفاده شده است.'))));
       }
       return;
     }
@@ -17064,26 +17164,26 @@ class _CategoryPickerState extends State<CategoryPicker> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: Text(
-                stack.isEmpty ? 'دسته‌بندی‌ها' : stack.last.name,
+                stack.isEmpty ? loc('دسته‌بندی‌ها') : stack.last.name,
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
             if (stack.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.arrow_forward),
-                title: const Text('بازگشت'),
+                title: Text(loc('بازگشت')),
                 onTap: () => setState(() => stack.removeLast()),
               ),
             if (stack.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.check_circle_outline),
-                title: Text('انتخاب «${stack.last.name}»'),
+                title: Text(locf('انتخاب «{0}»', [(stack.last.name)])),
                 onTap: () => Navigator.pop(context, stack.last),
               ),
             if (items.isEmpty && stack.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('هنوز دسته‌بندی‌ای وجود ندارد. با دکمه‌ی زیر یکی اضافه کنید.'),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(loc('هنوز دسته‌بندی‌ای وجود ندارد. با دکمه‌ی زیر یکی اضافه کنید.')),
               ),
             Flexible(
               child: ListView(
@@ -17098,7 +17198,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
                       children: [
                         IconButton(
                           icon: const Icon(Icons.add, size: 20),
-                          tooltip: 'افزودن زیرمجموعه در «${c.name}»',
+                          tooltip: locf('افزودن زیرمجموعه در «{0}»', [(c.name)]),
                           onPressed: () => _addCategory(underParent: c),
                         ),
                         if (hasChildren) const Icon(Icons.chevron_left),
@@ -17118,7 +17218,7 @@ class _CategoryPickerState extends State<CategoryPicker> {
             const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.add),
-              title: Text(stack.isEmpty ? 'افزودن دسته‌بندی جدید' : 'افزودن زیرمجموعه‌ی جدید'),
+              title: Text(stack.isEmpty ? loc('افزودن دسته‌بندی جدید') : loc('افزودن زیرمجموعه‌ی جدید')),
               onTap: _addCategory,
             ),
           ],
@@ -17161,8 +17261,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(parentId == null ? 'دسته‌بندی جدید' : 'زیرمجموعه‌ی جدید'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام دسته‌بندی'), autofocus: true),
+        title: Text(parentId == null ? loc('دسته‌بندی جدید') : loc('زیرمجموعه‌ی جدید')),
+        content: TextField(controller: ctrl, decoration: InputDecoration(labelText: loc('نام دسته‌بندی')), autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('add'))),
@@ -17174,7 +17274,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
         .any((c) => c.parentId == parentId && c.type == selectedType && c.name.trim().toLowerCase() == name.trim().toLowerCase());
     if (duplicate) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('این نام قبلاً در همین گروه استفاده شده است.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('این نام قبلاً در همین گروه استفاده شده است.'))));
       }
       return;
     }
@@ -17202,8 +17302,8 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('تغییر نام دسته‌بندی'),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'نام جدید'), autofocus: true),
+        title: Text(loc('تغییر نام دسته‌بندی')),
+        content: TextField(controller: ctrl, decoration: InputDecoration(labelText: loc('نام جدید')), autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(tr('save'))),
@@ -17215,7 +17315,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
         (x) => x.id != c.id && x.parentId == c.parentId && x.type == c.type && x.name.trim().toLowerCase() == name.trim().toLowerCase());
     if (duplicate) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('این نام قبلاً در همین گروه استفاده شده است.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('این نام قبلاً در همین گروه استفاده شده است.'))));
       }
       return;
     }
@@ -17231,11 +17331,9 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف دسته‌بندی'),
+        title: Text(loc('حذف دسته‌بندی')),
         content: Text(
-          '«${c.name}» حذف شود؟'
-          '${hasChildren ? '\nزیرمجموعه‌های آن یک سطح بالاتر منتقل می‌شوند.' : ''}'
-          '\nتراکنش‌هایی که از این دسته‌بندی استفاده کرده‌اند، به دسته‌بندی بالاتر منتقل می‌شوند و نام «${c.name}» به توضیحات آن‌ها اضافه می‌شود.',
+          locf('«{0}» حذف شود؟{1}\nتراکنش‌هایی که از این دسته‌بندی استفاده کرده‌اند، به دسته‌بندی بالاتر منتقل می‌شوند و نام «{2}» به توضیحات آن‌ها اضافه می‌شود.', [(c.name), (hasChildren ? loc('\nزیرمجموعه‌های آن یک سطح بالاتر منتقل می‌شوند.') : ''), (c.name)]),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
@@ -17255,7 +17353,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final newTx = tx.map((t) {
       if (t.categoryId == c.id) {
         txChanged = true;
-        final newNote = t.note.isEmpty ? 'دسته‌بندی قبلی: ${c.name}' : '${t.note} (دسته‌بندی قبلی: ${c.name})';
+        final newNote = t.note.isEmpty ? locf('دسته‌بندی قبلی: {0}', [(c.name)]) : locf('{0} (دسته‌بندی قبلی: {1})', [(t.note), (c.name)]);
         return t.copyWith(categoryId: c.parentId ?? '_uncategorized_', note: newNote);
       }
       return t;
@@ -17292,17 +17390,17 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
               if (hasChildren) Icon(isCollapsed ? Icons.chevron_left : Icons.expand_more, color: Colors.grey.shade500),
               IconButton(
                 icon: const Icon(Icons.add, size: 20),
-                tooltip: 'افزودن زیرمجموعه',
+                tooltip: loc('افزودن زیرمجموعه'),
                 onPressed: () => _addCategory(parentId: c.id),
               ),
               IconButton(
                 icon: const Icon(Icons.edit_outlined, size: 20),
-                tooltip: 'تغییر نام',
+                tooltip: loc('تغییر نام'),
                 onPressed: () => _rename(c),
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline, size: 20),
-                tooltip: 'حذف',
+                tooltip: loc('حذف'),
                 onPressed: () => _delete(c),
               ),
             ],
@@ -17326,9 +17424,9 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: SegmentedButton<TxType>(
-              segments: const [
-                ButtonSegment(value: TxType.expense, label: Text('هزینه')),
-                ButtonSegment(value: TxType.income, label: Text('درآمد')),
+              segments: [
+                ButtonSegment(value: TxType.expense, label: Text(loc('هزینه'))),
+                ButtonSegment(value: TxType.income, label: Text(loc('درآمد'))),
               ],
               selected: {selectedType},
               onSelectionChanged: (s) => setState(() => selectedType = s.first),
@@ -17336,7 +17434,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
           ),
           Expanded(
             child: tree.isEmpty
-                ? const Center(child: Text('دسته‌بندی‌ای وجود ندارد.'))
+                ? Center(child: Text(loc('دسته‌بندی‌ای وجود ندارد.')))
                 : ListView(padding: const EdgeInsets.only(bottom: 88), children: tree),
           ),
         ],
@@ -17344,7 +17442,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addCategory(),
         icon: const Icon(Icons.add),
-        label: const Text('دسته‌بندی جدید'),
+        label: Text(loc('دسته‌بندی جدید')),
       ),
     );
   }
@@ -17395,29 +17493,29 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
         // there's nothing left to ask a rate for at this dialog.
         final needsRate = existing == null && accounts.isNotEmpty && currency != mainCur;
         return AlertDialog(
-          title: Text(existing == null ? 'حساب جدید' : 'ویرایش حساب'),
+          title: Text(existing == null ? loc('حساب جدید') : loc('ویرایش حساب')),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'نام حساب'), autofocus: true),
+                TextField(controller: nameCtrl, decoration: InputDecoration(labelText: loc('نام حساب')), autofocus: true),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<AccountType>(
                   initialValue: type,
-                  decoration: const InputDecoration(labelText: 'نوع حساب'),
+                  decoration: InputDecoration(labelText: loc('نوع حساب')),
                   items: AccountType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.label))).toList(),
                   onChanged: (v) => setLocal(() => type = v ?? type),
                 ),
                 const SizedBox(height: 12),
                 if (currencyLocked)
                   InputDecorator(
-                    decoration: const InputDecoration(labelText: 'واحد پول', helperText: 'واحد پول یک حساب بعد از ساختنش قابل تغییر نیست.', helperMaxLines: 2),
+                    decoration: InputDecoration(labelText: loc('واحد پول'), helperText: loc('واحد پول یک حساب بعد از ساختنش قابل تغییر نیست.'), helperMaxLines: 2),
                     child: Text(currencyLabel(currency)),
                   )
                 else
                   DropdownButtonFormField<String>(
                     initialValue: currency,
-                    decoration: const InputDecoration(labelText: 'واحد پول'),
+                    decoration: InputDecoration(labelText: loc('واحد پول')),
                     items: (existing == null ? kCurrencies : const ['IRR', 'IRT'])
                         .map((c) => DropdownMenuItem(value: c, child: Text(currencyLabel(c))))
                         .toList(),
@@ -17428,9 +17526,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
-                    child: const Text(
-                      'در انتخاب واحد پول این حساب دقت کن - بعد از ساختن حساب، واحدش دیگه قابل تغییر نیست (به‌جز جابه‌جایی ریال/تومان).',
-                      style: TextStyle(fontSize: 12),
+                    child: Text(
+                      loc('در انتخاب واحد پول این حساب دقت کن - بعد از ساختن حساب، واحدش دیگه قابل تغییر نیست (به‌جز جابه‌جایی ریال/تومان).'),
+                      style: const TextStyle(fontSize: 12),
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -17439,9 +17537,8 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: const [AmountInputFormatter()],
                     decoration: InputDecoration(
-                      labelText: 'نرخ روز (اختیاری): ${dayRateLabel(currency, mainCur)}',
-                      helperText: 'فقط برای نمایش موجودی کل در صفحه‌ی اصلی. می‌تونی خالی بذاری و بعداً از صفحه‌ی اصلی '
-                          'یا هنگام انتقال پول به این حساب تنظیمش کنی.',
+                      labelText: locf('نرخ روز (اختیاری): {0}', [(dayRateLabel(currency, mainCur))]),
+                      helperText: loc('فقط برای نمایش موجودی کل در صفحه‌ی اصلی. می‌تونی خالی بذاری و بعداً از صفحه‌ی اصلی یا هنگام انتقال پول به این حساب تنظیمش کنی.'),
                       helperMaxLines: 4,
                     ),
                   ),
@@ -17451,7 +17548,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   controller: balanceCtrl,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                   inputFormatters: const [AmountInputFormatter(allowNegative: true)],
-                  decoration: const InputDecoration(labelText: 'موجودی اولیه', hintText: '0'),
+                  decoration: InputDecoration(labelText: loc('موجودی اولیه'), hintText: '0'),
                 ),
               ],
             ),
@@ -17529,13 +17626,13 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       final proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('پیشنهاد پشتیبان‌گیری'),
-          content: const Text(
-            'چون حساب‌هایی با واحدهای پول مختلف داری، پیشنهاد می‌شه قبل از ادامه، از «تنظیمات › پشتیبان‌گیری و بازیابی» یه نسخه‌ی پشتیبان بگیری.',
+          title: Text(loc('پیشنهاد پشتیبان‌گیری')),
+          content: Text(
+            loc('چون حساب‌هایی با واحدهای پول مختلف داری، پیشنهاد می‌شه قبل از ادامه، از «تنظیمات › پشتیبان‌گیری و بازیابی» یه نسخه‌ی پشتیبان بگیری.'),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('متوجه‌ام، ادامه بده')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('متوجه‌ام، ادامه بده'))),
           ],
         ),
       );
@@ -17547,14 +17644,13 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('تبدیل ریال/تومان'),
+          title: Text(loc('تبدیل ریال/تومان')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'واحد این حساب از «${currencyLabel(old.currency)}» به «${currencyLabel(edited.currency)}» تغییر می‌کند '
-                '(با ضریب ثابت ${old.currency == 'IRR' ? '۰٫۱' : '۱۰'}). همه‌ی مبلغ‌های این حساب متناسب با آن تبدیل می‌شوند.',
+                locf('واحد این حساب از «{0}» به «{1}» تغییر می‌کند (با ضریب ثابت {2}). همه‌ی مبلغ‌های این حساب متناسب با آن تبدیل می‌شوند.', [(currencyLabel(old.currency)), (currencyLabel(edited.currency)), (old.currency == 'IRR' ? loc('۰٫۱') : loc('۱۰'))]),
                 style: const TextStyle(fontSize: 13, height: 1.6),
               ),
               if (others.isNotEmpty) ...[
@@ -17565,7 +17661,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                   value: convertOthers,
                   onChanged: (v) => setLocal(() => convertOthers = v ?? false),
                   title: Text(
-                    'حساب‌های دیگری با همین واحد (${others.map((a) => a.name).join('، ')}) هم تبدیل شوند',
+                    locf('حساب‌های دیگری با همین واحد ({0}) هم تبدیل شوند', [(others.map((a) => a.name).join(loc('، ')))]),
                     style: const TextStyle(fontSize: 13),
                   ),
                 ),
@@ -17574,7 +17670,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تبدیل')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('تبدیل'))),
           ],
         ),
       ),
@@ -17616,9 +17712,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('امکان حذف نیست'),
-          content: Text('حساب «${a.name}» در تراکنش‌های ثبت‌شده استفاده شده است. ابتدا تراکنش‌های آن را حذف یا به حساب دیگری منتقل کنید.'),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('باشه'))],
+          title: Text(loc('امکان حذف نیست')),
+          content: Text(locf('حساب «{0}» در تراکنش‌های ثبت‌شده استفاده شده است. ابتدا تراکنش‌های آن را حذف یا به حساب دیگری منتقل کنید.', [(a.name)])),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(loc('باشه')))],
         ),
       );
       return;
@@ -17627,9 +17723,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('امکان حذف نیست'),
-          content: const Text('باید حداقل یک حساب در برنامه باقی بماند.'),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('باشه'))],
+          title: Text(loc('امکان حذف نیست')),
+          content: Text(loc('باید حداقل یک حساب در برنامه باقی بماند.')),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(loc('باشه')))],
         ),
       );
       return;
@@ -17637,8 +17733,8 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('حذف حساب'),
-        content: Text('حساب «${a.name}» حذف شود؟'),
+        title: Text(loc('حذف حساب')),
+        content: Text(locf('حساب «{0}» حذف شود؟', [(a.name)])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
@@ -17666,10 +17762,9 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                     title: Text(a.name),
                     subtitle: Text(
                       a.currency != mainCur
-                          ? '${a.type.label} • ${currencyLabel(a.currency)} • نرخ روز: '
-                              '${a.rateUpdatedAt == null && a.exchangeRateToMain == 1.0 ? 'تنظیم نشده' : dayRateText(a, mainCur)}'
+                          ? locf('{0} • {1} • نرخ روز: {2}', [(a.type.label), (currencyLabel(a.currency)), (a.rateUpdatedAt == null && a.exchangeRateToMain == 1.0 ? loc('تنظیم نشده') : dayRateText(a, mainCur))])
                           : (a.initialBalance != 0
-                              ? '${a.type.label} • ${currencyLabel(a.currency)} • موجودی اولیه: ${ltr(formatMoney(a.initialBalance, a.currency))}'
+                              ? locf('{0} • {1} • موجودی اولیه: {2}', [(a.type.label), (currencyLabel(a.currency)), (ltr(formatMoney(a.initialBalance, a.currency)))])
                               : '${a.type.label} • ${currencyLabel(a.currency)}'),
                     ),
                     trailing: Row(
@@ -17678,7 +17773,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                         if (a.currency != mainCur)
                           IconButton(
                             icon: const Icon(Icons.currency_exchange, size: 20),
-                            tooltip: 'ویرایش نرخ روز',
+                            tooltip: loc('ویرایش نرخ روز'),
                             onPressed: () => _editExchangeRate(a),
                           ),
                         IconButton(icon: const Icon(Icons.edit_outlined), onPressed: () => _editAccount(existing: a)),
@@ -17692,7 +17787,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _editAccount(),
         icon: const Icon(Icons.add),
-        label: const Text('حساب جدید'),
+        label: Text(loc('حساب جدید')),
       ),
     );
   }
