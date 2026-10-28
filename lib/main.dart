@@ -1479,43 +1479,6 @@ String mainCurrencyOf(List<Account> accounts) => accounts.isEmpty ? 'IRT' : acco
 /// floating-point noise (12345.600000001).
 double roundMoney(double v) => (v * 10000).round() / 10000;
 
-DateTime? nextOccurrencePreview(Transaction t) {
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  switch (t.recurrence) {
-    case RecurrenceFrequency.monthly:
-      if (t.recurrenceDay == null) return null;
-      var d = calendarMonthDate(today, 0, t.recurrenceDay!);
-      if (d.isBefore(today)) d = calendarMonthDate(today, 1, t.recurrenceDay!);
-      return d;
-    case RecurrenceFrequency.weekly:
-      if (t.recurrenceWeekday == null) return null;
-      var diff = (t.recurrenceWeekday! - today.weekday) % 7;
-      if (diff < 0) diff += 7;
-      return today.add(Duration(days: diff));
-    case RecurrenceFrequency.custom:
-      if (t.recurrenceIntervalDays == null || t.recurrenceIntervalDays! <= 0) return null;
-      var next = t.date;
-      while (!next.isAfter(today)) {
-        next = next.add(Duration(days: t.recurrenceIntervalDays!));
-      }
-      return next;
-    case RecurrenceFrequency.quarterly:
-      if (t.recurrenceDay == null) return null;
-      var probe = calendarMonthDate(t.date, 0, t.recurrenceDay!);
-      while (!probe.isAfter(today)) {
-        probe = calendarMonthDate(probe, 3, t.recurrenceDay!);
-      }
-      return probe;
-    case RecurrenceFrequency.yearly:
-      var d = clampedMonthDate(today.year, t.date.month, t.date.day);
-      if (d.isBefore(today)) d = clampedMonthDate(today.year + 1, t.date.month, t.date.day);
-      return d;
-    case RecurrenceFrequency.none:
-      return null;
-  }
-}
-
 /// Generates the full sequence of occurrence dates for a recurring
 /// transaction, starting from its own date, following its recurrence
 /// pattern, until either the configured installment count or end date is
@@ -16720,20 +16683,38 @@ class _TransactionEditorState extends State<TransactionEditor> {
   }
 
   Widget _recurrenceSection() {
-    final preview = recurrence == RecurrenceFrequency.none
-        ? null
-        : nextOccurrencePreview(Transaction(
-            id: '_preview',
-            type: type,
-            amount: 0,
-            categoryId: '',
-            accountId: '',
-            date: date,
-            recurrence: recurrence,
-            recurrenceDay: parseInt(dayCtrl.text),
-            recurrenceWeekday: weekday,
-            recurrenceIntervalDays: parseInt(intervalCtrl.text),
-          ));
+    // The series exactly as it will be saved - first payment on the
+    // transaction's date, installment count and end date included - so the
+    // preview shows its real next payment (or that it's already over).
+    String? preview;
+    if (recurrence != RecurrenceFrequency.none) {
+      final count = endMode == 'count' ? parseInt(installmentsCtrl.text) : null;
+      final series = computeRecurrenceOccurrences(Transaction(
+        id: '_preview',
+        type: type,
+        amount: 0,
+        categoryId: '',
+        accountId: '',
+        date: date,
+        recurrence: recurrence,
+        recurrenceDay: parseInt(dayCtrl.text),
+        recurrenceWeekday: weekday,
+        recurrenceIntervalDays: parseInt(intervalCtrl.text),
+        installments: count != null && count > 0 ? count : null,
+        recurrenceEndDate: endMode == 'date' ? endDate : null,
+      ));
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final nextIndex = series.indexWhere((d) => !d.isBefore(today));
+      if (nextIndex >= 0) {
+        final next = locf('سررسید بعدی: {0}', [formatDate(series[nextIndex])]);
+        preview = endMode == 'count' && count != null && count > 0
+            ? '$next ${locf('(قسط {0} از {1})', [persianDigits('${nextIndex + 1}'), persianDigits('$count')])}'
+            : next;
+      } else if (series.isNotEmpty) {
+        preview = locf('همه‌ی پرداخت‌ها انجام شده (آخرین: {0})', [formatDate(series.last)]);
+      }
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -16838,8 +16819,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
           if (preview != null) ...[
             const SizedBox(height: 8),
             Text(
-              locf('سررسید بعدی: {0}', [(formatDate(preview))]),
-              style: TextStyle(color: Colors.indigo.shade700, fontWeight: FontWeight.w600),
+              preview,
+              style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w600),
             ),
           ],
           const SizedBox(height: 12),

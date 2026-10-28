@@ -691,4 +691,6 @@ const Map<String, List<String>> uiTranslations = {
   'مبلغ دریافتی': ['Amount received', 'Erhaltener Betrag'],
   'از طرف (شخص، فروشگاه یا کارفرما)': ['From (person, shop or employer)', 'Von (Person, Geschäft oder Arbeitgeber)'],
   'افزودن جزئیات فیش حقوقی': ['Add payslip details', 'Gehaltsabrechnung hinzufügen'],
+  '(قسط {0} از {1})': ['(installment {0} of {1})', '(Rate {0} von {1})'],
+  'همه‌ی پرداخت‌ها انجام شده (آخرین: {0})': ['All payments made (last: {0})', 'Alle Zahlungen erledigt (letzte: {0})'],
 };
