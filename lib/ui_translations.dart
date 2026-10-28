@@ -688,4 +688,7 @@ const Map<String, List<String>> uiTranslations = {
   'تعداد': ['Quantity', 'Menge'],
   'موجودی: {0}': ['Balance: {0}', 'Kontostand: {0}'],
   'همه‌ی پرداخت‌ها انجام شده': ['All payments made', 'Alle Zahlungen erledigt'],
+  'مبلغ دریافتی': ['Amount received', 'Erhaltener Betrag'],
+  'از طرف (شخص، فروشگاه یا کارفرما)': ['From (person, shop or employer)', 'Von (Person, Geschäft oder Arbeitgeber)'],
+  'افزودن جزئیات فیش حقوقی': ['Add payslip details', 'Gehaltsabrechnung hinzufügen'],
 };

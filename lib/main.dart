@@ -1829,6 +1829,7 @@ const defaultCategories = <Category>[
   Category(id: 'i_freelance', name: 'فریلنسری', type: TxType.income),
   Category(id: 'i_investment', name: 'سرمایه‌گذاری', type: TxType.income),
   Category(id: 'i_gift', name: 'هدیه', type: TxType.income),
+  Category(id: 'i_refund', name: 'بازگشت وجه', type: TxType.income),
   Category(id: 'i_misc', name: 'متفرقه', type: TxType.income),
   Category(id: '_transfer_in_', name: 'انتقال بین حساب‌ها', type: TxType.income),
 ];
@@ -1876,6 +1877,7 @@ const _defaultCategoryNames = <String, List<String>>{
   'i_freelance': ['Freelance', 'Freiberuflich'],
   'i_investment': ['Investment', 'Kapitalerträge'],
   'i_gift': ['Gift', 'Geschenk'],
+  'i_refund': ['Refund', 'Erstattung'],
   'i_misc': ['Miscellaneous', 'Sonstiges'],
   '_transfer_in_': ['Transfer between accounts', 'Kontoübertrag'],
 };
@@ -2009,6 +2011,7 @@ const kCategoryIcons = <String, IconData>{
   'i_freelance': Icons.laptop_mac_outlined,
   'i_investment': Icons.trending_up,
   'i_gift': Icons.card_giftcard_outlined,
+  'i_refund': Icons.assignment_return_outlined,
   'i_misc': Icons.more_horiz,
   '_transfer_in_': Icons.swap_horiz,
 };
@@ -3103,8 +3106,14 @@ class Store {
       'e_subscription_software',
       '_transfer_out_',
       '_transfer_in_',
+      'i_refund',
     ]) {
-      final def = defaultCategories.firstWhere((c) => c.id == newId);
+      var def = defaultCategories.firstWhere((c) => c.id == newId);
+      // Added after the language was chosen: name it in that language.
+      final names = _defaultCategoryNames[newId];
+      if (names != null && currentLanguage.value != AppLanguage.fa) {
+        def = Category(id: def.id, name: names[currentLanguage.value == AppLanguage.en ? 0 : 1], parentId: def.parentId, type: def.type);
+      }
       final alreadyById = list.any((c) => c.id == newId);
       final alreadyByName =
           list.any((c) => c.parentId == def.parentId && c.type == def.type && c.name.trim() == def.name.trim());
@@ -16299,6 +16308,18 @@ class _TransactionEditorState extends State<TransactionEditor> {
   final notifyDaysCtrl = TextEditingController();
   bool draft = false;
   bool _dirty = false;
+  /// Payslip details are offered for a salary; for any other income (a
+  /// refund, a gift...) only when asked for or already filled in.
+  bool _showPayslip = false;
+  bool get _isSalary {
+    var c = selectedCategory;
+    while (c != null) {
+      if (c.id == 'i_salary') return true;
+      final parentId = c.parentId;
+      c = parentId == null ? null : widget.categories.where((x) => x.id == parentId).firstOrNull;
+    }
+    return false;
+  }
   List<Category> categories = [];
   List<ReceiptItemEntry> items = [];
   final Map<String, TextEditingController> payslipNumCtrls = {
@@ -16351,6 +16372,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       draft = e.draft;
       items = List.of(e.items);
       if (e.payslipDetails != null) {
+        _showPayslip = true;
         final pd = e.payslipDetails!;
         final map = {
           'brutto': pd.brutto,
@@ -16563,7 +16585,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       date: date,
       note: noteCtrl.text.trim(),
       imagePath: keptImage,
-      merchant: type == TxType.expense ? merchantCtrl.text.trim() : '',
+      merchant: merchantCtrl.text.trim(),
       recurrence: recurrence,
       recurrenceDay: recDay,
       recurrenceWeekday: recWeekday,
@@ -17040,7 +17062,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-            decoration: InputDecoration(labelText: type == TxType.income ? loc('مبلغ واریز شده به حساب') : tr('amount'), hintText: loc('مثلاً 250,000'), border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: type == TxType.income ? loc('مبلغ دریافتی') : tr('amount'), hintText: loc('مثلاً 250,000'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<Account>(
@@ -17083,10 +17105,11 @@ class _TransactionEditorState extends State<TransactionEditor> {
             },
           ),
           const SizedBox(height: 16),
-          if (type == TxType.expense) ...[
-            MerchantField(controller: merchantCtrl, label: loc('نام فروشگاه')),
-            const SizedBox(height: 16),
-          ],
+          MerchantField(
+            controller: merchantCtrl,
+            label: type == TxType.expense ? loc('نام فروشگاه') : loc('از طرف (شخص، فروشگاه یا کارفرما)'),
+          ),
+          const SizedBox(height: 16),
           TextField(
             controller: noteCtrl,
             maxLines: null,
@@ -17159,7 +17182,18 @@ class _TransactionEditorState extends State<TransactionEditor> {
               );
             }),
           ],
-          if (type == TxType.income) ...[
+          if (type == TxType.income && !_showPayslip && !_isSalary) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _showPayslip = true),
+                icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                label: Text(loc('افزودن جزئیات فیش حقوقی')),
+              ),
+            ),
+          ],
+          if (type == TxType.income && (_showPayslip || _isSalary)) ...[
             const SizedBox(height: 16),
             Text(loc('جزئیات فیش حقوقی (اختیاری)'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
