@@ -1555,7 +1555,9 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
         current = DateTime(start.year, start.month, start.day + interval * i);
         break;
       case RecurrenceFrequency.yearly:
-        current = clampedMonthDate(start.year + i, start.month, start.day);
+        // Same day and month every year in the chosen calendar (a Jalali
+        // anniversary moves by a day against the Gregorian one).
+        current = i == 0 ? start : calendarMonthDate(start, i * 12, dayOfMonthInCalendar(start));
         break;
       case RecurrenceFrequency.none:
         return result;
@@ -2479,7 +2481,10 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
       .toList();
   final categories = await Store.loadCategories();
   final now = DateTime.now();
-  final monthKey = '${now.year}-${now.month}';
+  final thisMonth = calendarMonthOf(now);
+  final monthKey = thisMonth.start.day == 1
+      ? '${thisMonth.start.year}-${thisMonth.start.month}'
+      : '${thisMonth.start.year}-${thisMonth.start.month}-${thisMonth.start.day}';
   final notifyState = await Store.loadAnomalyNotifyState();
   var changed = false;
 
@@ -2503,18 +2508,13 @@ Future<void> checkSpendingAnomalies({int lookbackMonths = 3}) async {
     if (t.type != TxType.expense || t.categoryId == '_transfer_out_') continue;
     final topId = topIdOf(t.categoryId);
     if (topId == null) continue;
-    if (t.date.year == now.year && t.date.month == now.month) {
+    if (!t.date.isBefore(thisMonth.start)) {
       currentSpendByTop[topId] = (currentSpendByTop[topId] ?? 0) + t.amount;
       continue;
     }
     for (var i = 1; i <= lookbackMonths; i++) {
-      var y = now.year;
-      var m = now.month - i;
-      while (m < 1) {
-        m += 12;
-        y--;
-      }
-      if (t.date.year == y && t.date.month == m) {
+      final cm = calendarMonthOf(now, -i);
+      if (!t.date.isBefore(cm.start) && !t.date.isAfter(cm.end)) {
         final byMonth = pastSpendByTop.putIfAbsent(topId, () => {});
         byMonth[i] = (byMonth[i] ?? 0) + t.amount;
       }
@@ -5663,7 +5663,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
         map[a.currency] = (map[a.currency] ?? 0) + a.initialBalance;
       }
     }
+    // Today's balance: planned (future-dated) transactions count once their
+    // day comes, not before.
+    final today = DateTime.now();
     for (final t in _effectiveTx) {
+      if (t.date.isAfter(today)) continue;
       final cur = currencyOf(t.accountId);
       map[cur] = (map[cur] ?? 0) + (t.type == TxType.income ? t.amount : -t.amount);
     }
@@ -5678,7 +5682,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     for (final a in _viewAccounts) {
       byAccount[a.id] = a.initialBalance;
     }
+    final today = DateTime.now();
     for (final t in _effectiveTx) {
+      if (t.date.isAfter(today)) continue;
       byAccount[t.accountId] = (byAccount[t.accountId] ?? 0) + (t.type == TxType.income ? t.amount : -t.amount);
     }
     var total = 0.0;
@@ -5855,6 +5861,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       // period's totals until their own date actually arrives.
       if (t.date.isAfter(today)) continue;
       if (t.date.isBefore(month.start)) continue;
+      // Money moved between the person's own accounts is neither income
+      // nor expense.
+      if (t.categoryId.startsWith('_transfer')) continue;
       final cur = currencyOf(t.accountId);
       map.putIfAbsent(cur, () => {'income': 0, 'expense': 0});
       if (t.type == TxType.income) {
@@ -5879,7 +5888,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     final today = DateTime(now.year, now.month, now.day);
     final month = calendarMonthOf(today);
     return _effectiveTx.where((t) {
-      if (t.type != TxType.expense) return false;
+      if (t.type != TxType.expense || t.categoryId.startsWith('_transfer')) return false;
       if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) return false;
       if (t.date.isAfter(today)) return false;
       return !t.date.isBefore(month.start);
@@ -5893,17 +5902,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     final today = DateTime(now.year, now.month, now.day);
     final result = <({DateTime month, double income, double expense})>[];
     for (var i = months - 1; i >= 0; i--) {
-      var y = now.year;
-      var m = now.month - i;
-      while (m < 1) {
-        m += 12;
-        y--;
-      }
+      // Months of the calendar chosen in settings.
+      final cm = calendarMonthOf(today, -i);
       var income = 0.0, expense = 0.0;
       for (final t in _effectiveTx) {
         if (dashboardAccountFilter != null ? t.accountId != dashboardAccountFilter : currencyOf(t.accountId) != primaryCurrency) continue;
         if (t.date.isAfter(today)) continue;
-        if (t.date.year == y && t.date.month == m) {
+        // Money moved between own accounts is neither income nor expense.
+        if (t.categoryId.startsWith('_transfer')) continue;
+        if (!t.date.isBefore(cm.start) && !t.date.isAfter(cm.end)) {
           if (t.type == TxType.income) {
             income += t.amount;
           } else {
@@ -5911,7 +5918,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           }
         }
       }
-      result.add((month: DateTime(y, m), income: income, expense: expense));
+      result.add((month: cm.start, income: income, expense: expense));
     }
     return result;
   }
@@ -6513,8 +6520,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           children: [
             Text(
               '${categoryName(t.categoryId)} • ${formatDate(displayDate ?? t.date)}${txExtraDetail(t)}'
-              '${projected && !recurringDue ? ' • سررسیدنشده' : (t.isRecurring ? ' • تکرارشونده' : '')}'
-              '${t.draft ? ' • پیش‌نویس' : ''}',
+              '${projected && !recurringDue ? ' • ${loc('سررسیدنشده')}' : (t.isRecurring ? ' • ${loc('تکرارشونده')}' : '')}'
+              '${t.draft ? ' • ${loc('پیش‌نویس')}' : ''}',
               style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -6816,7 +6823,12 @@ class _DashboardChartsState extends State<DashboardCharts> {
                             if (i < 0 || i >= monthly.length) return const SizedBox.shrink();
                             return Padding(
                               padding: const EdgeInsets.only(top: 4),
-                              child: Text(ltr(persianDigits(DateFormat('MM/yy').format(monthly[i].month))), style: const TextStyle(fontSize: 10)),
+                              child: Text(ltr(persianDigits(() {
+                                final d = monthly[i].month;
+                                if (currentCalendarSystem.value != CalendarSystem.jalali) return DateFormat('MM/yy').format(d);
+                                final j = gregorianToJalali(d.year, d.month, d.day);
+                                return '${j[1].toString().padLeft(2, '0')}/${(j[0] % 100).toString().padLeft(2, '0')}';
+                              }())), style: const TextStyle(fontSize: 10)),
                             );
                           },
                         ),
@@ -7068,7 +7080,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
             children: [
               Text(line(a), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
               const SizedBox(height: 4),
-              Text('${m.recurring ? 'پرداخت تکرارشونده: ' : ''}${line(m.t)}', style: const TextStyle(fontSize: 13)),
+              Text('${m.recurring ? '${loc('پرداخت تکرارشونده')}: ' : ''}${line(m.t)}', style: const TextStyle(fontSize: 13)),
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -7078,7 +7090,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        '${m.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'}: ${m.reasons.join('، ')}',
+                        '${m.strong ? loc('تقریباً قطعاً تکراری') : loc('احتمالاً تکراری')}: ${m.reasons.join(loc('، '))}',
                         style: TextStyle(color: color.shade900, fontSize: 12),
                       ),
                     ),
@@ -7250,7 +7262,7 @@ class _DraftsScreenState extends State<DraftsScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '${best.t.draft ? 'مشابه پیش‌نویس دیگر' : best.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'}: ${best.reasons.join('، ')}',
+                            '${best.t.draft ? loc('مشابه پیش‌نویس دیگر') : best.strong ? loc('تقریباً قطعاً تکراری') : loc('احتمالاً تکراری')}: ${best.reasons.join(loc('، '))}',
                             style: TextStyle(color: color.shade900, fontSize: 12),
                           ),
                         ),
@@ -7953,7 +7965,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                     ChoiceChip(
                       label: Text(
                         '${formatDate(savedCandidates[i].date)}'
-                        '${widget.matches[i].recurring ? ' (تکرارشونده)' : savedCandidates[i].draft ? ' (پیش‌نویس)' : ''}'
+                        '${widget.matches[i].recurring ? ' (${loc('تکرارشونده')})' : savedCandidates[i].draft ? ' (${loc('پیش‌نویس')})' : ''}'
                         '${widget.matches[i].strong ? ' ✓' : ''}',
                       ),
                       selected: selected == i,
@@ -8027,7 +8039,7 @@ class _DuplicateCompareScreenState extends State<DuplicateCompareScreen> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                '${match.strong ? 'تقریباً قطعاً تکراری' : 'احتمالاً تکراری'} - ${match.reasons.join('، ')}',
+                '${match.strong ? loc('تقریباً قطعاً تکراری') : loc('احتمالاً تکراری')} - ${match.reasons.join(loc('، '))}',
                 // Dark text on the light box, also in dark mode.
                 style: TextStyle(fontSize: 12, color: (match.strong ? Colors.red : Colors.orange).shade900),
               ),
@@ -8195,7 +8207,7 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
                 title: Text(_name(all.where((t) => t.id == r.seriesId).firstOrNull)),
                 subtitle: Text(
                   '${ltr(formatMoney(r.amount, _cur(r.accountId)))} • '
-                  '${r.active ? 'فعال' : '${persianDigits('${r.months.toSet().length}')} از ${persianDigits('${LearnedDuplicates.confirmationsNeeded}')} تأیید'}',
+                  '${r.active ? loc('فعال') : locf('{0} از {1} تأیید', [persianDigits('${r.months.toSet().length}'), persianDigits('${LearnedDuplicates.confirmationsNeeded}')])}',
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline),
@@ -8282,7 +8294,12 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
           : ListView(
               padding: const EdgeInsets.all(16),
               children: tx.map((t) {
-                final next = nextOccurrencePreview(t);
+                // The series' own next payment (installments and end date
+                // respected), not just the next matching day.
+                final now = DateTime.now();
+                final today = DateTime(now.year, now.month, now.day);
+                final upcoming = computeRecurrenceOccurrences(t).where((d) => !d.isBefore(today));
+                final next = upcoming.isEmpty ? null : upcoming.first;
                 return Dismissible(
                   key: ValueKey(t.id),
                   direction: DismissDirection.endToStart,
@@ -8321,7 +8338,7 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                       title: Text(categoryName(t.categoryId)),
                       subtitle: Text(
                         '${_recurrenceLabel(t)}'
-                        '${next != null ? ' • سررسید بعدی: ${formatDate(next)}' : ''}',
+                        ' • ${next != null ? locf('سررسید بعدی: {0}', [formatDate(next)]) : loc('همه‌ی پرداخت‌ها انجام شده')}',
                       ),
                       trailing: Text(
                         ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -8501,9 +8518,13 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
         .toList()
       ..sort((a, b) => a.date.compareTo(b.date));
 
+    // Across all accounts a transfer between own accounts costs nothing
+    // (it's listed, but not added up); for one account it's money leaving.
+    bool countsAsSpending(TxOccurrence e) =>
+        e.t.type == TxType.expense && (accountFilter != null || !e.t.categoryId.startsWith('_transfer'));
     final totalsByCurrency = <String, double>{};
     for (final e in entries) {
-      if (e.t.type != TxType.expense) continue;
+      if (!countsAsSpending(e)) continue;
       final cur = currencyOf(e.t.accountId);
       totalsByCurrency[cur] = (totalsByCurrency[cur] ?? 0) + e.t.amount;
     }
@@ -8528,7 +8549,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
       final cm = calendarMonthOf(today, i + chartMonthOffset);
       final total = chartOccurrences
           .where((e) =>
-              e.t.type == TxType.expense &&
+              countsAsSpending(e) &&
               notYetDue(e) &&
               (accountFilter != null ? e.t.accountId == accountFilter : currencyOf(e.t.accountId) == currency) &&
               !e.date.isBefore(cm.start) &&
@@ -9091,16 +9112,12 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
     final now = DateTime.now();
     double income = 0, expense = 0;
     for (var i = 1; i <= months; i++) {
-      var y = now.year;
-      var m = now.month - i;
-      while (m < 1) {
-        m += 12;
-        y--;
-      }
+      // Months of the calendar chosen in settings.
+      final cm = calendarMonthOf(now, -i);
       for (final t in tx) {
         if (currencyOf(t.accountId) != primaryCurrency) continue;
         if (t.categoryId == '_transfer_out_' || t.categoryId == '_transfer_in_') continue;
-        if (t.date.year != y || t.date.month != m) continue;
+        if (t.date.isBefore(cm.start) || t.date.isAfter(cm.end)) continue;
         if (t.type == TxType.income) {
           income += t.amount;
         } else {
@@ -9397,16 +9414,13 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final now = DateTime.now();
-    final months = <({DateTime month, double value})>[];
+    final today = DateTime(now.year, now.month, now.day);
+    // The last 12 months in the calendar chosen in settings; the current
+    // month stands at today (future-dated transactions haven't happened).
+    final months = <({CalendarMonth month, double value})>[];
     for (var i = 11; i >= 0; i--) {
-      var y = now.year;
-      var m = now.month - i;
-      while (m < 1) {
-        m += 12;
-        y--;
-      }
-      final endOfMonth = DateTime(y, m + 1, 0);
-      months.add((month: DateTime(y, m), value: _netWorthAt(endOfMonth)));
+      final cm = calendarMonthOf(today, -i);
+      months.add((month: cm, value: _netWorthAt(i == 0 ? today : cm.end)));
     }
     final maxVal = months.fold(0.0, (mx, e) => e.value.abs() > mx ? e.value.abs() : mx);
     final current = months.isEmpty ? 0.0 : months.last.value;
@@ -9500,7 +9514,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 4),
-                                  Text(() { final n = _gregorianMonthNames[m.month.month - 1]; return n.length > 3 ? n.substring(0, 3) : n; }(), style: const TextStyle(fontSize: 8)),
+                                  Text(() { final n = m.month.name; return n.length > 3 ? n.substring(0, 3) : n; }(), style: const TextStyle(fontSize: 8)),
                                 ],
                               ),
                             ),
@@ -9607,7 +9621,7 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null).toList()
+    final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null && !c.id.startsWith('_transfer')).toList()
       ..sort((a, b) => persianCompare(a.name, b.name));
     final income = _monthIncome;
     final allocated = _totalAllocated;
@@ -9787,7 +9801,7 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null).toList()
+    final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null && !c.id.startsWith('_transfer')).toList()
       ..sort((a, b) => persianCompare(a.name, b.name));
     return Scaffold(
       appBar: AppBar(
@@ -10511,8 +10525,11 @@ List<({Transaction a, DuplicateMatch m})> findConfirmedDuplicatePairs(List<Trans
     for (var j = i + 1; j < entries.length; j++) {
       final y = entries[j];
       if (y.day - x.day > 10) break;
-      final diff = (y.t.amount - x.t.amount).abs();
-      if (diff > max(x.t.amount, y.t.amount) * 0.02 + 0.01) continue;
+      // Between two confirmed bookings only the very same amount within a
+      // few days counts: "about the same" amount a week apart flagged
+      // ordinary repeat purchases (same supermarket, similar bill).
+      if ((y.t.amount - x.t.amount).abs() >= 0.01) continue;
+      if (y.day - x.day > ((x.rec || y.rec) ? 5 : 3)) continue;
       if (x.rec && y.rec) continue;
       if (x.t.id == y.t.id) continue; // a recurring payment and its own series
       // Transfers only against an ordinary booking (e.g. the bank deposit
@@ -12158,7 +12175,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
                           ),
                           subtitle: (item.quantity != null || item.estimatedPrice != null)
                               ? Text(
-                                  '${item.quantity != null ? 'تعداد: ${item.quantity!.toStringAsFixed(item.quantity! % 1 == 0 ? 0 : 2)}' : ''}'
+                                  '${item.quantity != null ? '${loc('تعداد')}: ${item.quantity!.toStringAsFixed(item.quantity! % 1 == 0 ? 0 : 2)}' : ''}'
                                   '${item.quantity != null && item.estimatedPrice != null ? ' • ' : ''}'
                                   '${item.estimatedPrice != null ? '~${formatAmountInput(item.estimatedPrice!)}' : ''}',
                                 )
@@ -13098,8 +13115,8 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                             children: [
                               Text(
                                 '${categoryName(t.categoryId)} • ${formatDate(e.date)}${txExtraDetail(t)}'
-                                '${t.isRecurring ? ' • تکرارشونده' : ''}'
-                                '${t.draft ? ' • پیش‌نویس' : ''}',
+                                '${t.isRecurring ? ' • ${loc('تکرارشونده')}' : ''}'
+                                '${t.draft ? ' • ${loc('پیش‌نویس')}' : ''}',
                                 style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -13291,7 +13308,7 @@ class ReportTransactionsScreen extends StatelessWidget {
                   child: ListTile(
                     title: Text(t.merchant.trim().isNotEmpty ? '${cat(t.categoryId)} • ${t.merchant.trim()}' : cat(t.categoryId)),
                     subtitle: Text(
-                      '${formatDate(t.date)}${t.isRecurring ? ' • تکرارشونده' : ''}${t.note.trim().isNotEmpty ? ' • ${t.note.trim()}' : ''}',
+                      '${formatDate(t.date)}${t.isRecurring ? ' • ${loc('تکرارشونده')}' : ''}${t.note.trim().isNotEmpty ? ' • ${t.note.trim()}' : ''}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -13334,6 +13351,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   void initState() {
     super.initState();
+    rangeStart = calendarMonthOf(DateTime.now()).start;
     _load();
   }
 
@@ -13349,38 +13367,39 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   void _applyPreset(_ReportPreset p) {
     final now = DateTime.now();
+    // Months, quarters and years follow the calendar chosen in settings
+    // (a Jalali quarter starts with Farvardin, Tir, Mehr or Dey).
+    final monthNo = currentCalendarSystem.value == CalendarSystem.jalali
+        ? gregorianToJalali(now.year, now.month, now.day)[1]
+        : now.month;
+    final intoQuarter = (monthNo - 1) % 3;
+    final intoYear = monthNo - 1;
     setState(() {
       preset = p;
       switch (p) {
         case _ReportPreset.thisMonth:
-          rangeStart = DateTime(now.year, now.month, 1);
+          rangeStart = calendarMonthOf(now).start;
           rangeEnd = now;
           break;
         case _ReportPreset.lastMonth:
-          final lastMonthEnd = DateTime(now.year, now.month, 1).subtract(const Duration(days: 1));
-          rangeStart = DateTime(lastMonthEnd.year, lastMonthEnd.month, 1);
-          rangeEnd = lastMonthEnd;
+          rangeStart = calendarMonthOf(now, -1).start;
+          rangeEnd = calendarMonthOf(now, -1).end;
           break;
         case _ReportPreset.thisQuarter:
-          final qStartMonth = ((now.month - 1) ~/ 3) * 3 + 1;
-          rangeStart = DateTime(now.year, qStartMonth, 1);
+          rangeStart = calendarMonthOf(now, -intoQuarter).start;
           rangeEnd = now;
           break;
         case _ReportPreset.lastQuarter:
-          final qStartMonth = ((now.month - 1) ~/ 3) * 3 + 1;
-          final thisQStart = DateTime(now.year, qStartMonth, 1);
-          final lastQEnd = thisQStart.subtract(const Duration(days: 1));
-          final lastQStartMonth = ((lastQEnd.month - 1) ~/ 3) * 3 + 1;
-          rangeStart = DateTime(lastQEnd.year, lastQStartMonth, 1);
-          rangeEnd = lastQEnd;
+          rangeStart = calendarMonthOf(now, -intoQuarter - 3).start;
+          rangeEnd = calendarMonthOf(now, -intoQuarter - 1).end;
           break;
         case _ReportPreset.thisYear:
-          rangeStart = DateTime(now.year, 1, 1);
+          rangeStart = calendarMonthOf(now, -intoYear).start;
           rangeEnd = now;
           break;
         case _ReportPreset.lastYear:
-          rangeStart = DateTime(now.year - 1, 1, 1);
-          rangeEnd = DateTime(now.year - 1, 12, 31);
+          rangeStart = calendarMonthOf(now, -intoYear - 12).start;
+          rangeEnd = calendarMonthOf(now, -intoYear - 1).end;
           break;
         case _ReportPreset.custom:
           break;
@@ -13412,6 +13431,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   bool _matchesFilters(Transaction t) {
+    // Money moved between own accounts is neither income nor expense; it
+    // shows only when the transfer category itself is picked.
+    if (categoryFilter == null && t.categoryId.startsWith('_transfer')) return false;
     if (categoryFilter != null && !categoryMatchesFilter(t.categoryId, categoryFilter!, categories)) return false;
     if (accountFilter != null && t.accountId != accountFilter) return false;
     if (typeFilter != null && t.type != typeFilter) return false;
@@ -13782,7 +13804,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
   @override
   void initState() {
     super.initState();
-    targetMonth = DateTime.now().month;
+    targetMonth = _yearMonth(DateTime.now())[1];
     _load();
   }
 
@@ -13803,32 +13825,44 @@ class _ForecastScreenState extends State<ForecastScreen> {
 
   String get primaryCurrency => mainCurrencyOf(accounts);
 
+  /// [year, month] of [d] in the calendar chosen in settings.
+  static List<int> _yearMonth(DateTime d) => currentCalendarSystem.value == CalendarSystem.jalali
+      ? gregorianToJalali(d.year, d.month, d.day).sublist(0, 2)
+      : [d.year, d.month];
+
+  List<String> get _monthNames =>
+      currentCalendarSystem.value == CalendarSystem.jalali ? _jalaliMonthNames : _gregorianMonthNames;
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     final currency = primaryCurrency;
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    // Expenses only - money moved between own accounts isn't spending.
+    bool isSpending(Transaction t) => t.type == TxType.expense && !t.categoryId.startsWith('_transfer');
 
     // Only count a past occurrence of the target month if that whole month
     // has already elapsed - an in-progress month would unfairly drag the
     // average down.
     final years = <int>{};
     for (final t in tx) {
-      if (t.type != TxType.expense) continue;
-      if (t.date.month != targetMonth) continue;
-      final monthEnd = DateTime(t.date.year, t.date.month + 1, 0);
-      if (monthEnd.isAfter(now)) continue;
-      years.add(t.date.year);
+      if (!isSpending(t)) continue;
+      final ym = _yearMonth(t.date);
+      if (ym[1] != targetMonth) continue;
+      if (!calendarMonthOf(t.date).end.isBefore(today)) continue;
+      years.add(ym[0]);
     }
 
     final yearTotal = <int, double>{};
     final categoryYearTotal = <String, Map<int, double>>{};
     for (final t in tx) {
-      if (t.type != TxType.expense) continue;
-      if (t.date.month != targetMonth) continue;
-      if (!years.contains(t.date.year)) continue;
+      if (!isSpending(t)) continue;
+      final ym = _yearMonth(t.date);
+      if (ym[1] != targetMonth) continue;
+      if (!years.contains(ym[0])) continue;
       if (currencyOf(t.accountId) != currency) continue;
-      yearTotal[t.date.year] = (yearTotal[t.date.year] ?? 0) + t.amount;
+      yearTotal[ym[0]] = (yearTotal[ym[0]] ?? 0) + t.amount;
       final match = categories.where((c) => c.id == t.categoryId).toList();
       var cat = match.isEmpty ? null : match.first;
       while (cat?.parentId != null) {
@@ -13838,7 +13872,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
       }
       final key = cat?.id ?? '_uncategorized_';
       categoryYearTotal.putIfAbsent(key, () => {});
-      categoryYearTotal[key]![t.date.year] = (categoryYearTotal[key]![t.date.year] ?? 0) + t.amount;
+      categoryYearTotal[key]![ym[0]] = (categoryYearTotal[key]![ym[0]] ?? 0) + t.amount;
     }
 
     final avgTotal = years.isEmpty ? 0.0 : yearTotal.values.fold(0.0, (a, b) => a + b) / years.length;
@@ -13854,10 +13888,15 @@ class _ForecastScreenState extends State<ForecastScreen> {
     // What's actually spent so far, if the target month is the current
     // (in-progress) month - useful as a live comparison point.
     double? spentSoFar;
-    if (targetMonth == now.month) {
+    if (targetMonth == _yearMonth(today)[1]) {
+      final month = calendarMonthOf(today);
+      // Up to today: a future-dated transaction hasn't been spent yet.
       spentSoFar = tx
           .where((t) =>
-              t.type == TxType.expense && t.date.year == now.year && t.date.month == now.month && currencyOf(t.accountId) == currency)
+              isSpending(t) &&
+              !t.date.isBefore(month.start) &&
+              !t.date.isAfter(today) &&
+              currencyOf(t.accountId) == currency)
           .fold<double>(0.0, (s, t) => s + t.amount);
     }
 
@@ -13874,7 +13913,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
             children: [
               for (var m = 1; m <= 12; m++)
                 ChoiceChip(
-                  label: Text(_gregorianMonthNames[m - 1]),
+                  label: Text(_monthNames[m - 1]),
                   selected: targetMonth == m,
                   onSelected: (_) => setState(() => targetMonth = m),
                 ),
@@ -13897,7 +13936,7 @@ class _ForecastScreenState extends State<ForecastScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      locf('میانگین هزینه‌ی {0} بر اساس {1} سال گذشته', [(_gregorianMonthNames[targetMonth - 1]), (years.length)]),
+                      locf('میانگین هزینه‌ی {0} بر اساس {1} سال گذشته', [(_monthNames[targetMonth - 1]), (years.length)]),
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
@@ -13978,8 +14017,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    month = DateTime(now.year, now.month, 1);
+    month = calendarMonthOf(DateTime.now()).start;
     _load();
   }
 
@@ -14094,28 +14132,35 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+    // The shown month in the calendar chosen in settings; cells are keyed by
+    // their 1-based day within that month.
+    final cm = calendarMonthOf(month);
+    final daysInMonth = cm.end.difference(cm.start).inDays + 1;
+    DateTime dateOfDay(int day) => DateTime(cm.start.year, cm.start.month, cm.start.day + day - 1);
+    int dayOf(DateTime d) => DateTime(d.year, d.month, d.day).difference(cm.start).inDays + 1;
     final dayIncome = <int, double>{};
     final dayExpense = <int, double>{};
     final dayIncomeProjected = <int, double>{};
     final dayExpenseProjected = <int, double>{};
     // From the start of the shown month, so recurring payments that already
     // fell due this month are shown on their days too.
-    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 400, from: DateTime(month.year, month.month, 1))) {
+    for (final e in occurrencesWithRecurringProjections(tx, horizonDays: 400, from: cm.start)) {
       if (accountFilter != null ? e.t.accountId != accountFilter : currencyOf(e.t.accountId) != currency) continue;
-      if (e.date.year != month.year || e.date.month != month.month) continue;
+      if (e.date.isBefore(cm.start) || e.date.isAfter(cm.end)) continue;
+      // Moving money between own accounts is neither income nor expense.
+      if (e.t.categoryId.startsWith('_transfer')) continue;
       final notYetDue = e.date.isAfter(today);
       if (e.t.type == TxType.income) {
         if (notYetDue) {
-          dayIncomeProjected[e.date.day] = (dayIncomeProjected[e.date.day] ?? 0) + e.t.amount;
+          dayIncomeProjected[dayOf(e.date)] = (dayIncomeProjected[dayOf(e.date)] ?? 0) + e.t.amount;
         } else {
-          dayIncome[e.date.day] = (dayIncome[e.date.day] ?? 0) + e.t.amount;
+          dayIncome[dayOf(e.date)] = (dayIncome[dayOf(e.date)] ?? 0) + e.t.amount;
         }
       } else {
         if (notYetDue) {
-          dayExpenseProjected[e.date.day] = (dayExpenseProjected[e.date.day] ?? 0) + e.t.amount;
+          dayExpenseProjected[dayOf(e.date)] = (dayExpenseProjected[dayOf(e.date)] ?? 0) + e.t.amount;
         } else {
-          dayExpense[e.date.day] = (dayExpense[e.date.day] ?? 0) + e.t.amount;
+          dayExpense[dayOf(e.date)] = (dayExpense[dayOf(e.date)] ?? 0) + e.t.amount;
         }
       }
     }
@@ -14131,7 +14176,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     // DateTime.weekday: Monday=1 .. Sunday=7. Weeks start on Saturday with
     // the Jalali calendar setting and on Monday with the Gregorian one.
     final saturdayFirst = currentCalendarSystem.value == CalendarSystem.jalali;
-    final firstWeekday = DateTime(month.year, month.month, 1).weekday; // 1..7, Mon..Sun
+    final firstWeekday = cm.start.weekday; // 1..7, Mon..Sun
     final leadingBlanks = saturdayFirst ? (firstWeekday + 1) % 7 : firstWeekday - 1;
 
     return Scaffold(
@@ -14146,21 +14191,16 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                 IconButton(
                   icon: const Icon(Icons.arrow_back_ios, size: 18),
                   tooltip: loc('ماه بعد'),
-                  onPressed: () => setState(() => month = DateTime(month.year, month.month + 1, 1)),
+                  onPressed: () => setState(() => month = calendarMonthOf(month, 1).start),
                 ),
                 Text(
-                  currentCalendarSystem.value == CalendarSystem.jalali
-                      ? () {
-                          final j = gregorianToJalali(month.year, month.month, 1);
-                          return '${_jalaliMonthNames[j[1] - 1]} ${persianDigits('${j[0]}')}';
-                        }()
-                      : '${_gregorianMonthNames[month.month - 1]} ${month.year}',
+                  '${cm.name} ${cm.yearText}',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 IconButton(
                   icon: const Icon(Icons.arrow_forward_ios, size: 18),
                   tooltip: loc('ماه قبل'),
-                  onPressed: () => setState(() => month = DateTime(month.year, month.month - 1, 1)),
+                  onPressed: () => setState(() => month = calendarMonthOf(month, -1).start),
                 ),
               ],
             ),
@@ -14247,7 +14287,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                 itemBuilder: (context, index) {
                   if (index < leadingBlanks) return const SizedBox.shrink();
                   final day = index - leadingBlanks + 1;
-                  final date = DateTime(month.year, month.month, day);
+                  final date = dateOfDay(day);
                   final future = date.isAfter(today);
                   final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
                   final inc = (dayIncome[day] ?? 0) + (dayIncomeProjected[day] ?? 0);
@@ -15200,7 +15240,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
+                      '${it.quantity != null ? '${loc('تعداد')}: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                       '${it.quantity != null && it.price != null ? ' • ' : ''}'
                       '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRT') : ''}',
                     ),
@@ -15896,7 +15936,7 @@ class TransactionDetailScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
+                          '${it.quantity != null ? '${loc('تعداد')}: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                           '${it.quantity != null && it.price != null ? ' • ' : ''}'
                           '${it.price != null ? ltr(formatMoney(it.price!, _currency)) : ''}',
                         ),
@@ -17075,7 +17115,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${it.quantity != null ? 'تعداد: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
+                        '${it.quantity != null ? '${loc('تعداد')}: ${ltr(persianDigits(it.quantity!.toStringAsFixed(it.quantity! % 1 == 0 ? 0 : 2)))}' : ''}'
                         '${it.quantity != null && it.price != null ? ' • ' : ''}'
                         '${it.price != null ? formatMoney(it.price!, selectedAccount?.currency ?? 'IRT') : ''}',
                       ),
@@ -17531,6 +17571,9 @@ class AccountManagementScreen extends StatefulWidget {
 
 class _AccountManagementScreenState extends State<AccountManagementScreen> {
   List<Account> accounts = [];
+  /// Each account's balance as of today (opening balance plus every
+  /// transaction up to today, due recurring payments included).
+  Map<String, double> balances = {};
   bool loading = true;
 
   @override
@@ -17541,7 +17584,15 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
 
   Future<void> _load() async {
     accounts = await Store.loadAccounts();
-    setState(() => loading = false);
+    final confirmed = await Store.loadConfirmedTransactions();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    balances = {for (final a in accounts) a.id: a.initialBalance};
+    for (final t in [...confirmed, ...dueRecurringPayments(confirmed)]) {
+      if (t.date.isAfter(today) || !balances.containsKey(t.accountId)) continue;
+      balances[t.accountId] = balances[t.accountId]! + (t.type == TxType.income ? t.amount : -t.amount);
+    }
+    if (mounted) setState(() => loading = false);
   }
 
   Future<void> _editAccount({Account? existing}) async {
@@ -17672,6 +17723,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       }
     });
     await Store.saveAccounts(accounts);
+    await _load(); // the opening balance may have changed
   }
 
   /// Edits just the exchange rate to the main account's currency - the only
@@ -17772,9 +17824,8 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       ];
       await Store.saveAccounts(rescaled);
     }
-    final fresh = await Store.loadAccounts();
     if (!mounted) return;
-    setState(() => accounts = fresh);
+    await _load();
   }
 
   Future<void> _delete(Account a) async {
@@ -17834,11 +17885,12 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
                     leading: const Icon(Icons.account_balance_wallet_outlined),
                     title: Text(a.name),
                     subtitle: Text(
-                      a.currency != mainCur
+                      '${locf('موجودی: {0}', [ltr(formatMoney(balances[a.id] ?? a.initialBalance, a.currency))])}\n'
+                      '${a.currency != mainCur
                           ? locf('{0} • {1} • نرخ روز: {2}', [(a.type.label), (currencyLabel(a.currency)), (a.rateUpdatedAt == null && a.exchangeRateToMain == 1.0 ? loc('تنظیم نشده') : dayRateText(a, mainCur))])
                           : (a.initialBalance != 0
                               ? locf('{0} • {1} • موجودی اولیه: {2}', [(a.type.label), (currencyLabel(a.currency)), (ltr(formatMoney(a.initialBalance, a.currency)))])
-                              : '${a.type.label} • ${currencyLabel(a.currency)}'),
+                              : '${a.type.label} • ${currencyLabel(a.currency)}')}',
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,

@@ -680,4 +680,12 @@ const Map<String, List<String>> uiTranslations = {
   'روی دکمه‌ی «Create API key» بزن.': ['Tap the “Create API key” button.', 'Tippe auf die Schaltfläche „Create API key“.'],
   'خطای Gemini API ({0})': ['Gemini API error ({0})', 'Gemini-API-Fehler ({0})'],
   'به هدف رسیدی!': ['Goal reached!', 'Ziel erreicht!'],
+  'تقریباً قطعاً تکراری': ['Almost certainly a duplicate', 'Fast sicher ein Duplikat'],
+  'احتمالاً تکراری': ['Possibly a duplicate', 'Möglicherweise ein Duplikat'],
+  'مشابه پیش‌نویس دیگر': ['Similar to another draft', 'Ähnlich wie ein anderer Entwurf'],
+  'فعال': ['Active', 'Aktiv'],
+  '{0} از {1} تأیید': ['{0} of {1} confirmations', '{0} von {1} Bestätigungen'],
+  'تعداد': ['Quantity', 'Menge'],
+  'موجودی: {0}': ['Balance: {0}', 'Kontostand: {0}'],
+  'همه‌ی پرداخت‌ها انجام شده': ['All payments made', 'Alle Zahlungen erledigt'],
 };
