@@ -1635,6 +1635,7 @@ class NotificationService {
         final name = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? loc('یادآوری');
         await scheduleForTransaction(t, name, alreadyCancelled: true);
       }
+      await scheduleReturnReminders();
     } catch (_) {
       // best effort; the next app start tries again
       _rescheduled = false;
@@ -1718,6 +1719,7 @@ class NotificationService {
         details,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+        payload: t.id, // tapping it opens the transaction
       ));
     }
     final days = t.notifyDaysBeforeEach;
@@ -1738,6 +1740,7 @@ class NotificationService {
           details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+          payload: t.id,
         ));
       }
     }
@@ -1746,7 +1749,101 @@ class NotificationService {
     // per-installment reminders feel slow.
     await Future.wait(scheduleCalls);
   }
+
+  // Return-deadline reminders use their own id range, above every id
+  // [_idFor] can produce.
+  static const _returnIdBase = 100000000;
+  static int _returnIdFor(String key) => _returnIdBase + (key.hashCode & 0xffffff);
+
+  Timer? _returnDebounce;
+  Future<void>? _returnRun;
+
+  /// [scheduleReturnReminders] shortly after the saved transactions change
+  /// (several saves in a row cause a single run).
+  void scheduleReturnRemindersSoon() {
+    if (!_initialized) return;
+    _returnDebounce?.cancel();
+    _returnDebounce = Timer(const Duration(seconds: 2), () => unawaited(scheduleReturnReminders()));
+  }
+
+  /// Schedules a reminder at 9:00 two days before the last day an item can
+  /// be returned, for every item of every saved transaction; tapping it
+  /// opens the transaction. Reminders of items that changed or were removed
+  /// are cancelled. A deadline already closer than that is reminded of when
+  /// the app is opened ([checkReturnDeadlines]).
+  Future<void> scheduleReturnReminders() async {
+    if (!_initialized) return;
+    while (_returnRun != null) {
+      await _returnRun;
+    }
+    final run = _scheduleReturnReminders();
+    _returnRun = run;
+    try {
+      await run;
+    } finally {
+      _returnRun = null;
+    }
+  }
+
+  Future<void> _scheduleReturnReminders() async {
+    try {
+      final tx = await Store.loadConfirmedTransactions();
+      final notifyState = await Store.loadReturnNotifyState();
+      final now = DateTime.now();
+      final details = NotificationDetails(
+        android: AndroidNotificationDetails(
+          'return_deadlines',
+          loc('مهلت مرجوعی کالا'),
+          channelDescription: loc('یادآوری دو روز قبل از پایان مهلت مرجوعی'),
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+      );
+      final wanted = <int>{};
+      final calls = <Future<void>>[];
+      var stateChanged = false;
+      for (final t in tx) {
+        for (var i = 0; i < t.items.length; i++) {
+          final item = t.items[i];
+          final until = item.returnUntil;
+          if (until == null) continue;
+          final day = DateTime(until.year, until.month, until.day);
+          final when = DateTime(day.year, day.month, day.day - 2, 9);
+          if (!when.isAfter(now)) continue;
+          final key = returnReminderKey(t.id, i, day);
+          final id = _returnIdFor(key);
+          wanted.add(id);
+          // Marked as reminded already: the scheduled reminder covers it,
+          // so opening the app later doesn't remind a second time.
+          if (notifyState.add(key)) stateChanged = true;
+          final shop = t.merchant.trim().isEmpty ? '' : ' (${t.merchant.trim()})';
+          calls.add(_plugin.zonedSchedule(
+            id,
+            loc('مهلت مرجوعی نزدیک است'),
+            locf('{0} تا {1} امکان مرجوع کردن دارد.', ['${item.name}$shop', formatDate(day)]),
+            _asTZDateTime(when),
+            details,
+            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+            uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+            payload: t.id,
+          ));
+        }
+      }
+      final pending = await _plugin.pendingNotificationRequests();
+      for (final p in pending) {
+        if (p.id >= _returnIdBase && p.id < _returnIdBase + 0x1000000 && !wanted.contains(p.id)) calls.add(_plugin.cancel(p.id));
+      }
+      await Future.wait(calls);
+      if (stateChanged) await Store.saveReturnNotifyState(notifyState);
+    } catch (_) {
+      // best effort - the next save or app start tries again
+    }
+  }
 }
+
+/// Identifies one item's return deadline (a changed deadline is a new one).
+String returnReminderKey(String txId, int itemIndex, DateTime day) =>
+    '${txId}_${itemIndex}_${day.year}-${day.month}-${day.day}';
 
 // ============================== Default seed data ==============================
 
@@ -2530,14 +2627,16 @@ Future<void> checkReturnDeadlines() async {
       final untilDay = DateTime(until.year, until.month, until.day);
       final daysLeft = untilDay.difference(todayMidnight).inDays;
       if (daysLeft < 0 || daysLeft > 2) continue;
-      final key = '${t.id}_$i';
-      if (notifyState.contains(key)) continue;
+      final key = returnReminderKey(t.id, i, untilDay);
+      if (notifyState.contains(key) || notifyState.contains('${t.id}_$i')) continue;
       notifyState.add(key);
       changed = true;
       await NotificationService.instance.showNow(
         (key.hashCode & 0xffff) ^ 0x7000,
         loc('مهلت مرجوعی نزدیک است'),
-        daysLeft == 0 ? locf('{0} امروز آخرین مهلت مرجوعی است.', [(item.name)]) : locf('{0} تا {1} امکان مرجوع کردن دارد.', [(item.name), (formatDate(untilDay))]),
+        daysLeft == 0
+            ? locf('{0} امروز آخرین مهلت مرجوعی است.', ['${item.name}${t.merchant.trim().isEmpty ? '' : ' (${t.merchant.trim()})'}'])
+            : locf('{0} تا {1} امکان مرجوع کردن دارد.', ['${item.name}${t.merchant.trim().isEmpty ? '' : ' (${t.merchant.trim()})'}', formatDate(untilDay)]),
         payload: t.id,
       );
     }
@@ -2924,6 +3023,8 @@ class Store {
     ];
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_txKey, encoded);
+    // Return-deadline reminders follow every change of the saved items.
+    NotificationService.instance.scheduleReturnRemindersSoon();
   }
 
   /// Same as [saveTransactions], but for callers that already know exactly
@@ -2941,6 +3042,8 @@ class Store {
     ];
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_txKey, encoded);
+    // Return-deadline reminders follow every change of the saved items.
+    NotificationService.instance.scheduleReturnRemindersSoon();
   }
 
   /// A transfer between accounts is stored as two linked transactions
@@ -3461,7 +3564,13 @@ final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 /// (e.g. a return-deadline reminder), once the app/navigator is ready.
 Future<void> openTransactionFromNotification(String? payload) async {
   if (payload == null || payload.isEmpty) return;
-  final nav = rootNavigatorKey.currentState;
+  // On a cold start (the app opened BY the tap) the navigator may not
+  // exist yet.
+  var nav = rootNavigatorKey.currentState;
+  for (var i = 0; nav == null && i < 50; i++) {
+    await Future.delayed(const Duration(milliseconds: 200));
+    nav = rootNavigatorKey.currentState;
+  }
   if (nav == null) return;
   final all = await Store.loadTransactions();
   final match = all.where((t) => t.id == payload).toList();
@@ -3479,7 +3588,16 @@ Future<void> openTransactionFromNotification(String? payload) async {
     await done.future;
     appLocked.removeListener(listener);
   }
-  nav.push(MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: match.first, categories: categories, accounts: accounts)));
+  final result = await nav.push<Object>(
+    MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: match.first, categories: categories, accounts: accounts)),
+  );
+  // Opened outside the usual lists, so save an edit / delete made there here.
+  if (result is Transaction) {
+    await Store.upsertTransaction(result);
+  } else if (result is DeleteTransactionSignal) {
+    await NotificationService.instance.cancelForTransaction(result.id);
+    await Store.deleteTransaction(result.id);
+  }
 }
 
 // ============================== App lock ==============================
@@ -4437,14 +4555,59 @@ Future<bool?> askKeepReceiptImage(BuildContext context, {bool recommendKeep = fa
   );
 }
 
-/// Crops a kept receipt photo to the receipt: the area holding its text (as
-/// found by on-device text recognition) plus a generous margin, so the
-/// table or background around it is cut away. Leaves the file as it is when
-/// there's too little text to go by or the receipt already fills the photo.
-Future<void> autoCropReceipt(String path) async {
-  if (!path.toLowerCase().endsWith('.jpg') && !path.toLowerCase().endsWith('.jpeg') && !path.toLowerCase().endsWith('.png')) {
-    return;
+/// Lets the person crop a kept receipt photo before it's stored: the
+/// receipt's outline is suggested (from where on-device text recognition
+/// finds its text), its corners and edges can be dragged to fit, and the
+/// cropped result is previewed before it replaces the photo. Returns true
+/// when the photo was cropped; leaving the screen keeps the photo as it is.
+Future<bool> cropReceiptInteractively(BuildContext context, String path) async {
+  final lower = path.toLowerCase();
+  final png = lower.endsWith('.png');
+  if (!png && !lower.endsWith('.jpg') && !lower.endsWith('.jpeg')) return false;
+  try {
+    // Turned upright first, so the shown photo, the suggestion and the crop
+    // all use the same pixel coordinates.
+    final prepared = await compute(_uprightReceipt, (bytes: await File(path).readAsBytes(), png: png));
+    if (prepared == null) return false;
+    if (prepared.rewritten) await File(path).writeAsBytes(prepared.bytes, flush: true);
+    final suggestion = await _suggestReceiptCorners(path, prepared.width, prepared.height);
+    if (!context.mounted) return false;
+    final cropped = await Navigator.push<Uint8List>(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => ReceiptCropScreen(
+          bytes: prepared.bytes,
+          width: prepared.width,
+          height: prepared.height,
+          png: png,
+          suggestion: suggestion,
+        ),
+      ),
+    );
+    if (cropped == null) return false;
+    await File(path).writeAsBytes(cropped, flush: true);
+    await FileImage(File(path)).evict();
+    return true;
+  } catch (_) {
+    return false; // best effort - the photo stays as it is
   }
+}
+
+({Uint8List bytes, int width, int height, bool rewritten})? _uprightReceipt(({Uint8List bytes, bool png}) a) {
+  final decoded = img.decodeImage(a.bytes);
+  if (decoded == null) return null;
+  final turned = decoded.exif.imageIfd.hasOrientation && decoded.exif.imageIfd.orientation != 1;
+  if (!turned) return (bytes: a.bytes, width: decoded.width, height: decoded.height, rewritten: false);
+  final upright = img.bakeOrientation(decoded);
+  final out = a.png ? img.encodePng(upright) : img.encodeJpg(upright, quality: 92);
+  return (bytes: out, width: upright.width, height: upright.height, rewritten: true);
+}
+
+/// The receipt's corners (top-left, top-right, bottom-right, bottom-left,
+/// in pixels): the area holding its text plus a margin, or null when too
+/// little text is found to go by.
+Future<List<Offset>?> _suggestReceiptCorners(String path, int w, int h) async {
   try {
     final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
     RecognizedText result;
@@ -4454,7 +4617,7 @@ Future<void> autoCropReceipt(String path) async {
       await recognizer.close();
     }
     final blocks = result.blocks.map((b) => b.boundingBox).toList();
-    if (blocks.length < 3) return;
+    if (blocks.length < 3) return null;
     var left = blocks.first.left, top = blocks.first.top, right = blocks.first.right, bottom = blocks.first.bottom;
     for (final r in blocks) {
       left = min(left, r.left);
@@ -4462,29 +4625,326 @@ Future<void> autoCropReceipt(String path) async {
       right = max(right, r.right);
       bottom = max(bottom, r.bottom);
     }
-    final bytes = await File(path).readAsBytes();
-    final out = await compute(_cropToBox, (bytes: bytes, l: left, t: top, r: right, b: bottom, png: path.toLowerCase().endsWith('.png')));
-    if (out != null) await File(path).writeAsBytes(out, flush: true);
+    // Text found outside the photo means the coordinates don't fit it.
+    if (right > w * 1.02 || bottom > h * 1.02) return null;
+    final mx = max(24.0, w * 0.04), my = max(24.0, h * 0.03);
+    final x0 = max(0.0, left - mx), y0 = max(0.0, top - my);
+    final x1 = min(w.toDouble(), right + mx), y1 = min(h.toDouble(), bottom + my);
+    if (x1 - x0 < w * 0.2 || y1 - y0 < h * 0.2) return null;
+    return [Offset(x0, y0), Offset(x1, y0), Offset(x1, y1), Offset(x0, y1)];
   } catch (_) {
-    // best effort - the uncropped photo stays as it is
+    return null;
   }
 }
 
-Uint8List? _cropToBox(({Uint8List bytes, double l, double t, double r, double b, bool png}) a) {
+/// Cuts the area inside [corners] (top-left, top-right, bottom-right,
+/// bottom-left) out of the photo: a plain crop when it's a rectangle,
+/// otherwise straightened out into one.
+Uint8List? _cropToCorners(({Uint8List bytes, List<Offset> corners, bool png}) a) {
   final decoded = img.decodeImage(a.bytes);
   if (decoded == null) return null;
   final photo = img.bakeOrientation(decoded);
-  final w = photo.width, h = photo.height;
-  // Text found outside the photo means the coordinates don't fit it.
-  if (a.r > w * 1.02 || a.b > h * 1.02) return null;
-  final mx = max(30.0, w * 0.06), my = max(30.0, h * 0.05);
-  final x0 = max(0, (a.l - mx).floor()), y0 = max(0, (a.t - my).floor());
-  final x1 = min(w, (a.r + mx).ceil()), y1 = min(h, (a.b + my).ceil());
-  final cw = x1 - x0, ch = y1 - y0;
-  if (cw < w * 0.25 || ch < h * 0.25) return null; // too little to be the whole receipt
-  if (cw * ch > w * h * 0.85) return null; // the receipt already fills the photo
-  final cropped = img.copyCrop(photo, x: x0, y: y0, width: cw, height: ch);
-  return a.png ? img.encodePng(cropped) : img.encodeJpg(cropped, quality: 88);
+  final c = a.corners;
+  final tl = c[0], tr = c[1], br = c[2], bl = c[3];
+  final tol = max(photo.width, photo.height) * 0.004;
+  final isRect = (tl.dy - tr.dy).abs() <= tol &&
+      (bl.dy - br.dy).abs() <= tol &&
+      (tl.dx - bl.dx).abs() <= tol &&
+      (tr.dx - br.dx).abs() <= tol;
+  img.Image out;
+  if (isRect) {
+    final x0 = min(tl.dx, bl.dx).round().clamp(0, photo.width - 1);
+    final y0 = min(tl.dy, tr.dy).round().clamp(0, photo.height - 1);
+    final x1 = max(tr.dx, br.dx).round().clamp(x0 + 1, photo.width);
+    final y1 = max(bl.dy, br.dy).round().clamp(y0 + 1, photo.height);
+    out = img.copyCrop(photo, x: x0, y: y0, width: x1 - x0, height: y1 - y0);
+  } else {
+    final width = max((tr - tl).distance, (br - bl).distance).round().clamp(2, photo.width * 2);
+    final height = max((bl - tl).distance, (br - tr).distance).round().clamp(2, photo.height * 2);
+    out = img.copyRectify(
+      photo,
+      topLeft: img.Point(tl.dx, tl.dy),
+      topRight: img.Point(tr.dx, tr.dy),
+      bottomLeft: img.Point(bl.dx, bl.dy),
+      bottomRight: img.Point(br.dx, br.dy),
+      interpolation: img.Interpolation.linear,
+      toImage: img.Image(width: width, height: height, numChannels: photo.numChannels),
+    );
+  }
+  return a.png ? img.encodePng(out) : img.encodeJpg(out, quality: 90);
+}
+
+/// Crop step for a receipt photo: four draggable corners and four edges
+/// (a magnifier shows the spot under the finger), then a preview of the
+/// cropped photo to save or go back and adjust. Pops with the cropped
+/// image's bytes, or null to keep the photo uncropped.
+class ReceiptCropScreen extends StatefulWidget {
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final bool png;
+  final List<Offset>? suggestion;
+  const ReceiptCropScreen({
+    required this.bytes,
+    required this.width,
+    required this.height,
+    required this.png,
+    this.suggestion,
+    super.key,
+  });
+  @override
+  State<ReceiptCropScreen> createState() => _ReceiptCropScreenState();
+}
+
+class _ReceiptCropScreenState extends State<ReceiptCropScreen> {
+  late List<Offset> corners; // tl, tr, br, bl in image pixels
+  Uint8List? preview;
+  bool busy = false;
+  Offset? dragAt; // finger position on screen while dragging, for the magnifier
+
+  List<Offset> get _full => [
+        Offset.zero,
+        Offset(widget.width.toDouble(), 0),
+        Offset(widget.width.toDouble(), widget.height.toDouble()),
+        Offset(0, widget.height.toDouble()),
+      ];
+
+  @override
+  void initState() {
+    super.initState();
+    corners = List.of(widget.suggestion ?? _full);
+  }
+
+  Offset _clamp(Offset p) => Offset(p.dx.clamp(0.0, widget.width.toDouble()), p.dy.clamp(0.0, widget.height.toDouble()));
+
+  void _moveCorner(int i, Offset deltaPx) => setState(() => corners[i] = _clamp(corners[i] + deltaPx));
+
+  /// Edge 0 = top (tl-tr), 1 = right (tr-br), 2 = bottom (br-bl), 3 = left (bl-tl);
+  /// it moves across itself only.
+  void _moveEdge(int e, Offset deltaPx) {
+    final d = e.isEven ? Offset(0, deltaPx.dy) : Offset(deltaPx.dx, 0);
+    setState(() {
+      corners[e] = _clamp(corners[e] + d);
+      corners[(e + 1) % 4] = _clamp(corners[(e + 1) % 4] + d);
+    });
+  }
+
+  Future<void> _showPreview() async {
+    setState(() => busy = true);
+    final out = await compute(_cropToCorners, (bytes: widget.bytes, corners: List.of(corners), png: widget.png));
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      preview = out;
+    });
+  }
+
+  Widget _handle({required Offset at, required double size, required void Function(Offset delta) onDrag}) {
+    const touch = 48.0;
+    return Positioned(
+      left: at.dx - touch / 2,
+      top: at.dy - touch / 2,
+      width: touch,
+      height: touch,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (d) => setState(() => dragAt = at),
+        onPanUpdate: (d) {
+          onDrag(d.delta);
+          setState(() => dragAt = (dragAt ?? at) + d.delta);
+        },
+        onPanEnd: (_) => setState(() => dragAt = null),
+        onPanCancel: () => setState(() => dragAt = null),
+        child: Center(
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 4)],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _editor() {
+    return LayoutBuilder(builder: (context, c) {
+      const pad = 28.0;
+      final box = Size(c.maxWidth - 2 * pad, c.maxHeight - 2 * pad);
+      final fitted = applyBoxFit(BoxFit.contain, Size(widget.width.toDouble(), widget.height.toDouble()), box).destination;
+      final scale = fitted.width / widget.width;
+      final origin = Offset(pad + (box.width - fitted.width) / 2, pad + (box.height - fitted.height) / 2);
+      Offset toScreen(Offset p) => origin + p * scale;
+      final pts = corners.map(toScreen).toList();
+      return Stack(
+        children: [
+          Positioned(
+            left: origin.dx,
+            top: origin.dy,
+            width: fitted.width,
+            height: fitted.height,
+            child: Image.memory(widget.bytes, fit: BoxFit.fill, gaplessPlayback: true),
+          ),
+          Positioned.fill(child: IgnorePointer(child: CustomPaint(painter: _CropOverlayPainter(pts)))),
+          for (var e = 0; e < 4; e++)
+            _handle(
+              at: Offset.lerp(pts[e], pts[(e + 1) % 4], 0.5)!,
+              size: 16,
+              onDrag: (d) => _moveEdge(e, d / scale),
+            ),
+          for (var i = 0; i < 4; i++) _handle(at: pts[i], size: 24, onDrag: (d) => _moveCorner(i, d / scale)),
+          if (dragAt != null)
+            Positioned(
+              left: dragAt!.dx - 55,
+              top: dragAt!.dy - 170,
+              child: const RawMagnifier(
+                size: Size(110, 110),
+                magnificationScale: 2.5,
+                focalPointOffset: Offset(0, 115),
+                decoration: MagnifierDecoration(shape: CircleBorder(side: BorderSide(color: Colors.white, width: 2))),
+              ),
+            ),
+        ],
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showingPreview = preview != null;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: Text(showingPreview ? loc('پیش‌نمایش تصویر برش‌خورده') : loc('برش تصویر رسید')),
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: loc('بدون برش'),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: Column(
+        children: [
+          if (!showingPreview)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                loc('گوشه‌ها یا لبه‌ها را بکشید تا کادر دقیقاً دور رسید قرار بگیرد.'),
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          Expanded(
+            child: busy
+                ? const Center(child: CircularProgressIndicator())
+                : showingPreview
+                    ? InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 6,
+                        child: Center(child: Padding(padding: const EdgeInsets.all(16), child: Image.memory(preview!))),
+                      )
+                    : _editor(),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: showingPreview
+                  ? Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => setState(() => preview = null),
+                            icon: const Icon(Icons.crop),
+                            label: Text(loc('ویرایش برش')),
+                            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => Navigator.pop(context, preview),
+                            icon: const Icon(Icons.check),
+                            label: Text(loc('تأیید و ذخیره')),
+                            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                          ),
+                        ),
+                      ],
+                    )
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton.icon(
+                                onPressed: busy ? null : () => setState(() => corners = _full),
+                                icon: const Icon(Icons.fullscreen),
+                                label: Text(loc('کل تصویر')),
+                              ),
+                            ),
+                            if (widget.suggestion != null)
+                              Expanded(
+                                child: TextButton.icon(
+                                  onPressed: busy ? null : () => setState(() => corners = List.of(widget.suggestion!)),
+                                  icon: const Icon(Icons.auto_fix_high),
+                                  label: Text(loc('کادر پیشنهادی')),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        FilledButton.icon(
+                          onPressed: busy ? null : _showPreview,
+                          icon: const Icon(Icons.crop),
+                          label: Text(loc('برش و پیش‌نمایش')),
+                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Dims the photo outside the crop outline and draws the outline.
+class _CropOverlayPainter extends CustomPainter {
+  final List<Offset> pts;
+  _CropOverlayPainter(this.pts);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final outline = Path()..addPolygon(pts, true);
+    final shade = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addPath(outline, Offset.zero);
+    canvas.drawPath(shade, Paint()..color = Colors.black.withValues(alpha: 0.55));
+    canvas.drawPath(
+      outline,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    // Thirds, to help line the receipt up straight.
+    final thin = Paint()
+      ..color = Colors.white38
+      ..strokeWidth = 1;
+    for (final f in [1 / 3, 2 / 3]) {
+      canvas.drawLine(Offset.lerp(pts[0], pts[1], f)!, Offset.lerp(pts[3], pts[2], f)!, thin);
+      canvas.drawLine(Offset.lerp(pts[0], pts[3], f)!, Offset.lerp(pts[1], pts[2], f)!, thin);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CropOverlayPainter old) => true;
 }
 
 /// Copies a scanned receipt/payslip image (which otherwise lives in a
@@ -6898,9 +7358,23 @@ enum ReceiptImageAction { reread, delete }
 /// Shows a transaction's stored receipt/payslip image on its own, with
 /// buttons below it to re-read it with AI or delete it. Pops with the
 /// chosen [ReceiptImageAction] (null if the person just goes back).
-class ReceiptImageScreen extends StatelessWidget {
+class ReceiptImageScreen extends StatefulWidget {
   final String imagePath;
-  const ReceiptImageScreen({required this.imagePath, super.key});
+  /// The AI re-read and delete buttons (the transaction editor's view);
+  /// without them it's a plain zoomable viewer.
+  final bool showActions;
+  const ReceiptImageScreen({required this.imagePath, this.showActions = true, super.key});
+  @override
+  State<ReceiptImageScreen> createState() => _ReceiptImageScreenState();
+}
+
+class _ReceiptImageScreenState extends State<ReceiptImageScreen> {
+  String get imagePath => widget.imagePath;
+  int _version = 0; // bumped after a crop, so the new photo is shown
+
+  Future<void> _crop() async {
+    if (await cropReceiptInteractively(context, imagePath) && mounted) setState(() => _version++);
+  }
 
   Future<void> _confirmDelete(BuildContext context) async {
     final confirm = await showDialog<bool>(
@@ -6924,7 +7398,10 @@ class ReceiptImageScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(loc('تصویر رسید/فیش'))),
+      appBar: AppBar(
+        title: Text(loc('تصویر رسید/فیش')),
+        actions: [IconButton(icon: const Icon(Icons.crop), tooltip: loc('برش تصویر رسید'), onPressed: _crop)],
+      ),
       body: Column(
         children: [
           Expanded(
@@ -6940,13 +7417,16 @@ class ReceiptImageScreen extends StatelessWidget {
                     width: c.maxWidth,
                     child: ConstrainedBox(
                       constraints: BoxConstraints(minHeight: c.maxHeight),
-                      child: Center(child: Image.file(File(imagePath), width: c.maxWidth, fit: BoxFit.fitWidth)),
+                      child: Center(
+                        child: Image.file(File(imagePath), key: ValueKey(_version), width: c.maxWidth, fit: BoxFit.fitWidth),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
+          if (widget.showActions)
           SafeArea(
             top: false,
             child: Padding(
@@ -14976,7 +15456,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     }
     // A receipt photo kept with the final transaction is cropped to the
     // receipt itself.
-    if (keptByAnswer && persistedImage != null) await autoCropReceipt(persistedImage);
+    if (keptByAnswer && persistedImage != null && context.mounted) await cropReceiptInteractively(context, persistedImage);
     final result = Transaction(
       id: id,
       type: TxType.expense,
@@ -15546,9 +16026,11 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     // Drafts always keep their scan; on the final save ask whether the
     // receipt/payslip photo should be kept with the transaction.
     var keepNewImage = draft;
+    var keptByAnswer = false;
     if (!draft && (widget.existing == null || widget.existing!.draft)) {
       final keep = await askKeepReceiptImage(context);
       if (keep == null) return;
+      keptByAnswer = keep;
       if (widget.existing == null) {
         keepNewImage = keep;
       } else if (!keep && persistedImage != null) {
@@ -15568,6 +16050,8 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
         // best-effort only - saving the transaction matters more than the image copy
       }
     }
+    // A kept payslip photo can be cropped to the payslip too.
+    if (keptByAnswer && persistedImage != null && context.mounted) await cropReceiptInteractively(context, persistedImage);
     final result = Transaction(
       id: id,
       type: TxType.income,
@@ -15766,6 +16250,64 @@ class DeleteTransactionSignal {
 
 // ============================== Transaction detail (read-only) ==============================
 
+/// A receipt/payslip photo shown small; tapping it opens it full screen to
+/// zoom in (and crop it again).
+class ReceiptThumbnail extends StatefulWidget {
+  final String path;
+  const ReceiptThumbnail({required this.path, super.key});
+  @override
+  State<ReceiptThumbnail> createState() => _ReceiptThumbnailState();
+}
+
+class _ReceiptThumbnailState extends State<ReceiptThumbnail> {
+  int _version = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ReceiptImageScreen(imagePath: widget.path, showActions: false)),
+          );
+          // It may have been cropped meanwhile.
+          await FileImage(File(widget.path)).evict();
+          if (mounted) setState(() => _version++);
+        },
+        child: Column(
+          children: [
+            Container(
+              height: 220,
+              width: double.infinity,
+              color: Colors.black,
+              child: Image.file(
+                File(widget.path),
+                key: ValueKey(_version),
+                fit: BoxFit.contain,
+                cacheHeight: 660,
+                errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white54)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.zoom_in, size: 16),
+                  const SizedBox(width: 6),
+                  Text(loc('برای بزرگ‌نمایی لمس کنید'), style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class TransactionDetailScreen extends StatelessWidget {
   final Transaction t;
   final List<Category> categories;
@@ -15912,11 +16454,21 @@ class TransactionDetailScreen extends StatelessWidget {
                           '${it.quantity != null && it.price != null ? ' • ' : ''}'
                           '${it.price != null ? ltr(formatMoney(it.price!, _currency)) : ''}',
                         ),
+                        if (it.returnUntil != null)
+                          Text(locf('مرجوعی تا {0}', [formatDate(it.returnUntil!)]), style: const TextStyle(fontSize: 11)),
+                        if (it.warrantyUntil != null)
+                          Text(locf('گارانتی تا {0}', [formatDate(it.warrantyUntil!)]), style: const TextStyle(fontSize: 11)),
                         if (it.warrantyNote != null) Text(it.warrantyNote!, style: const TextStyle(fontSize: 11)),
                       ],
                     ),
                   ),
                 )),
+          ],
+          if (t.imagePath != null && File(t.imagePath!).existsSync()) ...[
+            const SizedBox(height: 16),
+            Text(loc('تصویر رسید/فیش'), style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            ReceiptThumbnail(path: t.imagePath!),
           ],
           if (t.payslipDetails != null) ...[
             const SizedBox(height: 16),
@@ -16529,7 +17081,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
       final returnable = items.any((e) => e.returnUntil != null || e.warrantyUntil != null);
       final keep = await askKeepReceiptImage(context, recommendKeep: returnable);
       if (keep == null) return false;
-      if (keep) await autoCropReceipt(keptImage);
+      if (keep && context.mounted) await cropReceiptInteractively(context, keptImage);
       if (!keep) {
         try {
           await File(keptImage).delete();
