@@ -2969,6 +2969,19 @@ class Store {
   // refreshes. Transaction objects are immutable, so a shallow list copy is
   // enough to keep callers from disturbing the cache.
   static List<Transaction>? _txCache;
+  static List<Transaction>? _byIdSource;
+  static Map<String, Transaction> _byId = {};
+
+  /// The saved transaction with [id], from what was last loaded or saved.
+  static Transaction? savedTransaction(String id) {
+    final list = _txCache;
+    if (list == null) return null;
+    if (!identical(list, _byIdSource)) {
+      _byId = {for (final t in list) t.id: t};
+      _byIdSource = list;
+    }
+    return _byId[id];
+  }
   // id -> that transaction's own encoded JSON string, reused across saves so
   // only the transaction(s) that actually changed get re-encoded - encoding
   // the whole list on every single save is what made saving (and the
@@ -6965,6 +6978,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
+            if (t.isRecurring) installmentLine(t, displayDate ?? t.date),
           ],
         ),
         trailing: Text(
@@ -8790,7 +8804,8 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                       title: Text(categoryName(t.categoryId)),
                       subtitle: Text(
                         '${_recurrenceLabel(t)}'
-                        ' • ${next != null ? locf('سررسید بعدی: {0}', [formatDate(next)]) : loc('همه‌ی پرداخت‌ها انجام شده')}',
+                        ' • ${next != null ? locf('سررسید بعدی: {0}', [formatDate(next)]) : loc('همه‌ی پرداخت‌ها انجام شده')}'
+                        '${next != null && installmentLabel(t, next) != null ? ' (${installmentLabel(t, next)})' : ''}',
                       ),
                       trailing: Text(
                         ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -9241,6 +9256,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(daysLeft == 0 ? loc('امروز') : locf('{0} • {1} روز دیگر', [(formatDate(e.date)), (ltr(persianDigits('$daysLeft')))])),
+            if (last == null && e.t.isRecurring) installmentLine(e.t, e.date),
             if (last != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
@@ -9249,8 +9265,8 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                   decoration: BoxDecoration(color: Colors.teal.shade600, borderRadius: BorderRadius.circular(10)),
                   child: Text(
                     e.t.installments != null
-                        ? locf('آخرین قسط ({0} از {1}) - از ماه بعد تمام است', [(persianDigits('${last.n}')), (persianDigits('${last.total}'))])
-                        : loc('آخرین پرداخت - از ماه بعد تمام است'),
+                        ? locf('آخرین قسط ({0} از {1})', [(persianDigits('${last.n}')), (persianDigits('${last.total}'))])
+                        : loc('آخرین پرداخت'),
                     style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -10785,6 +10801,53 @@ List<Transaction> dueRecurringPayments(List<Transaction> all, {DateTime? until})
     }
   }
   return result;
+}
+
+final _seriesMemo = <String, List<DateTime>>{};
+
+/// Which payment of its recurring series the one on [date] is (1-based),
+/// and how many payments the series has when it ends (installments or an
+/// end date). Works for a due payment shown as a copy of the series too:
+/// the series is taken from the saved transaction with the same id.
+({int n, int? total})? installmentOf(Transaction t, DateTime date) {
+  if (!t.isRecurring) return null;
+  final o = Store.savedTransaction(t.id) ?? t;
+  if (!o.isRecurring) return null;
+  final key = '${o.id}|${o.date}|${o.recurrence}|${o.recurrenceDay}|${o.recurrenceWeekday}|'
+      '${o.recurrenceIntervalDays}|${o.installments}|${o.recurrenceEndDate}|${currentCalendarSystem.value}';
+  if (_seriesMemo.length > 500) _seriesMemo.clear();
+  final series = _seriesMemo.putIfAbsent(key, () => computeRecurrenceOccurrences(o));
+  final i = series.indexOf(DateTime(date.year, date.month, date.day));
+  if (i < 0) return null;
+  final ends = o.installments != null || o.recurrenceEndDate != null;
+  return (n: i + 1, total: ends ? series.length : null);
+}
+
+/// "Installment 3 of 24" (or "Payment no. 3" for a series without an end)
+/// for a recurring payment, null for anything else.
+String? installmentLabel(Transaction t, DateTime date) {
+  final k = installmentOf(t, date);
+  if (k == null) return null;
+  return k.total != null
+      ? locf('قسط {0} از {1}', [persianDigits('${k.n}'), persianDigits('${k.total}')])
+      : locf('پرداخت شماره‌ی {0}', [persianDigits('${k.n}')]);
+}
+
+/// [installmentLabel] as a small line under a recurring payment's title.
+Widget installmentLine(Transaction t, DateTime date) {
+  final label = installmentLabel(t, date);
+  if (label == null) return const SizedBox.shrink();
+  return Padding(
+    padding: const EdgeInsets.only(top: 2),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.repeat, size: 12, color: Colors.teal.shade400),
+        const SizedBox(width: 4),
+        Flexible(child: Text(label, style: TextStyle(fontSize: 11, color: Colors.teal.shade400, fontWeight: FontWeight.w600))),
+      ],
+    ),
+  );
 }
 
 Set<String> _words(String text) => text
@@ -13580,6 +13643,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
+                              if (t.isRecurring) installmentLine(t, e.date),
                             ],
                           ),
                           trailing: Text(
@@ -13759,10 +13823,16 @@ class ReportTransactionsScreen extends StatelessWidget {
                 return Card(
                   child: ListTile(
                     title: Text(t.merchant.trim().isNotEmpty ? '${cat(t.categoryId)} • ${t.merchant.trim()}' : cat(t.categoryId)),
-                    subtitle: Text(
-                      '${formatDate(t.date)}${t.isRecurring ? ' • ${loc('تکرارشونده')}' : ''}${t.note.trim().isNotEmpty ? ' • ${t.note.trim()}' : ''}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${formatDate(t.date)}${t.isRecurring ? ' • ${loc('تکرارشونده')}' : ''}${t.note.trim().isNotEmpty ? ' • ${t.note.trim()}' : ''}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (t.isRecurring) installmentLine(t, t.date),
+                      ],
                     ),
                     trailing: Text(
                       ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, cur(t.accountId)),
@@ -14538,14 +14608,20 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                       child: Card(
                         child: ListTile(
                           title: Text('${categoryName(t.categoryId)}$name'),
-                          subtitle: Text(
-                            [
-                              if (notDue) loc('سررسیدنشده') else if (!e.isReal) loc('سررسید شده'),
-                              if (t.isRecurring) loc('تکرارشونده'),
-                              if (e.isReal && t.note.isNotEmpty) t.note,
-                            ].join(' • '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                [
+                                  if (notDue) loc('سررسیدنشده') else if (!e.isReal) loc('سررسید شده'),
+                                  if (t.isRecurring) loc('تکرارشونده'),
+                                  if (e.isReal && t.note.isNotEmpty) t.note,
+                                ].join(' • '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              if (t.isRecurring) installmentLine(t, e.date),
+                            ],
                           ),
                           trailing: Text(
                             ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -16429,6 +16505,10 @@ class TransactionDetailScreen extends StatelessWidget {
                       RecurrenceFrequency.custom => locf('هر {0} روز', [(t.recurrenceIntervalDays ?? '?')]),
                       RecurrenceFrequency.none => '—',
                     }),
+                    if (installmentLabel(t, t.date) != null) ...[
+                      const Divider(height: 1),
+                      _row(context, loc('این پرداخت'), installmentLabel(t, t.date)!),
+                    ],
                   ],
                   if (t.draft) ...[
                     const Divider(height: 1),

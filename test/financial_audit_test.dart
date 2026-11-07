@@ -276,6 +276,18 @@ void main() {
         final texts = textsOf(tester);
         expect(texts.any((x) => x.contains(persianDigits('${stored + dueRepeats}'))), isTrue,
             reason: 'count: expected ${stored + dueRepeats}, shown ${texts.take(5).join(' | ')}');
+        // Due payments of a series with an end show "installment n of N".
+        for (final id in ['phone', 'carloan', 'fuel']) {
+          final t = s.tx.firstWhere((t) => t.id == id);
+          final series = refOccurrences(t, DateTime(today.year + 3, 12, 31), jalali: c.jalali);
+          for (var n = 1; n <= series.length; n++) {
+            if (series[n - 1].isAfter(today)) break;
+            // Only the newest rows are built in the (lazy) list.
+            if (today.difference(series[n - 1]).inDays > 60) continue;
+            final label = locf('قسط {0} از {1}', [persianDigits('$n'), persianDigits('${series.length}')]);
+            expect(texts.contains(label), isTrue, reason: '$id: "$label" not shown');
+          }
+        }
         await close(tester);
       });
     });

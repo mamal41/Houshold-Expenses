@@ -53,8 +53,8 @@ const Map<String, List<String>> uiTranslations = {
   '{0}{1}\nتراکنش‌های صفحه‌های خوانده‌شده ذخیره شده‌اند و همین حالا قابل بارگذاری‌اند؛ بقیه‌ی صفحات را با «ادامه با هوش مصنوعی» یا بعداً از فهرست صورتحساب‌های ذخیره‌شده بخوان.': ['{0}{1}\nTransactions from the pages read so far are saved and can be imported now; read the remaining pages with “Continue with AI” or later from the list of saved statements.', '{0}{1}\nDie Buchungen der gelesenen Seiten sind gespeichert und können jetzt importiert werden; lies die restlichen Seiten mit „Mit KI fortfahren“ oder später aus der Liste der gespeicherten Kontoauszüge.'],
   '«{0}» حذف شود؟{1}\nتراکنش‌هایی که از این دسته‌بندی استفاده کرده‌اند، به دسته‌بندی بالاتر منتقل می‌شوند و نام «{2}» به توضیحات آن‌ها اضافه می‌شود.': ['Delete “{0}”?{1}\nTransactions that used this category move to the parent category and the name “{2}” is added to their notes.', '„{0}“ löschen?{1}\nBuchungen mit dieser Kategorie wandern in die übergeordnete Kategorie und der Name „{2}“ wird ihren Notizen hinzugefügt.'],
   '، ': [', ', ', '],
-  'آخرین قسط ({0} از {1}) - از ماه بعد تمام است': ['Last installment ({0} of {1}) - over from next month', 'Letzte Rate ({0} von {1}) - ab nächstem Monat vorbei'],
-  'آخرین پرداخت - از ماه بعد تمام است': ['Last payment - over from next month', 'Letzte Zahlung - ab nächstem Monat vorbei'],
+  'آخرین قسط ({0} از {1})': ['Last installment ({0} of {1})', 'Letzte Rate ({0} von {1})'],
+  'آخرین پرداخت': ['Last payment', 'Letzte Zahlung'],
   'آیا از حذف تصویر رسید/فیش اطمینان دارید؟ خود تراکنش حذف نمی‌شود.': ['Delete the receipt/payslip image? The transaction itself is not deleted.', 'Bild des Belegs/der Lohnabrechnung löschen? Die Buchung selbst wird nicht gelöscht.'],
   'آیا تغییرات انجام شده ذخیره شود؟': ['Save the changes?', 'Änderungen speichern?'],
   'آیا می‌خواهید از برنامه خارج شوید؟': ['Do you want to exit the app?', 'Möchtest du die App beenden?'],
@@ -704,4 +704,7 @@ const Map<String, List<String>> uiTranslations = {
   'کادر پیشنهادی': ['Suggested frame', 'Vorgeschlagener Rahmen'],
   'برش و پیش‌نمایش': ['Crop and preview', 'Zuschneiden und Vorschau'],
   'برای بزرگ‌نمایی لمس کنید': ['Tap to enlarge', 'Zum Vergrößern antippen'],
+  'قسط {0} از {1}': ['Installment {0} of {1}', 'Rate {0} von {1}'],
+  'پرداخت شماره‌ی {0}': ['Payment no. {0}', 'Zahlung Nr. {0}'],
+  'این پرداخت': ['This payment', 'Diese Zahlung'],
 };
