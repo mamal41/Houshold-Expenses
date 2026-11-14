@@ -744,4 +744,5 @@ const Map<String, List<String>> uiTranslations = {
   'بررسی به‌روزرسانی انجام نشد: {0}': ['Could not check for updates: {0}', 'Suche nach Updates fehlgeschlagen: {0}'],
   'به‌روزرسانی برنامه': ['App update', 'App-Update'],
   'نسخه‌ی نصب‌شده: {0}': ['Installed version: {0}', 'Installierte Version: {0}'],
+  'شناسه‌ی کلاینت (Client ID) این نسخه؛ باید با Client ID کلاینت Desktop در Google Cloud یکی باشد:': ['Client ID of this build; it must match the Client ID of the Desktop client in Google Cloud:', 'Client-ID dieser Version; sie muss mit der Client-ID des Desktop-Clients in Google Cloud übereinstimmen:'],
 };

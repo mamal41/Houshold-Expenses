@@ -166,6 +166,10 @@ abstract class GoogleAccess {
   /// Whether this build can sign in at all (Windows needs the app's
   /// Google client id built in).
   bool get configured;
+
+  /// The OAuth client id this build signs in with (shown to compare with
+  /// Google Cloud; not a secret). Null where it isn't built in.
+  String? get clientId => null;
   Future<String?> email();
   Future<bool> signIn();
   Future<void> signOut();
@@ -174,7 +178,7 @@ abstract class GoogleAccess {
   Future<String?> accessToken();
 }
 
-class _PhoneGoogleAccess implements GoogleAccess {
+class _PhoneGoogleAccess extends GoogleAccess {
   final _google = GoogleSignIn(scopes: const [_driveScope]);
   GoogleSignInAccount? _account;
 
@@ -212,7 +216,7 @@ class _PhoneGoogleAccess implements GoogleAccess {
   }
 }
 
-class _DesktopGoogleAccess implements GoogleAccess {
+class _DesktopGoogleAccess extends GoogleAccess {
   // The Windows app's OAuth client ("Desktop app" type), built in from the
   // repository secrets. Google treats a desktop client's secret as public.
   // Without any whitespace: a space or line break copied along with a secret
@@ -229,6 +233,9 @@ class _DesktopGoogleAccess implements GoogleAccess {
 
   @override
   bool get configured => _clientId.isNotEmpty;
+
+  @override
+  String? get clientId => _clientId;
 
   @override
   Future<String?> email() async => (await SharedPreferences.getInstance()).getString(_emailKey);
@@ -675,6 +682,16 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
               ),
             const SizedBox(height: 8),
             Text(loc('روی هر دو دستگاه با همان حساب گوگل وارد شوید.'), style: muted),
+            if (sync.google.clientId != null) ...[
+              const SizedBox(height: 16),
+              Text(loc('شناسه‌ی کلاینت (Client ID) این نسخه؛ باید با Client ID کلاینت Desktop در Google Cloud یکی باشد:'),
+                  style: muted.copyWith(fontSize: 12)),
+              const SizedBox(height: 4),
+              Directionality(
+                textDirection: TextDirection.ltr,
+                child: SelectableText(sync.google.clientId!, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+              ),
+            ],
           ] else ...[
             Card(
               child: Column(
