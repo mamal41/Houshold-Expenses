@@ -1,0 +1,66 @@
+name: Build Windows app
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Windows project
+        run: flutter create --platforms=windows --org com.personalfinance --project-name personal_finance .
+      - name: Remove default test (uses old template)
+        shell: bash
+        run: rm -f test/widget_test.dart
+      - name: Set Persian window title
+        shell: bash
+        run: |
+          # The same name as on the phone; written as \u escapes so the
+          # compiler reads it right whatever the source file encoding.
+          sed -i 's/window.Create(L"[^"]*"/window.Create(L"\\u0645\\u062f\\u06cc\\u0631\\u06cc\\u062a\\u0020\\u0645\\u0627\\u0644\\u06cc\\u0020\\u0634\\u062e\\u0635\\u06cc"/' windows/runner/main.cpp
+          grep -n 'window.Create' windows/runner/main.cpp
+      - name: Get dependencies
+        run: flutter pub get
+      - name: Generate app icon
+        shell: bash
+        run: |
+          cat > flutter_launcher_icons-windows.yaml <<'YAML'
+          flutter_launcher_icons:
+            image_path: "assets/icon/icon.png"
+            windows:
+              generate: true
+              image_path: "assets/icon/icon.png"
+              icon_size: 256
+          YAML
+          dart run flutter_launcher_icons -f flutter_launcher_icons-windows.yaml
+      - name: Build release
+        # The Google client for signing in from Windows (for syncing with
+        # the phone) comes from the repository secrets; without them the
+        # app works, only sync can't be turned on.
+        env:
+          GOOGLE_DESKTOP_CLIENT_ID: ${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+        shell: bash
+        run: |
+          flutter build windows --release \
+            --dart-define=GOOGLE_DESKTOP_CLIENT_ID="$GOOGLE_DESKTOP_CLIENT_ID" \
+            --dart-define=GOOGLE_DESKTOP_CLIENT_SECRET="$GOOGLE_DESKTOP_CLIENT_SECRET"
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "Modiriat-Mali-Windows"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Recurse -Force build\windows\x64\runner\Release\* $out
+          if (-not (Test-Path "$out\personal_finance.exe")) { throw "exe missing" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Modiriat-Mali-Windows
+          path: Modiriat-Mali-Windows
+          if-no-files-found: error
+          retention-days: 30

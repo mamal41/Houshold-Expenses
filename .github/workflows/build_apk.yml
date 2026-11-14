@@ -256,6 +256,14 @@ jobs:
         run: flutter build apk --release --no-tree-shake-icons
       - name: Verify APK
         run: test -s build/app/outputs/flutter-apk/app-release.apk
+      - name: Show the signing certificate fingerprint (for Google sign-in)
+        run: |
+          # Google sign-in (phone/computer sync) needs this app's package
+          # name and the SHA-1 of the key it's signed with, registered as an
+          # Android OAuth client in Google Cloud.
+          APKSIGNER=$(ls -d $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -E "SHA-1|SHA-256" | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -o 'applicationId *=* *"[^"]*"' android/app/build.gradle* | tee -a "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v4
         with:
           name: Modiriat-Mali-Android-APK

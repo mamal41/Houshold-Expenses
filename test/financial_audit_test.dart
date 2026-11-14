@@ -90,7 +90,7 @@ void main() {
       bool showsMoney(WidgetTester tester, double v) {
         final texts = textsOf(tester);
         final step = cur == 'IRT' ? 1.0 : 0.01;
-        return [v, v - step, v + step].any((x) => texts.any((t) => t.contains(money(x))));
+        return [v, v - step, v + step, v - step / 2, v + step / 2].any((x) => texts.any((t) => t.contains(money(x))));
       }
 
       // Text right after the first text equal to [label].

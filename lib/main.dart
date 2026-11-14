@@ -26,6 +26,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:excel/excel.dart' as xls;
 import 'package:share_plus/share_plus.dart';
 import 'package:image/image.dart' as img;
+import 'sync.dart';
 import 'ui_translations.dart';
 
 void main() async {
@@ -1584,6 +1585,9 @@ class NotificationService {
 
   Future<void> init() async {
     if (_initialized) return;
+    // Reminders are a phone feature; on Windows every call below is a no-op
+    // (_initialized stays false).
+    if (!Platform.isAndroid) return;
     tz_data.initializeTimeZones();
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _plugin.initialize(
@@ -1601,6 +1605,7 @@ class NotificationService {
   }
 
   Future<void> requestPermission() async {
+    if (!_initialized) return;
     await _plugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
@@ -1645,6 +1650,7 @@ class NotificationService {
   /// Shows an immediate (not scheduled) notification, e.g. for a budget
   /// goal threshold that was just crossed.
   Future<void> showNow(int id, String title, String body, {String? payload}) async {
+    if (!_initialized) return;
     final details = NotificationDetails(
       android: AndroidNotificationDetails('budget_goals', loc('اهداف هزینه'), importance: Importance.high, priority: Priority.high),
     );
@@ -3038,6 +3044,7 @@ class Store {
     await sp.setStringList(_txKey, encoded);
     // Return-deadline reminders follow every change of the saved items.
     NotificationService.instance.scheduleReturnRemindersSoon();
+    SyncService.instance.requestSync();
   }
 
   /// Same as [saveTransactions], but for callers that already know exactly
@@ -3057,6 +3064,7 @@ class Store {
     await sp.setStringList(_txKey, encoded);
     // Return-deadline reminders follow every change of the saved items.
     NotificationService.instance.scheduleReturnRemindersSoon();
+    SyncService.instance.requestSync();
   }
 
   /// A transfer between accounts is stored as two linked transactions
@@ -4045,6 +4053,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
           ),
           ListTile(
+            leading: const Icon(Icons.sync),
+            title: Text(loc('همگام‌سازی گوشی و کامپیوتر')),
+            subtitle: ValueListenableBuilder<SyncState>(
+              valueListenable: SyncService.instance.state,
+              builder: (context, st, _) => Text(st == SyncState.off ? loc('خاموش') : loc('روشن (از طریق Google Drive)')),
+            ),
+            trailing: const Icon(Icons.chevron_left),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncSettingsScreen())),
+          ),
+          ListTile(
             leading: const Icon(Icons.lock_outline),
             title: Text(loc('قفل برنامه')),
             subtitle: Text(loc('رمز عبور و اثرانگشت/چهره')),
@@ -4621,6 +4639,7 @@ Future<bool> cropReceiptInteractively(BuildContext context, String path) async {
 /// in pixels): the area holding its text plus a margin, or null when too
 /// little text is found to go by.
 Future<List<Offset>?> _suggestReceiptCorners(String path, int w, int h) async {
+  if (!hasOnDeviceOcr) return null;
   try {
     final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
     RecognizedText result;
@@ -5058,8 +5077,14 @@ Future<String> rasterizePdfPages(String path) async {
   }
 }
 
+/// ML Kit text recognition exists on phones only.
+bool get hasOnDeviceOcr => Platform.isAndroid || Platform.isIOS;
+
 /// Runs on-device ML Kit text recognition (Latin script) on the image at [path].
 Future<String> extractTextFromImage(String path) async {
+  // No on-device text recognition on Windows: there the review screen
+  // reads the photo with AI (Gemini) instead.
+  if (!hasOnDeviceOcr) return '';
   final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
   try {
     final result = await recognizer.processImage(InputImage.fromFilePath(path));
@@ -5868,6 +5893,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Data that came from the other device: show it.
+    SyncService.instance.dataVersion.addListener(_onSynced);
     _load();
   }
 
@@ -5901,6 +5928,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       // The date may have moved on (e.g. a new month) while the app sat in
       // the background - refresh so balances and month tabs follow.
       unawaited(_refresh());
+      unawaited(SyncService.instance.syncNow());
       final pausedAt = _pausedAt;
       _pausedAt = null;
       if (pausedAt != null && DateTime.now().difference(pausedAt) >= const Duration(minutes: 5) && draftCount > 0) {
@@ -5916,8 +5944,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     if (route is PageRoute) appRouteObserver.subscribe(this, route);
   }
 
+  void _onSynced() {
+    _lastRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+    unawaited(_refresh());
+  }
+
   @override
   void dispose() {
+    SyncService.instance.dataVersion.removeListener(_onSynced);
     appRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _draftHintStopTimer?.cancel();
@@ -5960,6 +5994,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       shoppingPending = await _loadShoppingPending();
       if (mounted) setState(() {});
       if (_startupChecksDone && !appLocked.value) unawaited(_countConfirmedDuplicates());
+      // Something may have been changed on the screen just closed.
+      SyncService.instance.requestSync();
     } finally {
       _lastRefresh = DateTime.now();
       _refreshing = false;
@@ -6014,6 +6050,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           _countConfirmedDuplicates,
           NotificationService.instance.askPermissionOnce,
           NotificationService.instance.rescheduleAll,
+          SyncService.instance.start,
           retryPendingCategoryIcons,
           checkBudgetGoals,
           checkSpendingAnomalies,
@@ -15099,15 +15136,18 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
     );
     return Row(
         children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              style: style,
-              onPressed: busy ? null : () => _process(isPayslip, ScanSource.camera),
-              icon: const Icon(Icons.camera_alt, size: 18),
-              label: Text(tr('camera'), softWrap: false, overflow: TextOverflow.visible),
+          // A computer has no camera to photograph a receipt with.
+          if (Platform.isAndroid || Platform.isIOS) ...[
+            Expanded(
+              child: OutlinedButton.icon(
+                style: style,
+                onPressed: busy ? null : () => _process(isPayslip, ScanSource.camera),
+                icon: const Icon(Icons.camera_alt, size: 18),
+                label: Text(tr('camera'), softWrap: false, overflow: TextOverflow.visible),
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
+            const SizedBox(width: 6),
+          ],
           Expanded(
             child: OutlinedButton.icon(
               style: style,
