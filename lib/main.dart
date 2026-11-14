@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart' show SynchronousFuture, compute;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
-    show SystemNavigator, SystemChrome, SystemUiMode, SystemUiOverlay, SystemUiOverlayStyle, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection;
+    show SystemNavigator, SystemChrome, SystemUiMode, SystemUiOverlay, SystemUiOverlayStyle, Clipboard, ClipboardData, TextInputFormatter, TextEditingValue, TextSelection, LogicalKeyboardKey;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
@@ -3542,7 +3542,16 @@ class _MoneyAppState extends State<MoneyApp> {
               ),
               child: Directionality(
                 textDirection: currentLanguage.value.direction,
-                child: AppLockGate(child: child!),
+                // A computer has no back button: Esc goes back instead (and,
+                // like the phone's back button, closes an open menu first).
+                child: Platform.isWindows
+                    ? CallbackShortcuts(
+                        bindings: {
+                          const SingleActivator(LogicalKeyboardKey.escape): () => rootNavigatorKey.currentState?.maybePop(),
+                        },
+                        child: Focus(autofocus: true, child: AppLockGate(child: child!)),
+                      )
+                    : AppLockGate(child: child!),
               ),
             ),
           ),
@@ -3928,13 +3937,18 @@ class AppDrawer extends StatelessWidget {
           title: Text(label),
           selected: currentIndex == i,
           onTap: () {
-            Navigator.pop(context);
-            if (currentIndex == i) return;
+            if (currentIndex == i) {
+              Navigator.pop(context); // close the menu
+              return;
+            }
             if (i == 0) {
               // Go back to the single root Home instance instead of stacking
               // a new one, so the back button naturally exits from Home.
+              Navigator.pop(context);
               Navigator.popUntil(context, (route) => route.isFirst);
             } else {
+              // Opened on top of the menu, which stays open underneath: going
+              // back from the screen lands in the menu again.
               Navigator.push(context, MaterialPageRoute(builder: (_) => builder()));
             }
           },
