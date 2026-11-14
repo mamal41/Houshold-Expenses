@@ -5,6 +5,8 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write # publishes the APK as a release (download without a GitHub login)
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -273,3 +275,16 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
+      - name: Publish the APK as a release
+        # The newest one is always at
+        # github.com/<repo>/releases/latest/download/ModiriatMali.apk
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk ModiriatMali.apk
+          gh release create "android-v${{ github.run_number }}" ModiriatMali.apk \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "Android ${{ github.run_number }}" \
+            --notes "$(printf '%s\n' "${NOTES:-}" | grep -v -E '^(Co-Authored-By|Claude-Session):')" --latest
