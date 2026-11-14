@@ -124,7 +124,15 @@ jobs:
           NOTES: ${{ github.event.head_commit.message }}
         shell: bash
         run: |
-          gh release create "windows-v${{ github.run_number }}" installer-output/ModiriatMali-Setup.exe \
-            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
-            --title "Windows 1.0.${{ github.run_number }}" \
-            --notes "$(printf '%s\n' "${NOTES:-}" | grep -v -E '^(Co-Authored-By|Claude-Session):')" --latest=false
+          # GitHub sometimes refuses or loses a release made the same moment
+          # as the other workflow's: retry, then check the file is there.
+          tag="windows-v${{ github.run_number }}"
+          notes="$(printf '%s\n' "${NOTES:-}" | grep -v -E '^(Co-Authored-By|Claude-Session):' || true)"
+          for attempt in 1 2 3 4 5; do
+            gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
+              gh release create "$tag" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+                --title "Windows 1.0.${{ github.run_number }}" --notes "$notes" --latest=false || true
+            gh release upload "$tag" installer-output/ModiriatMali-Setup.exe --repo "${{ github.repository }}" --clobber && break
+            sleep $((attempt * 15))
+          done
+          gh release view "$tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -qx "$(basename installer-output/ModiriatMali-Setup.exe)"

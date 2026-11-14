@@ -284,7 +284,15 @@ jobs:
           NOTES: ${{ github.event.head_commit.message }}
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk ModiriatMali.apk
-          gh release create "android-v${{ github.run_number }}" ModiriatMali.apk \
-            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
-            --title "Android ${{ github.run_number }}" \
-            --notes "$(printf '%s\n' "${NOTES:-}" | grep -v -E '^(Co-Authored-By|Claude-Session):')" --latest
+          # GitHub sometimes refuses or loses a release made the same moment
+          # as the other workflow's: retry, then check the file is there.
+          tag="android-v${{ github.run_number }}"
+          notes="$(printf '%s\n' "${NOTES:-}" | grep -v -E '^(Co-Authored-By|Claude-Session):' || true)"
+          for attempt in 1 2 3 4 5; do
+            gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
+              gh release create "$tag" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+                --title "Android ${{ github.run_number }}" --notes "$notes" --latest || true
+            gh release upload "$tag" ModiriatMali.apk --repo "${{ github.repository }}" --clobber && break
+            sleep $((attempt * 15))
+          done
+          gh release view "$tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -qx "$(basename ModiriatMali.apk)"
