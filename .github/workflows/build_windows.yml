@@ -12,6 +12,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: Flutter 3.50 deprecates package:flutter/material.dart
+          # (moving to package:material_ui), which fails the analysis.
+          flutter-version: 3.47.9
           cache: true
       - name: Generate Windows project
         run: flutter create --platforms=windows --org com.personalfinance --project-name personal_finance .
@@ -48,7 +51,7 @@ jobs:
           GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
         shell: bash
         run: |
-          flutter build windows --release \
+          flutter build windows --release --no-tree-shake-icons \
             --dart-define=GOOGLE_DESKTOP_CLIENT_ID="$GOOGLE_DESKTOP_CLIENT_ID" \
             --dart-define=GOOGLE_DESKTOP_CLIENT_SECRET="$GOOGLE_DESKTOP_CLIENT_SECRET"
       - name: Package

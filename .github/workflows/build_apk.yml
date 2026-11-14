@@ -18,6 +18,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: Flutter 3.50 deprecates package:flutter/material.dart
+          # (moving to package:material_ui), which fails the analysis.
+          flutter-version: 3.47.9
           cache: true
       - name: Generate Android project
         run: flutter create --platforms=android --org com.personalfinance .
