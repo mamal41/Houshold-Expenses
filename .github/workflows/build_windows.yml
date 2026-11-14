@@ -3,6 +3,8 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+permissions:
+  contents: write # publishes the installer as a release, for the in-app update
 jobs:
   build:
     runs-on: windows-latest
@@ -28,6 +30,9 @@ jobs:
           # compiler reads it right whatever the source file encoding.
           sed -i 's/window.Create(L"[^"]*"/window.Create(L"\\u0645\\u062f\\u06cc\\u0631\\u06cc\\u062a\\u0020\\u0645\\u0627\\u0644\\u06cc\\u0020\\u0634\\u062e\\u0635\\u06cc"/' windows/runner/main.cpp
           grep -n 'window.Create' windows/runner/main.cpp
+          # A window that fits a computer screen better than the template's.
+          sed -i 's/Win32Window::Size size(1280, 720);/Win32Window::Size size(1360, 860);/' windows/runner/main.cpp
+          grep -n 'Win32Window::Size size' windows/runner/main.cpp
       - name: Allow local_auth_windows with the current compiler
         shell: bash
         run: |
@@ -75,6 +80,8 @@ jobs:
         shell: bash
         run: |
           flutter build windows --release --no-tree-shake-icons \
+            --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }} \
+            --dart-define=WINDOWS_BUILD=${{ github.run_number }} \
             --dart-define=GOOGLE_DESKTOP_CLIENT_ID="$GOOGLE_DESKTOP_CLIENT_ID" \
             --dart-define=GOOGLE_DESKTOP_CLIENT_SECRET="$GOOGLE_DESKTOP_CLIENT_SECRET"
       - name: Package
@@ -84,9 +91,34 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item -Recurse -Force build\windows\x64\runner\Release\* $out
           if (-not (Test-Path "$out\personal_finance.exe")) { throw "exe missing" }
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DBuild=${{ github.run_number }}" installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if (-not (Test-Path installer-output\ModiriatMali-Setup.exe)) { throw "installer missing" }
       - uses: actions/upload-artifact@v4
         with:
           name: Modiriat-Mali-Windows
           path: Modiriat-Mali-Windows
           if-no-files-found: error
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Modiriat-Mali-Windows-Setup
+          path: installer-output/ModiriatMali-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish for the in-app update
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        shell: bash
+        run: |
+          gh release create "windows-v${{ github.run_number }}" installer-output/ModiriatMali-Setup.exe \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "Windows 1.0.${{ github.run_number }}" \
+            --notes "$(printf '%s\n' "${NOTES:-}" | grep -v -E '^(Co-Authored-By|Claude-Session):')" --latest=false

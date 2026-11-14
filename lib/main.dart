@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show SynchronousFuture, compute;
+import 'package:flutter/foundation.dart' show SynchronousFuture, compute, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
@@ -28,6 +28,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:image/image.dart' as img;
 import 'sync.dart';
 import 'ui_translations.dart';
+import 'updater.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -3544,12 +3545,12 @@ class _MoneyAppState extends State<MoneyApp> {
                 textDirection: currentLanguage.value.direction,
                 // A computer has no back button: Esc goes back instead (and,
                 // like the phone's back button, closes an open menu first).
-                child: Platform.isWindows
+                child: defaultTargetPlatform == TargetPlatform.windows
                     ? CallbackShortcuts(
                         bindings: {
                           const SingleActivator(LogicalKeyboardKey.escape): () => rootNavigatorKey.currentState?.maybePop(),
                         },
-                        child: Focus(autofocus: true, child: AppLockGate(child: child!)),
+                        child: Focus(autofocus: true, child: DesktopFrame(child: AppLockGate(child: child!))),
                       )
                     : AppLockGate(child: child!),
               ),
@@ -3558,9 +3559,35 @@ class _MoneyAppState extends State<MoneyApp> {
         );
       },
       navigatorKey: rootNavigatorKey,
-      navigatorObservers: [appRouteObserver],
+      navigatorObservers: [appRouteObserver, _DesktopMenuObserver()],
       // The very first start asks for the language first.
       home: languageChosen ? const HomeScreen() : const FirstLanguageScreen(),
+    );
+  }
+}
+
+/// The app on a computer screen: the side menu next to the page, and the
+/// page kept to a comfortable reading width on a wide window.
+class DesktopFrame extends StatelessWidget {
+  final Widget child;
+  const DesktopFrame({required this.child, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final page = ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1100), child: child)),
+    );
+    if (!desktopSideMenu(context)) return page;
+    return ValueListenableBuilder<bool>(
+      valueListenable: appLocked,
+      // No menu over the lock screen.
+      builder: (context, locked, _) => Row(
+        children: [
+          if (!locked) ...[const DesktopSideMenu(), const VerticalDivider(width: 1)],
+          Expanded(child: page),
+        ],
+      ),
     );
   }
 }
@@ -3926,37 +3953,88 @@ class _PinLockScreenState extends State<PinLockScreen> {
   }
 }
 
+/// One entry of the app menu (the phone's slide-out menu and the
+/// permanent side menu on a computer).
+typedef AppMenuEntry = ({int index, IconData icon, String label, Widget Function() builder, String? section});
+
+List<AppMenuEntry> appMenuEntries() {
+  AppMenuEntry e(int i, IconData icon, String label, Widget Function() b, [String? section]) =>
+      (index: i, icon: icon, label: label, builder: b, section: section);
+  return [
+    e(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
+    e(12, Icons.list_alt, tr('all_transactions'), () => const AllTransactionsScreen(), tr('section_transactions')),
+    e(23, Icons.repeat, loc('تراکنش‌های تکرارشونده'), () => const RecurringTransactionsScreen()),
+    e(21, Icons.edit_note_outlined, loc('تراکنش‌های پیش‌نویس'), () => const DraftsScreen()),
+    e(22, Icons.content_copy_outlined, loc('تراکنش‌های تکراری'), () => const DraftsScreen(initialTab: 2)),
+    e(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
+    e(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
+    e(8, Icons.upcoming_outlined, tr('upcoming_payments'), () => const UpcomingPaymentsScreen(), tr('section_planning')),
+    e(10, Icons.calendar_month_outlined, tr('month_calendar'), () => const MonthCalendarScreen()),
+    e(9, Icons.trending_up, tr('expense_forecast'), () => const ForecastScreen()),
+    e(14, Icons.flag_outlined, tr('budget_goals'), () => const BudgetGoalsScreen(), tr('section_budget_goals')),
+    e(18, Icons.pie_chart_outline, tr('zero_based_budget_title'), () => const ZeroBasedBudgetScreen()),
+    e(15, Icons.savings_outlined, tr('savings_goals'), () => const SavingsGoalsScreen()),
+    e(16, Icons.lightbulb_outline, tr('savings_suggestion_title'), () => const SavingsSuggestionScreen()),
+    e(7, Icons.bar_chart_outlined, tr('full_reporting'), () => const ReportsScreen(), tr('section_reports')),
+    e(17, Icons.show_chart, tr('net_worth_title'), () => const NetWorthScreen()),
+    e(20, Icons.shopping_cart_outlined, tr('shopping_lists_title'), () => const ShoppingListsScreen(), tr('section_shopping')),
+    e(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen(), tr('section_settings_data')),
+    e(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
+    e(5, Icons.rule_folder_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
+    e(6, Icons.backup_outlined, tr('backup_restore_title'), () => const BackupRestoreScreen()),
+    e(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
+  ];
+}
+
+List<Widget> _menuTiles(List<AppMenuEntry> entries, int selected, void Function(AppMenuEntry) onTap) {
+  final tiles = <Widget>[];
+  for (final m in entries) {
+    if (m.section != null) {
+      tiles
+        ..add(const Divider(height: 1))
+        ..add(Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(m.section!, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
+        ));
+    }
+    tiles.add(ListTile(
+      leading: Icon(m.icon),
+      title: Text(m.label),
+      selected: selected == m.index,
+      dense: defaultTargetPlatform == TargetPlatform.windows,
+      onTap: () => onTap(m),
+    ));
+  }
+  return tiles;
+}
+
+/// The computer's permanent side menu is shown (instead of a slide-out
+/// menu) when the window is wide enough.
+bool desktopSideMenu(BuildContext context) =>
+    defaultTargetPlatform == TargetPlatform.windows && MediaQuery.sizeOf(context).width >= 900;
+
+/// Which side-menu entry is current on a computer.
+final desktopMenuIndex = ValueNotifier<int>(0);
+
+/// Back on Home (Esc or the back arrow): Home is the current menu entry again.
+class _DesktopMenuObserver extends NavigatorObserver {
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (previousRoute?.isFirst ?? false) desktopMenuIndex.value = 0;
+  }
+}
+
 class AppDrawer extends StatelessWidget {
   final int currentIndex;
   const AppDrawer({required this.currentIndex, super.key});
 
+  /// The slide-out menu for a screen, or null on a computer where the side
+  /// menu is always there.
+  static Widget? of(BuildContext context, int currentIndex) =>
+      desktopSideMenu(context) ? null : AppDrawer(currentIndex: currentIndex);
+
   @override
   Widget build(BuildContext context) {
-    Widget item(int i, IconData icon, String label, Widget Function() builder) => ListTile(
-          leading: Icon(icon),
-          title: Text(label),
-          selected: currentIndex == i,
-          onTap: () {
-            if (currentIndex == i) {
-              Navigator.pop(context); // close the menu
-              return;
-            }
-            if (i == 0) {
-              // Go back to the single root Home instance instead of stacking
-              // a new one, so the back button naturally exits from Home.
-              Navigator.pop(context);
-              Navigator.popUntil(context, (route) => route.isFirst);
-            } else {
-              // Opened on top of the menu, which stays open underneath: going
-              // back from the screen lands in the menu again.
-              Navigator.push(context, MaterialPageRoute(builder: (_) => builder()));
-            }
-          },
-        );
-    Widget sectionLabel(String text) => Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(text, style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
-        );
     return Drawer(
       child: SafeArea(
         child: ListView(
@@ -3968,41 +4046,66 @@ class AppDrawer extends StatelessWidget {
                 child: Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               ),
             ),
-            item(0, Icons.home_outlined, tr('home'), () => const HomeScreen()),
-            const Divider(height: 1),
-            sectionLabel(tr('section_transactions')),
-            item(12, Icons.list_alt, tr('all_transactions'), () => const AllTransactionsScreen()),
-            item(23, Icons.repeat, loc('تراکنش‌های تکرارشونده'), () => const RecurringTransactionsScreen()),
-            item(21, Icons.edit_note_outlined, loc('تراکنش‌های پیش‌نویس'), () => const DraftsScreen()),
-            item(22, Icons.content_copy_outlined, loc('تراکنش‌های تکراری'), () => const DraftsScreen(initialTab: 2)),
-            item(13, Icons.swap_horiz, tr('transfer_between_accounts'), () => const TransferScreen()),
-            item(19, Icons.upload_file_outlined, tr('csv_import_title'), () => const CsvImportScreen()),
-            const Divider(height: 1),
-            sectionLabel(tr('section_planning')),
-            item(8, Icons.upcoming_outlined, tr('upcoming_payments'), () => const UpcomingPaymentsScreen()),
-            item(10, Icons.calendar_month_outlined, tr('month_calendar'), () => const MonthCalendarScreen()),
-            item(9, Icons.trending_up, tr('expense_forecast'), () => const ForecastScreen()),
-            const Divider(height: 1),
-            sectionLabel(tr('section_budget_goals')),
-            item(14, Icons.flag_outlined, tr('budget_goals'), () => const BudgetGoalsScreen()),
-            item(18, Icons.pie_chart_outline, tr('zero_based_budget_title'), () => const ZeroBasedBudgetScreen()),
-            item(15, Icons.savings_outlined, tr('savings_goals'), () => const SavingsGoalsScreen()),
-            item(16, Icons.lightbulb_outline, tr('savings_suggestion_title'), () => const SavingsSuggestionScreen()),
-            const Divider(height: 1),
-            sectionLabel(tr('section_reports')),
-            item(7, Icons.bar_chart_outlined, tr('full_reporting'), () => const ReportsScreen()),
-            item(17, Icons.show_chart, tr('net_worth_title'), () => const NetWorthScreen()),
-            const Divider(height: 1),
-            sectionLabel(tr('section_shopping')),
-            item(20, Icons.shopping_cart_outlined, tr('shopping_lists_title'), () => const ShoppingListsScreen()),
-            const Divider(height: 1),
-            sectionLabel(tr('section_settings_data')),
-            item(2, Icons.account_balance_wallet_outlined, tr('accounts'), () => const AccountManagementScreen()),
-            item(1, Icons.category_outlined, tr('category_management'), () => const CategoryManagementScreen()),
-            item(5, Icons.rule_folder_outlined, tr('affected_by_category_delete'), () => const AffectedTransactionsScreen()),
-            item(6, Icons.backup_outlined, tr('backup_restore_title'), () => const BackupRestoreScreen()),
-            item(3, Icons.settings_outlined, tr('settings'), () => const SettingsScreen()),
+            ..._menuTiles(appMenuEntries(), currentIndex, (m) {
+              if (currentIndex == m.index) {
+                Navigator.pop(context); // close the menu
+                return;
+              }
+              if (m.index == 0) {
+                // Go back to the single root Home instance instead of stacking
+                // a new one, so the back button naturally exits from Home.
+                Navigator.pop(context);
+                Navigator.popUntil(context, (route) => route.isFirst);
+              } else {
+                // Opened on top of the menu, which stays open underneath: going
+                // back from the screen lands in the menu again.
+                Navigator.push(context, MaterialPageRoute(builder: (_) => m.builder()));
+              }
+            }),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The side menu always shown on a computer: picking an entry replaces the
+/// screen shown next to it (Home stays underneath).
+class DesktopSideMenu extends StatelessWidget {
+  const DesktopSideMenu({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: SizedBox(
+        width: 270,
+        child: ValueListenableBuilder<int>(
+          valueListenable: desktopMenuIndex,
+          builder: (context, selected, _) => ListView(
+            padding: const EdgeInsets.only(bottom: 12),
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.account_balance_wallet, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ),
+              ..._menuTiles(appMenuEntries(), selected, (m) {
+                final nav = rootNavigatorKey.currentState;
+                if (nav == null || appLocked.value) return;
+                nav.popUntil((route) => route.isFirst);
+                if (m.index != 0) nav.push(MaterialPageRoute(builder: (_) => m.builder()));
+                desktopMenuIndex.value = m.index; // after the pops, which reset it to Home
+              }),
+            ],
+          ),
         ),
       ),
     );
@@ -4022,7 +4125,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(tr('settings'))),
-      drawer: const AppDrawer(currentIndex: 3),
+      drawer: AppDrawer.of(context, 3),
       body: ListView(
         children: [
           ListTile(
@@ -4083,6 +4186,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppLockSettingsScreen())),
           ),
+          if (WindowsUpdater.instance.supported) const WindowsUpdateTile(),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: Text(loc('درباره‌ی برنامه')),
@@ -6065,6 +6169,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           NotificationService.instance.askPermissionOnce,
           NotificationService.instance.rescheduleAll,
           SyncService.instance.start,
+          WindowsUpdater.instance.checkAtStart,
           retryPendingCategoryIcons,
           checkBudgetGoals,
           checkSpendingAnomalies,
@@ -6606,7 +6711,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           ),
         ],
       ),
-      drawer: const AppDrawer(currentIndex: 0),
+      drawer: AppDrawer.of(context, 0),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -18232,7 +18337,7 @@ class _CategoryManagementScreenState extends State<CategoryManagementScreen> {
     final tree = _buildTree(null, 0);
     return Scaffold(
       appBar: AppBar(title: Text(tr('category_management'))),
-      drawer: const AppDrawer(currentIndex: 1),
+      drawer: AppDrawer.of(context, 1),
       body: Column(
         children: [
           Padding(
@@ -18577,7 +18682,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     final mainCur = mainCurrencyOf(accounts);
     return Scaffold(
       appBar: AppBar(title: Text(tr('accounts'))),
-      drawer: const AppDrawer(currentIndex: 2),
+      drawer: AppDrawer.of(context, 2),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: accounts
