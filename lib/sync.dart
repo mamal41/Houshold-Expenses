@@ -215,8 +215,10 @@ class _PhoneGoogleAccess implements GoogleAccess {
 class _DesktopGoogleAccess implements GoogleAccess {
   // The Windows app's OAuth client ("Desktop app" type), built in from the
   // repository secrets. Google treats a desktop client's secret as public.
-  static const _clientId = String.fromEnvironment('GOOGLE_DESKTOP_CLIENT_ID');
-  static const _clientSecret = String.fromEnvironment('GOOGLE_DESKTOP_CLIENT_SECRET');
+  // Trimmed: a space or line break copied along with a secret makes Google
+  // reject the client ("invalid_client").
+  static final _clientId = const String.fromEnvironment('GOOGLE_DESKTOP_CLIENT_ID').trim();
+  static final _clientSecret = const String.fromEnvironment('GOOGLE_DESKTOP_CLIENT_SECRET').trim();
   static const _refreshKey = 'sync_google_refresh_token';
   static const _emailKey = 'sync_google_email';
 

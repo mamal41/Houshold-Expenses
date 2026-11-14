@@ -50,6 +50,21 @@ jobs:
               icon_size: 256
           YAML
           dart run flutter_launcher_icons -f flutter_launcher_icons-windows.yaml
+      - name: Check the Google client secrets (without showing them)
+        env:
+          GOOGLE_DESKTOP_CLIENT_ID: ${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+        shell: bash
+        run: |
+          id=$(echo "$GOOGLE_DESKTOP_CLIENT_ID" | tr -d '[:space:]')
+          secret=$(echo "$GOOGLE_DESKTOP_CLIENT_SECRET" | tr -d '[:space:]')
+          [ "$id" != "$GOOGLE_DESKTOP_CLIENT_ID" ] && echo "::warning::GOOGLE_DESKTOP_CLIENT_ID has spaces or line breaks around it (removed in the app)"
+          if [ -z "$id" ]; then echo "::warning::GOOGLE_DESKTOP_CLIENT_ID is not set"
+          elif [[ "$id" =~ ^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$ ]]; then echo "GOOGLE_DESKTOP_CLIENT_ID looks right (${#id} characters)"
+          else echo "::warning::GOOGLE_DESKTOP_CLIENT_ID does not look like a client id (should be like 1234-abc.apps.googleusercontent.com)"; fi
+          if [ -z "$secret" ]; then echo "::warning::GOOGLE_DESKTOP_CLIENT_SECRET is not set"
+          elif [[ "$secret" == GOCSPX-* ]]; then echo "GOOGLE_DESKTOP_CLIENT_SECRET looks right"
+          else echo "::warning::GOOGLE_DESKTOP_CLIENT_SECRET does not start with GOCSPX-"; fi
       - name: Build release
         # The Google client for signing in from Windows (for syncing with
         # the phone) comes from the repository secrets; without them the
