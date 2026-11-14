@@ -63,7 +63,10 @@ jobs:
         run: |
           id=$(echo "$GOOGLE_DESKTOP_CLIENT_ID" | tr -d '[:space:]')
           secret=$(echo "$GOOGLE_DESKTOP_CLIENT_SECRET" | tr -d '[:space:]')
-          [ "$id" != "$GOOGLE_DESKTOP_CLIENT_ID" ] && echo "::warning::GOOGLE_DESKTOP_CLIENT_ID has spaces or line breaks around it (removed in the app)"
+          trimmed=$(printf '%s' "$GOOGLE_DESKTOP_CLIENT_ID" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          [ "$trimmed" != "$GOOGLE_DESKTOP_CLIENT_ID" ] && echo "::warning::GOOGLE_DESKTOP_CLIENT_ID has spaces or line breaks around it (removed)"
+          [ "$id" != "$trimmed" ] && echo "::warning::GOOGLE_DESKTOP_CLIENT_ID has spaces or line breaks INSIDE it (removed)"
+          printf '%s' "$id" | LC_ALL=C grep -q '[^ -~]' && echo "::warning::GOOGLE_DESKTOP_CLIENT_ID contains invisible or non-ASCII characters"
           if [ -z "$id" ]; then echo "::warning::GOOGLE_DESKTOP_CLIENT_ID is not set"
           elif [[ "$id" =~ ^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$ ]]; then echo "GOOGLE_DESKTOP_CLIENT_ID looks right (${#id} characters)"
           else echo "::warning::GOOGLE_DESKTOP_CLIENT_ID does not look like a client id (should be like 1234-abc.apps.googleusercontent.com)"; fi
@@ -79,6 +82,9 @@ jobs:
           GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
         shell: bash
         run: |
+          # Without any whitespace copied along with the values.
+          GOOGLE_DESKTOP_CLIENT_ID=$(printf '%s' "$GOOGLE_DESKTOP_CLIENT_ID" | tr -d '[:space:]')
+          GOOGLE_DESKTOP_CLIENT_SECRET=$(printf '%s' "$GOOGLE_DESKTOP_CLIENT_SECRET" | tr -d '[:space:]')
           flutter build windows --release --no-tree-shake-icons \
             --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }} \
             --dart-define=WINDOWS_BUILD=${{ github.run_number }} \
