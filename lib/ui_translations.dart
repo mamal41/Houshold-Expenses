@@ -745,4 +745,5 @@ const Map<String, List<String>> uiTranslations = {
   'به‌روزرسانی برنامه': ['App update', 'App-Update'],
   'نسخه‌ی نصب‌شده: {0}': ['Installed version: {0}', 'Installierte Version: {0}'],
   'شناسه‌ی کلاینت (Client ID) این نسخه؛ باید با Client ID کلاینت Desktop در Google Cloud یکی باشد:': ['Client ID of this build; it must match the Client ID of the Desktop client in Google Cloud:', 'Client-ID dieser Version; sie muss mit der Client-ID des Desktop-Clients in Google Cloud übereinstimmen:'],
+  'نسخه‌ی جدید دریافت می‌شود و صفحه‌ی نصب اندروید باز می‌شود؛ «نصب» را بزنید. اطلاعات و اتصال به حساب گوگل سر جایش می‌ماند.': ['The new version is downloaded and Android\'s install screen opens; tap "Install". Your data and Google sign-in stay as they are.', 'Die neue Version wird heruntergeladen und der Android-Installationsbildschirm öffnet sich; tippe auf „Installieren“. Deine Daten und die Google-Anmeldung bleiben erhalten.'],
 };

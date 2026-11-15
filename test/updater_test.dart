@@ -25,6 +25,20 @@ void main() {
     expect(r?.url, 'https://x/windows-v12/ModiriatMali-Setup.exe');
   });
 
+  test('the phone picks the newest android release', () {
+    final r = newestWindowsRelease(
+      [
+        {'tag_name': 'windows-v30', 'assets': [{'name': 'ModiriatMali-Setup.exe', 'browser_download_url': 'w'}]},
+        {'tag_name': 'android-v185', 'assets': [{'name': 'ModiriatMali.apk', 'browser_download_url': 'a185'}]},
+        {'tag_name': 'android-v186', 'assets': [{'name': 'ModiriatMali.apk', 'browser_download_url': 'a186'}]},
+      ],
+      tagPrefix: 'android-v',
+      installerName: 'ModiriatMali.apk',
+    );
+    expect(r?.build, 186);
+    expect(r?.url, 'a186');
+  });
+
   test('no release yet', () {
     expect(newestWindowsRelease([]), isNull);
   });

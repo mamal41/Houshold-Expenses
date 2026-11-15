@@ -42,6 +42,8 @@ jobs:
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i '/<manifest /a\    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>' "$MANIFEST"
+          # In-app update: opening the downloaded APK in Android's installer.
+          sed -i '/<manifest /a\    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>' "$MANIFEST"
           echo "--- AndroidManifest.xml ---"; cat "$MANIFEST"
 
           for STYLES in android/app/src/main/res/values/styles.xml android/app/src/main/res/values-night/styles.xml; do
@@ -230,6 +232,9 @@ jobs:
           # fails with NoSuchMethodError in release builds.
           -keep class io.flutter.plugins.sharedpreferences.** { *; }
           -keep class com.github.dart_lang.jni.** { *; }
+
+          # open_filex (opening a downloaded update in Android's installer).
+          -keep class com.crazecoder.openfile.** { *; }
           PROGUARD
       - name: Remove default test (uses old template)
         run: rm -f test/widget_test.dart
@@ -258,7 +263,11 @@ jobs:
       - name: Analyze Dart code
         run: flutter analyze
       - name: Build release APK
-        run: flutter build apk --release --no-tree-shake-icons
+        # The build number is what the in-app update compares.
+        run: >-
+          flutter build apk --release --no-tree-shake-icons
+          --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }}
+          --dart-define=ANDROID_BUILD=${{ github.run_number }}
       - name: Verify APK
         run: test -s build/app/outputs/flutter-apk/app-release.apk
       - name: Show the signing certificate fingerprint (for Google sign-in)

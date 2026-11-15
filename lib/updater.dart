@@ -1,15 +1,16 @@
-// Updates for the Windows app: each Windows build publishes its installer as
-// a GitHub release ("windows-v<build number>"). The app compares that number
-// with its own and, when a newer one exists, offers to download it; the
-// installer then runs silently over the installed app (the data and the
-// Google sign-in are kept, they live outside the program folder) and starts
-// the new version.
+// In-app updates. Each build on main publishes a GitHub release:
+// "windows-v<build>" with the installer and "android-v<build>" with the APK.
+// The app compares that number with its own and, when a newer one exists,
+// asks whether to update. On Windows the installer then runs silently over
+// the installed app and starts the new version; on the phone Android's own
+// install screen opens. The data and the Google sign-in are kept either way.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'main.dart';
@@ -17,23 +18,28 @@ import 'main.dart';
 /// This build's number (the build workflow's run number); 0 when built by
 /// hand, which never asks to update.
 const kWindowsBuild = int.fromEnvironment('WINDOWS_BUILD');
+const kAndroidBuild = int.fromEnvironment('ANDROID_BUILD');
+
+int get _ownBuild => Platform.isWindows ? kWindowsBuild : kAndroidBuild;
 
 const _releasesUrl = 'https://api.github.com/repos/mamal41/Houshold-Expenses/releases?per_page=30';
-const _tagPrefix = 'windows-v';
-const _installerName = 'ModiriatMali-Setup.exe';
+String get _tagPrefix => Platform.isAndroid ? 'android-v' : 'windows-v';
+String get _installerName => Platform.isAndroid ? 'ModiriatMali.apk' : 'ModiriatMali-Setup.exe';
 
 typedef WindowsRelease = ({int build, String url, String notes});
 
-/// The newest published Windows release with an installer, from GitHub's
-/// list of releases.
-WindowsRelease? newestWindowsRelease(List releases) {
+/// The newest published release of this platform with its installer, from
+/// GitHub's list of releases.
+WindowsRelease? newestWindowsRelease(List releases, {String? tagPrefix, String? installerName}) {
+  final prefix = tagPrefix ?? _tagPrefix;
+  final name = installerName ?? _installerName;
   WindowsRelease? newest;
   for (final r in releases) {
     final tag = '${r['tag_name']}';
-    if (!tag.startsWith(_tagPrefix) || r['draft'] == true || r['prerelease'] == true) continue;
-    final build = int.tryParse(tag.substring(_tagPrefix.length));
+    if (!tag.startsWith(prefix) || r['draft'] == true || r['prerelease'] == true) continue;
+    final build = int.tryParse(tag.substring(prefix.length));
     if (build == null || (newest != null && build <= newest.build)) continue;
-    final asset = (r['assets'] as List? ?? const []).cast<Map>().where((a) => a['name'] == _installerName).firstOrNull;
+    final asset = (r['assets'] as List? ?? const []).cast<Map>().where((a) => a['name'] == name).firstOrNull;
     if (asset == null) continue;
     newest = (build: build, url: '${asset['browser_download_url']}', notes: '${r['body'] ?? ''}'.trim());
   }
@@ -44,7 +50,7 @@ class WindowsUpdater {
   WindowsUpdater._();
   static final instance = WindowsUpdater._();
 
-  bool get supported => Platform.isWindows && kWindowsBuild > 0;
+  bool get supported => (Platform.isWindows || Platform.isAndroid) && _ownBuild > 0;
 
   /// The newest release when it's newer than this build.
   final available = ValueNotifier<WindowsRelease?>(null);
@@ -54,7 +60,7 @@ class WindowsUpdater {
     final res = await http.get(Uri.parse(_releasesUrl), headers: {'Accept': 'application/vnd.github+json'});
     if (res.statusCode != 200) throw HttpException('GitHub ${res.statusCode}');
     final newest = newestWindowsRelease(jsonDecode(res.body) as List);
-    available.value = newest != null && newest.build > kWindowsBuild ? newest : null;
+    available.value = newest != null && newest.build > _ownBuild ? newest : null;
     return available.value;
   }
 
@@ -78,8 +84,8 @@ class WindowsUpdater {
         title: Text(loc('نسخه‌ی جدید برنامه آماده است')),
         content: SingleChildScrollView(
           child: Text(
-            '${locf('نسخه‌ی {0} (نسخه‌ی فعلی: {1})', [persianDigits('${r.build}'), persianDigits('$kWindowsBuild')])}\n\n'
-            '${loc('برنامه بسته می‌شود، نسخه‌ی جدید نصب می‌شود و دوباره باز می‌شود. اطلاعات و اتصال به حساب گوگل سر جایش می‌ماند.')}',
+            '${locf('نسخه‌ی {0} (نسخه‌ی فعلی: {1})', [persianDigits('${r.build}'), persianDigits('$_ownBuild')])}\n\n'
+            '${Platform.isAndroid ? loc('نسخه‌ی جدید دریافت می‌شود و صفحه‌ی نصب اندروید باز می‌شود؛ «نصب» را بزنید. اطلاعات و اتصال به حساب گوگل سر جایش می‌ماند.') : loc('برنامه بسته می‌شود، نسخه‌ی جدید نصب می‌شود و دوباره باز می‌شود. اطلاعات و اتصال به حساب گوگل سر جایش می‌ماند.')}',
           ),
         ),
         actions: [
@@ -96,6 +102,12 @@ class WindowsUpdater {
   Future<void> install(BuildContext context, WindowsRelease r) async {
     final progress = ValueNotifier<double?>(null);
     var cancelled = false;
+    var dialogOpen = true;
+    void closeDialog() {
+      if (dialogOpen && context.mounted) Navigator.of(context, rootNavigator: true).pop();
+      dialogOpen = false;
+    }
+
     unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -116,7 +128,7 @@ class WindowsUpdater {
           TextButton(
             onPressed: () {
               cancelled = true;
-              Navigator.pop(ctx);
+              closeDialog();
             },
             child: Text(tr('cancel')),
           ),
@@ -128,7 +140,7 @@ class WindowsUpdater {
       final res = await client.send(http.Request('GET', Uri.parse(r.url)));
       if (res.statusCode != 200) throw HttpException('${res.statusCode}');
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}\\$_installerName');
+      final file = File('${dir.path}${Platform.pathSeparator}$_installerName');
       final sink = file.openWrite();
       final total = res.contentLength ?? 0;
       var got = 0;
@@ -140,6 +152,14 @@ class WindowsUpdater {
       }
       await sink.close();
       if (cancelled) return;
+      if (Platform.isAndroid) {
+        // Android's own install screen (it asks once to allow installing
+        // apps from this app).
+        closeDialog();
+        final result = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
+        if (result.type != ResultType.done) throw Exception(result.message);
+        return;
+      }
       await Process.start(
         file.path,
         ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS'],
@@ -147,8 +167,8 @@ class WindowsUpdater {
       );
       exit(0);
     } catch (e) {
+      closeDialog();
       if (!cancelled && context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(locf('به‌روزرسانی انجام نشد: {0}', [e]))));
       }
     } finally {
@@ -157,7 +177,7 @@ class WindowsUpdater {
   }
 }
 
-/// "Update" entry for the Windows settings: the current version and a
+/// "Update" entry for the settings: the current version and a
 /// button to look for a newer one.
 class WindowsUpdateTile extends StatefulWidget {
   const WindowsUpdateTile({super.key});
@@ -193,7 +213,7 @@ class _WindowsUpdateTileState extends State<WindowsUpdateTile> {
     return ListTile(
       leading: const Icon(Icons.system_update_alt),
       title: Text(loc('به‌روزرسانی برنامه')),
-      subtitle: Text(locf('نسخه‌ی نصب‌شده: {0}', [persianDigits('$kWindowsBuild')])),
+      subtitle: Text(locf('نسخه‌ی نصب‌شده: {0}', [persianDigits('$_ownBuild')])),
       trailing: checking
           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
           : const Icon(Icons.chevron_left),
