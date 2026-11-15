@@ -3515,6 +3515,11 @@ class _MoneyAppState extends State<MoneyApp> {
       theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.light),
       darkTheme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.dark),
       themeMode: currentThemeMode.value,
+      // With a mouse, lists and rows that scroll sideways (month tabs,
+      // charts) can be dragged too, and scrollbars show.
+      scrollBehavior: defaultTargetPlatform == TargetPlatform.windows
+          ? const MaterialScrollBehavior().copyWith(dragDevices: ui.PointerDeviceKind.values.toSet(), scrollbars: true)
+          : null,
       locale: currentLanguage.value.locale,
       supportedLocales: const [Locale('fa'), Locale('en'), Locale('de')],
       localizationsDelegates: const [
@@ -3547,9 +3552,7 @@ class _MoneyAppState extends State<MoneyApp> {
                 // like the phone's back button, closes an open menu first).
                 child: defaultTargetPlatform == TargetPlatform.windows
                     ? CallbackShortcuts(
-                        bindings: {
-                          const SingleActivator(LogicalKeyboardKey.escape): () => rootNavigatorKey.currentState?.maybePop(),
-                        },
+                        bindings: desktopShortcuts(),
                         child: Focus(autofocus: true, child: DesktopFrame(child: AppLockGate(child: child!))),
                       )
                     : AppLockGate(child: child!),
@@ -3579,15 +3582,23 @@ class DesktopFrame extends StatelessWidget {
       child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1100), child: child)),
     );
     if (!desktopSideMenu(context)) return page;
-    return ValueListenableBuilder<bool>(
-      valueListenable: appLocked,
-      // No menu over the lock screen.
-      builder: (context, locked, _) => Row(
-        children: [
-          if (!locked) ...[const DesktopSideMenu(), const VerticalDivider(width: 1)],
-          Expanded(child: page),
-        ],
-      ),
+    // Its own overlay, for the side menu's tooltips (it sits outside the
+    // navigator, whose overlay the pages use).
+    return Overlay(
+      initialEntries: [
+        OverlayEntry(
+          builder: (context) => ValueListenableBuilder<bool>(
+            valueListenable: appLocked,
+            // No menu over the lock screen.
+            builder: (context, locked, _) => Row(
+              children: [
+                if (!locked) ...[const DesktopSideMenu(), const VerticalDivider(width: 1)],
+                Expanded(child: page),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -4069,47 +4080,239 @@ class AppDrawer extends StatelessWidget {
   }
 }
 
-/// The side menu always shown on a computer: picking an entry replaces the
-/// screen shown next to it (Home stays underneath).
+/// Home's "new transaction" and "refresh", for the keyboard shortcuts and the
+/// side menu on a computer (set while Home exists).
+Future<void> Function()? homeNewTransaction;
+void Function()? homeRefresh;
+
+/// Ctrl+<digit> on a computer opens these menu entries (index in the menu).
+const desktopShortcutDigits = <int, int>{1: 0, 2: 12, 3: 8, 4: 10, 5: 7, 6: 14, 7: 2};
+
+/// Shows menu entry [index] next to the side menu (Home stays underneath).
+void desktopOpen(int index) {
+  final nav = rootNavigatorKey.currentState;
+  if (nav == null || appLocked.value) return;
+  final entry = appMenuEntries().where((m) => m.index == index).firstOrNull;
+  if (entry == null) return;
+  nav.popUntil((route) => route.isFirst);
+  if (index != 0) nav.push(MaterialPageRoute(builder: (_) => entry.builder()));
+  desktopMenuIndex.value = index; // after the pops, which reset it to Home
+}
+
+Future<void> desktopNewTransaction() async {
+  if (appLocked.value) return;
+  desktopOpen(0);
+  await homeNewTransaction?.call();
+}
+
+Future<void> desktopRefresh() async {
+  homeRefresh?.call();
+  await SyncService.instance.syncNow();
+}
+
+/// The keyboard shortcuts on a computer, also listed under F1.
+Map<ShortcutActivator, VoidCallback> desktopShortcuts() => {
+      const SingleActivator(LogicalKeyboardKey.escape): () => rootNavigatorKey.currentState?.maybePop(),
+      const SingleActivator(LogicalKeyboardKey.keyN, control: true): desktopNewTransaction,
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true): () => desktopOpen(12),
+      const SingleActivator(LogicalKeyboardKey.comma, control: true): () => desktopOpen(3),
+      const SingleActivator(LogicalKeyboardKey.f5): desktopRefresh,
+      const SingleActivator(LogicalKeyboardKey.f1): showDesktopShortcuts,
+      for (final e in desktopShortcutDigits.entries)
+        SingleActivator(LogicalKeyboardKey(LogicalKeyboardKey.digit0.keyId + e.key), control: true): () => desktopOpen(e.value),
+    };
+
+/// The list of keyboard shortcuts (F1).
+void showDesktopShortcuts() {
+  final context = rootNavigatorKey.currentState?.overlay?.context;
+  if (context == null) return;
+  String name(int index) => appMenuEntries().firstWhere((m) => m.index == index).label;
+  final rows = <(String, String)>[
+    ('Ctrl+N', tr('new_transaction')),
+    ('Ctrl+F', loc('جستجو در همه‌ی تراکنش‌ها')),
+    for (final e in desktopShortcutDigits.entries) ('Ctrl+${e.key}', name(e.value)),
+    ('Ctrl+,', tr('settings')),
+    ('F5', loc('به‌روز کردن و همگام‌سازی')),
+    ('Esc', loc('برگشت / بستن')),
+    ('F1', loc('همین فهرست')),
+  ];
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(loc('میانبرهای صفحه‌کلید')),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final r in rows)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(r.$2)),
+                    _KeyCap(r.$1),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(loc('بستن')))],
+    ),
+  );
+}
+
+/// A keyboard key, drawn like one.
+class _KeyCap extends StatelessWidget {
+  final String text;
+  const _KeyCap(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Text(text, style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: scheme.onSurfaceVariant)),
+      ),
+    );
+  }
+}
+
+/// The side menu always shown on a computer: the main action on top, every
+/// menu entry (with its keyboard shortcut), and sync status and version at
+/// the bottom.
 class DesktopSideMenu extends StatelessWidget {
   const DesktopSideMenu({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final digitOf = {for (final e in desktopShortcutDigits.entries) e.value: e.key};
     return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      color: scheme.surfaceContainerLow,
       child: SizedBox(
-        width: 270,
-        child: ValueListenableBuilder<int>(
-          valueListenable: desktopMenuIndex,
-          builder: (context, selected, _) => ListView(
-            padding: const EdgeInsets.only(bottom: 12),
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                child: Row(
+        width: 280,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.asset('assets/icon/icon.png', width: 32, height: 32,
+                        errorBuilder: (_, __, ___) => Icon(Icons.account_balance_wallet, color: scheme.primary)),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Tooltip(
+                message: 'Ctrl+N',
+                child: FilledButton.icon(
+                  onPressed: desktopNewTransaction,
+                  icon: const Icon(Icons.add),
+                  label: Text(tr('new_transaction')),
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                ),
+              ),
+            ),
+            Expanded(
+              child: ValueListenableBuilder<int>(
+                valueListenable: desktopMenuIndex,
+                builder: (context, selected, _) => ListView(
+                  padding: const EdgeInsets.only(bottom: 8),
                   children: [
-                    Icon(Icons.account_balance_wallet, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-                    ),
+                    for (final m in appMenuEntries()) ...[
+                      if (m.section != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+                          child: Text(m.section!,
+                              style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+                        child: ListTile(
+                          dense: true,
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          selected: selected == m.index,
+                          selectedTileColor: scheme.secondaryContainer,
+                          selectedColor: scheme.onSecondaryContainer,
+                          leading: Icon(m.icon, size: 20),
+                          title: Text(m.label, style: const TextStyle(fontSize: 13.5)),
+                          trailing: digitOf[m.index] == null
+                              ? null
+                              : Text('Ctrl+${digitOf[m.index]}',
+                                  textDirection: TextDirection.ltr,
+                                  style: TextStyle(fontSize: 10.5, color: scheme.outline)),
+                          onTap: () => desktopOpen(m.index),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-              ..._menuTiles(appMenuEntries(), selected, (m) {
-                final nav = rootNavigatorKey.currentState;
-                if (nav == null || appLocked.value) return;
-                nav.popUntil((route) => route.isFirst);
-                if (m.index != 0) nav.push(MaterialPageRoute(builder: (_) => m.builder()));
-                desktopMenuIndex.value = m.index; // after the pops, which reset it to Home
-              }),
-            ],
-          ),
+            ),
+            const Divider(height: 1),
+            ValueListenableBuilder<SyncState>(
+              valueListenable: SyncService.instance.state,
+              builder: (context, st, _) => ListTile(
+                dense: true,
+                leading: Icon(
+                  switch (st) {
+                    SyncState.off => Icons.cloud_off_outlined,
+                    SyncState.syncing => Icons.cloud_sync_outlined,
+                    SyncState.error => Icons.cloud_off,
+                    SyncState.idle => Icons.cloud_done_outlined,
+                  },
+                  size: 20,
+                  color: st == SyncState.error ? Colors.red.shade400 : (st == SyncState.idle ? Colors.green.shade600 : null),
+                ),
+                title: Text(switch (st) {
+                  SyncState.off => loc('همگام‌سازی خاموش'),
+                  SyncState.syncing => loc('در حال همگام‌سازی...'),
+                  SyncState.error => loc('همگام‌سازی انجام نشد'),
+                  SyncState.idle => loc('همگام است'),
+                }, style: const TextStyle(fontSize: 12.5)),
+                trailing: Tooltip(
+                  message: loc('میانبرهای صفحه‌کلید (F1)'),
+                  child: const IconButton(icon: Icon(Icons.keyboard_outlined, size: 20), onPressed: showDesktopShortcuts),
+                ),
+                onTap: () {
+                  desktopOpen(3);
+                  rootNavigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => const SyncSettingsScreen()));
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(appVersionLabel(), style: TextStyle(fontSize: 11, color: scheme.outline)),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+/// "Version 1.0.12 · Windows" - the build number is what updates compare.
+String appVersionLabel() {
+  final build = Platform.isWindows ? kWindowsBuild : kAndroidBuild;
+  final version = build > 0 ? '1.0.$build' : kAppVersion;
+  final platform = Platform.isWindows ? loc('ویندوز') : (Platform.isAndroid ? loc('اندروید') : '');
+  return ltr(locf('نسخه‌ی {0}', [persianDigits(version)])) + (platform.isEmpty ? '' : ' • $platform');
 }
 
 // ============================== Settings ==============================
@@ -4401,12 +4604,34 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key});
 
   Widget _sectionTitle(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.only(top: 20, bottom: 8),
+        padding: const EdgeInsets.only(top: 22, bottom: 8),
         child: Text(text, style: Theme.of(context).textTheme.titleMedium),
+      );
+
+  Widget _feature(BuildContext context, IconData icon, String title, String text) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 22, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                  const SizedBox(height: 2),
+                  Text(text, style: TextStyle(fontSize: 12.5, height: 1.6, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
+          ],
+        ),
       );
 
   @override
   Widget build(BuildContext context) {
+    const body = TextStyle(fontSize: 13, height: 1.8);
     return Scaffold(
       appBar: AppBar(title: Text(tr('about_title'))),
       body: ListView(
@@ -4422,26 +4647,54 @@ class AboutScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 Text(loc('مدیریت مالی شخصی'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
-                Text(ltr(locf('نسخه‌ی {0}', [(persianDigits(kAppVersion))])), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                Text(appVersionLabel(), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                 const SizedBox(height: 2),
                 Text(locf('توسعه‌دهنده: {0}', [kDeveloperName]), style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
               ],
             ),
           ),
           _sectionTitle(context, loc('درباره')),
-          Text(
-            loc('این برنامه برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، اهداف پس‌انداز و بودجه‌بندی شخصی طراحی شده. همه‌ی اطلاعات مالی فقط روی همین گوشی ذخیره می‌شوند و به هیچ سروری فرستاده نمی‌شوند.'),
-            style: const TextStyle(fontSize: 13, height: 1.7),
-          ),
+          Text(loc('برنامه‌ای برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، بودجه و پس‌انداز شخصی و خانوادگی؛ برای گوشی اندروید و کامپیوتر ویندوز. اطلاعات روی دستگاه خودتان نگه داشته می‌شود و اگر بخواهید، گوشی و کامپیوتر از طریق Google Drive خودتان با هم یکی می‌شوند.'), style: body),
+          _sectionTitle(context, loc('امکانات')),
+          _feature(context, Icons.swap_vert, loc('هزینه، درآمد و انتقال'),
+              loc('ثبت هزینه با نام فروشگاه، دسته‌بندی و اقلام خرید؛ درآمد از هر نوع (حقوق با جزئیات فیش، بازگشت وجه، هدیه)؛ انتقال بین حساب‌ها و ارزهای مختلف.')),
+          _feature(context, Icons.repeat, loc('تراکنش‌های تکرارشونده و اقساط'),
+              loc('هفتگی، ماهانه، فصلی، سالانه یا هر چند روز یک بار؛ با تعداد قسط یا تاریخ پایان، شماره‌ی هر قسط و یادآوری پیش از سررسید.')),
+          _feature(context, Icons.document_scanner_outlined, loc('خواندن رسید و فیش حقوقی'),
+              loc('عکس، تصویر یا PDF رسید و فیش حقوقی خوانده می‌شود (روی گوشی با تشخیص متن، و با هوش مصنوعی Gemini)؛ برش دقیق تصویر رسید و نگه‌داشتن آن کنار تراکنش.')),
+          _feature(context, Icons.upload_file_outlined, loc('صورتحساب بانک و تشخیص تکراری‌ها'),
+              loc('ورود صورتحساب بانکی (CSV) به‌صورت پیش‌نویس، مقایسه با تراکنش‌های ثبت‌شده و یادگرفتن از تصمیم‌های شما برای تشخیص تکراری‌ها.')),
+          _feature(context, Icons.pie_chart_outline, loc('بودجه و پس‌انداز'),
+              loc('اهداف هزینه با هشدار، بودجه‌ی صفرمبنا، اهداف پس‌انداز با زمان‌بندی و پیشنهاد پس‌انداز.')),
+          _feature(context, Icons.bar_chart_outlined, loc('گزارش‌ها و برنامه‌ریزی'),
+              loc('گزارش بر اساس دسته، فروشگاه و حساب؛ تقویم ماهانه؛ پرداخت‌های پیش‌رو؛ پیش‌بینی هزینه و روند ارزش خالص؛ خروجی Excel.')),
+          _feature(context, Icons.shopping_cart_outlined, loc('لیست خرید، مرجوعی و گارانتی'),
+              loc('لیست‌های خرید، و یادآوری دو روز پیش از پایان مهلت مرجوعی کالا.')),
+          _feature(context, Icons.translate, loc('چند حساب، چند ارز، چند زبان'),
+              loc('تومان، ریال، یورو، دلار و ارزهای دیگر با نرخ روز؛ تقویم شمسی یا میلادی؛ فارسی، انگلیسی و آلمانی.')),
+          _feature(context, Icons.sync, loc('همگام‌سازی گوشی و کامپیوتر'),
+              loc('با یک حساب گوگل، هر وقت به اینترنت وصل باشید اطلاعات گوشی و ویندوز خودکار یکی می‌شود.')),
+          _feature(context, Icons.system_update_alt, loc('به‌روزرسانی خودکار'),
+              loc('برنامه نسخه‌ی جدید را خودش پیدا می‌کند و با تأیید شما نصب می‌کند؛ اطلاعات سر جایش می‌ماند.')),
+          _feature(context, Icons.lock_outline, loc('قفل و پشتیبان‌گیری'),
+              loc('قفل با رمز، اثر انگشت یا Windows Hello؛ پشتیبان‌گیری دستی و خودکار و بازیابی.')),
+          if (Platform.isWindows) ...[
+            _sectionTitle(context, loc('میانبرهای صفحه‌کلید')),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: OutlinedButton.icon(
+                onPressed: showDesktopShortcuts,
+                icon: const Icon(Icons.keyboard_outlined),
+                label: Text(loc('نمایش میانبرها (F1)')),
+              ),
+            ),
+          ],
           _sectionTitle(context, loc('حریم خصوصی')),
-          Text(
-            loc('• تمام تراکنش‌ها، دسته‌بندی‌ها، حساب‌ها و تصاویر رسید/فیش فقط به‌صورت محلی روی گوشی شما ذخیره می‌شوند؛ این برنامه هیچ سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• قابلیت خواندن هوشمند رسید/فیش (اختیاری) با استفاده از سرویس Gemini گوگل و با کلید API شخصیِ خودتان انجام می‌شود؛ در این حالت فقط تصویر همان رسید/فیش برای پردازش به سرویس Gemini ارسال می‌شود، طبق قوانین حریم خصوصی گوگل.\n\n• قفل برنامه (اثر انگشت/پین) به‌صورت محلی و رمزنگاری‌شده روی گوشی ذخیره می‌شود.\n\n• پشتیبان‌گیری فقط با اقدام شخص کاربر و به‌صورت فایل روی گوشی/فضای ابری شخصی او انجام می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به اشخاص ثالث جمع‌آوری نمی‌کند.'),
-            style: const TextStyle(fontSize: 13, height: 1.8),
-          ),
+          Text(loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی دستگاه خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• همگام‌سازی (اختیاری): اطلاعات در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود که فقط این برنامه به آن دسترسی دارد. تصویر رسیدها و تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس Gemini گوگل و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش برای پردازش فرستاده می‌شود.\n\n• برای به‌روزرسانی، برنامه فقط شماره‌ی آخرین نسخه را از GitHub می‌پرسد و فایل نصب را از همان‌جا دریافت می‌کند؛ هیچ اطلاعاتی از شما فرستاده نمی‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی دستگاه ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.'), style: body),
           _sectionTitle(context, loc('شرایط استفاده')),
           Text(
             loc('• این برنامه یک ابزار شخصی برای ثبت و پیگیری اطلاعات مالی است و جایگزین مشاوره‌ی مالی، حسابداری یا حقوقی رسمی نیست.\n\n• پیشنهادهای بخش «پیشنهاد پس‌انداز و سرمایه‌گذاری» جنبه‌ی آموزشی و کلی دارند و توصیه‌ی مالی شخصی‌سازی‌شده محسوب نمی‌شوند.\n\n• صحت اطلاعات خوانده‌شده توسط هوش مصنوعی (از روی تصویر رسید/فیش) باید توسط کاربر بررسی و تأیید شود.\n\n• مسئولیت نگهداری از نسخه‌ی پشتیبان اطلاعات بر عهده‌ی کاربر است.'),
-            style: const TextStyle(fontSize: 13, height: 1.8),
+            style: body,
           ),
           _sectionTitle(context, loc('پشتیبانی')),
           Text(loc('برای گزارش مشکل یا پیشنهاد، می‌توانید از راه زیر با ما در ارتباط باشید:'), style: const TextStyle(fontSize: 13)),
@@ -6013,6 +6266,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
     WidgetsBinding.instance.addObserver(this);
     // Data that came from the other device: show it.
     SyncService.instance.dataVersion.addListener(_onSynced);
+    homeNewTransaction = () => _openEditor();
+    homeRefresh = _onSynced;
     _load();
   }
 
@@ -6070,6 +6325,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   @override
   void dispose() {
     SyncService.instance.dataVersion.removeListener(_onSynced);
+    homeNewTransaction = null;
+    homeRefresh = null;
     appRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     _draftHintStopTimer?.cancel();
@@ -7017,11 +7274,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(),
-        icon: const Icon(Icons.add),
-        label: Text(tr('new_transaction')),
-      ),
+      // On a computer the side menu has this button (and Ctrl+N).
+      floatingActionButton: desktopSideMenu(context)
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _openEditor(),
+              icon: const Icon(Icons.add),
+              label: Text(tr('new_transaction')),
+            ),
     ),
     );
   }
