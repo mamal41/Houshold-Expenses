@@ -782,4 +782,12 @@ const Map<String, List<String>> uiTranslations = {
   'برنامه نسخه‌ی جدید را خودش پیدا می‌کند و با تأیید شما نصب می‌کند؛ اطلاعات سر جایش می‌ماند.': ['The app finds new versions by itself and installs them when you agree; your data stays as it is.', 'Die App findet neue Versionen selbst und installiert sie mit deiner Zustimmung; deine Daten bleiben erhalten.'],
   'قفل و پشتیبان‌گیری': ['Lock and backup', 'Sperre und Sicherung'],
   'قفل با رمز، اثر انگشت یا Windows Hello؛ پشتیبان‌گیری دستی و خودکار و بازیابی.': ['Lock with a PIN, fingerprint or Windows Hello; manual and automatic backups and restore.', 'Sperre mit PIN, Fingerabdruck oder Windows Hello; manuelle und automatische Sicherung und Wiederherstellung.'],
+  'شرح': ['Description', 'Beschreibung'],
+  '{0} عکس گرفته شد': ['{0} photo(s) taken', '{0} Foto(s) aufgenommen'],
+  'اگر رسید طولانی است یا پشت و روی آن لازم است، عکس بعدی را بگیرید.': ['If the receipt is long or both sides are needed, take the next photo.', 'Wenn der Beleg lang ist oder beide Seiten nötig sind, mach das nächste Foto.'],
+  'عکس بعدی': ['Next photo', 'Nächstes Foto'],
+  'تمام شد': ['Done', 'Fertig'],
+  'تصویرها خوانده نشدند.': ['The images could not be read.', 'Die Bilder konnten nicht gelesen werden.'],
+  'تشخیص آفلاین + امکان بهبود با هوش مصنوعی • برای رسید طولانی چند عکس بگیرید یا چند تصویر انتخاب کنید': ['Offline recognition, improvable with AI • for a long receipt take several photos or pick several images', 'Offline-Erkennung, mit KI verbesserbar • bei langen Belegen mehrere Fotos machen oder mehrere Bilder wählen'],
+  'خواندن با هوش مصنوعی • برای رسید طولانی چند تصویر انتخاب کنید': ['Read with AI • for a long receipt pick several images', 'Mit KI lesen • bei langen Belegen mehrere Bilder wählen'],
 };

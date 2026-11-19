@@ -16,18 +16,21 @@ void main() {
     tester.view.devicePixelRatio = 1;
     await tester.pumpWidget(MaterialApp(
       navigatorKey: rootNavigatorKey,
+      theme: appTheme(Brightness.light),
       builder: (context, child) => DesktopFrame(child: child!),
       home: Builder(builder: (context) => Scaffold(appBar: AppBar(title: const Text('home')), drawer: AppDrawer.of(context, 0))),
     ));
     await tester.pumpAndSettle();
     expect(find.byType(DesktopSideMenu), findsOneWidget);
     expect(find.byTooltip('Open navigation menu'), findsNothing); // no hamburger
-    // The page keeps a readable width next to the menu.
-    expect(tester.getSize(find.byType(Scaffold).first).width, lessThanOrEqualTo(1100));
+    // Home fills the window next to the menu.
+    expect(tester.getSize(find.byType(Scaffold).first).width, 1400 - 280 - 1);
 
     await tester.tap(find.text(tr('settings')));
     await tester.pumpAndSettle();
     expect(find.byType(SettingsScreen), findsOneWidget);
+    // A settings page keeps a comfortable reading width.
+    expect(tester.getSize(find.byType(SettingsScreen)).width, 880);
     expect(desktopMenuIndex.value, 3);
     // Esc / back returns to Home, which is current in the menu again.
     rootNavigatorKey.currentState!.pop();

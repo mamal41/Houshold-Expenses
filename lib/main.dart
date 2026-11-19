@@ -681,6 +681,26 @@ class _MerchantFieldState extends State<MerchantField> {
 /// reachable without scrolling to the end of the page.
 /// [trailing] widgets (e.g. icon buttons) sit after the buttons - on the
 /// left side in the right-to-left layout - at their natural size.
+/// A filter field (e.g. the account) at a normal width on a computer
+/// instead of across the whole page.
+Widget desktopFieldWidth(BuildContext context, Widget field, {double width = 380}) {
+  if (!desktopSideMenu(context)) return field;
+  return Align(alignment: AlignmentDirectional.centerStart, child: SizedBox(width: width, child: field));
+}
+
+/// Two form fields side by side where there's room (a computer window),
+/// otherwise one under the other.
+Widget formPair(BuildContext context, Widget a, Widget b, {double gap = 16}) {
+  return LayoutBuilder(
+    builder: (context, c) => defaultTargetPlatform == TargetPlatform.windows && c.maxWidth >= 600
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [Expanded(child: a), SizedBox(width: gap), Expanded(child: b)],
+          )
+        : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [a, SizedBox(height: gap), b]),
+  );
+}
+
 Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons, {List<Widget> trailing = const []}) {
   final children = <Widget>[];
   for (var i = 0; i < buttons.length; i++) {
@@ -691,13 +711,16 @@ Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons, {List<Wid
     children.add(const SizedBox(width: 4));
     children.addAll(trailing);
   }
+  final desktop = defaultTargetPlatform == TargetPlatform.windows;
   return Material(
-    elevation: 8,
+    // On a computer a line above instead of a shadow.
+    elevation: desktop ? 0 : 8,
     color: Theme.of(context).colorScheme.surface,
+    shape: desktop ? Border(top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant)) : null,
     child: SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        padding: desktop ? const EdgeInsets.fromLTRB(20, 12, 20, 12) : const EdgeInsets.fromLTRB(16, 10, 16, 10),
         child: Row(children: children),
       ),
     ),
@@ -3512,8 +3535,8 @@ class _MoneyAppState extends State<MoneyApp> {
     return MaterialApp(
       title: tr('app_title'),
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.light),
-      darkTheme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.dark),
+      theme: appTheme(Brightness.light),
+      darkTheme: appTheme(Brightness.dark),
       themeMode: currentThemeMode.value,
       // With a mouse, lists and rows that scroll sideways (month tabs,
       // charts) can be dragged too, and scrollbars show.
@@ -3537,7 +3560,7 @@ class _MoneyAppState extends State<MoneyApp> {
         final mq = MediaQuery.of(context);
         final navBar = mq.viewPadding.bottom;
         return ColoredBox(
-          color: Colors.black,
+          color: defaultTargetPlatform == TargetPlatform.windows ? Theme.of(context).colorScheme.surface : Colors.black,
           child: Padding(
             padding: EdgeInsets.only(bottom: navBar),
             child: MediaQuery(
@@ -3569,18 +3592,69 @@ class _MoneyAppState extends State<MoneyApp> {
   }
 }
 
-/// The app on a computer screen: the side menu next to the page, and the
-/// page kept to a comfortable reading width on a wide window.
+/// The app's theme; on a computer a flatter, denser look that suits a big
+/// screen and a mouse.
+ThemeData appTheme(Brightness brightness) {
+  final base = ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: brightness);
+  if (defaultTargetPlatform != TargetPlatform.windows) return base;
+  final scheme = base.colorScheme;
+  return base.copyWith(
+    pageTransitionsTheme: const PageTransitionsTheme(builders: {TargetPlatform.windows: DesktopPageTransitionsBuilder()}),
+    visualDensity: VisualDensity.compact,
+    appBarTheme: base.appBarTheme.copyWith(
+      toolbarHeight: 60,
+      centerTitle: false,
+      scrolledUnderElevation: 0,
+      titleTextStyle: base.textTheme.titleLarge?.copyWith(fontSize: 20, fontWeight: FontWeight.w600, color: scheme.onSurface),
+    ),
+    cardTheme: base.cardTheme.copyWith(
+      elevation: 0,
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6))),
+    ),
+    listTileTheme: base.listTileTheme.copyWith(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+    tooltipTheme: const TooltipThemeData(waitDuration: Duration(milliseconds: 400)),
+    floatingActionButtonTheme: base.floatingActionButtonTheme.copyWith(elevation: 1),
+  );
+}
+
+/// Name of a page route that uses the whole width on a computer.
+const desktopWideRoute = 'wide';
+
+/// Menu entries whose screens use the whole width on a computer (overviews,
+/// lists with columns, charts); the others are forms and settings.
+const desktopWideScreens = {0, 12, 8, 10, 7, 17, 9, 21, 22, 18};
+
+/// Page transitions on a computer, with each page's width: the first page
+/// (Home) and pages pushed as [desktopWideRoute] fill the window, any
+/// other page is centred at a comfortable reading width.
+class DesktopPageTransitionsBuilder extends PageTransitionsBuilder {
+  const DesktopPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(PageRoute<T> route, BuildContext context, Animation<double> animation,
+      Animation<double> secondaryAnimation, Widget child) {
+    final wide = route.isFirst || route.settings.name == desktopWideRoute;
+    final page = wide
+        ? child
+        : Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 880), child: child),
+          );
+    return const FadeUpwardsPageTransitionsBuilder().buildTransitions(route, context, animation, secondaryAnimation, page);
+  }
+}
+
+/// The app on a computer screen: the side menu next to the page.
 class DesktopFrame extends StatelessWidget {
   final Widget child;
   const DesktopFrame({required this.child, super.key});
 
   @override
   Widget build(BuildContext context) {
-    final page = ColoredBox(
-      color: Theme.of(context).colorScheme.surfaceContainerLowest,
-      child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1100), child: child)),
-    );
+    // Each page sets its own width (see DesktopPageTransitionsBuilder); the
+    // area beside a narrow page has the pages' own background colour.
+    final page = ColoredBox(color: Theme.of(context).colorScheme.surface, child: child);
     if (!desktopSideMenu(context)) return page;
     // Its own overlay, for the side menu's tooltips (it sits outside the
     // navigator, whose overlay the pages use).
@@ -4095,7 +4169,12 @@ void desktopOpen(int index) {
   final entry = appMenuEntries().where((m) => m.index == index).firstOrNull;
   if (entry == null) return;
   nav.popUntil((route) => route.isFirst);
-  if (index != 0) nav.push(MaterialPageRoute(builder: (_) => entry.builder()));
+  if (index != 0) {
+    nav.push(MaterialPageRoute(
+      builder: (_) => entry.builder(),
+      settings: RouteSettings(name: desktopWideScreens.contains(index) ? desktopWideRoute : null),
+    ));
+  }
   desktopMenuIndex.value = index; // after the pops, which reset it to Home
 }
 
@@ -5372,6 +5451,39 @@ const _maxStitchedHeight = 8000.0;
 /// Multi-page PDFs (e.g. payslips spanning several pages) get all their
 /// pages - up to [_maxPdfPages] - stacked top to bottom in a single image,
 /// so the AI reads every page and the preview/draft keeps them all.
+/// Joins several photos of one receipt top to bottom into one JPEG (all at
+/// the width of the narrowest, at most 1800 px wide) and returns its path.
+Future<String> stitchImagesVertically(List<String> paths) async {
+  final bytes = [for (final p in paths) await File(p).readAsBytes()];
+  final out = await compute(_stitchVertically, bytes);
+  if (out == null) throw Exception(loc('تصویرها خوانده نشدند.'));
+  final dir = await getTemporaryDirectory();
+  final path = '${dir.path}${Platform.pathSeparator}scan_${DateTime.now().microsecondsSinceEpoch}.jpg';
+  await File(path).writeAsBytes(out, flush: true);
+  return path;
+}
+
+Uint8List? _stitchVertically(List<Uint8List> images) {
+  final decoded = <img.Image>[];
+  for (final b in images) {
+    final d = img.decodeImage(b);
+    if (d != null) decoded.add(img.bakeOrientation(d));
+  }
+  if (decoded.isEmpty) return null;
+  var width = decoded.map((d) => d.width).reduce(min);
+  if (width > 1800) width = 1800;
+  final parts = [for (final d in decoded) d.width == width ? d : img.copyResize(d, width: width, interpolation: img.Interpolation.average)];
+  final height = parts.fold<int>(0, (h, p) => h + p.height);
+  final canvas = img.Image(width: width, height: height);
+  img.fill(canvas, color: img.ColorRgb8(255, 255, 255));
+  var y = 0;
+  for (final p in parts) {
+    img.compositeImage(canvas, p, dstY: y);
+    y += p.height;
+  }
+  return img.encodeJpg(canvas, quality: 88);
+}
+
 Future<String> rasterizePdfPages(String path) async {
   final doc = await PdfDocument.openFile(path);
   try {
@@ -6207,6 +6319,120 @@ class AmountInputFormatter extends TextInputFormatter {
 /// there's exactly one, "first item + N more" if there are several, the
 /// transaction's own note if there are no items but a note was entered,
 /// and the category name as a last resort so the line is never blank.
+/// Transactions shown as a table on a computer (one line each, with
+/// columns), when there's room for it.
+bool desktopTable(double width) => defaultTargetPlatform == TargetPlatform.windows && width >= 620;
+
+/// Column header of [DesktopTxRow]s.
+class DesktopTxHeader extends StatelessWidget {
+  final bool showAccount;
+  const DesktopTxHeader({this.showAccount = true, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Theme.of(context).colorScheme.onSurfaceVariant);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Theme.of(context).colorScheme.outlineVariant))),
+      child: Row(
+        children: [
+          const SizedBox(width: 40),
+          SizedBox(width: 92, child: Text(loc('تاریخ'), style: style)),
+          Expanded(flex: 3, child: Text(loc('شرح'), style: style)),
+          Expanded(flex: 2, child: Text(loc('دسته‌بندی'), style: style)),
+          if (showAccount) SizedBox(width: 130, child: Text(loc('حساب'), style: style)),
+          SizedBox(width: 150, child: Text(tr('amount'), style: style, textAlign: TextAlign.end)),
+        ],
+      ),
+    );
+  }
+}
+
+/// One transaction as a table line on a computer: date, title (with its
+/// installment number), category, account and amount.
+class DesktopTxRow extends StatelessWidget {
+  final Transaction t;
+  final DateTime date;
+  final String category;
+  final IconData icon;
+  final String account;
+  final String currency;
+  final bool showAccount;
+  final bool dimmed;
+  final String? badge; // e.g. "not yet due"
+  final VoidCallback? onTap;
+  const DesktopTxRow({
+    required this.t,
+    required this.date,
+    required this.category,
+    required this.icon,
+    required this.account,
+    required this.currency,
+    this.showAccount = true,
+    this.dimmed = false,
+    this.badge,
+    this.onTap,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final income = t.type == TxType.income;
+    final color = income ? Colors.green.shade600 : Colors.red.shade400;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    final installment = t.isRecurring ? installmentLabel(t, date) : null;
+    final tags = [
+      if (badge != null) badge!,
+      if (installment != null) installment else if (t.isRecurring) loc('تکرارشونده'),
+      if (t.draft) loc('پیش‌نویس'),
+    ];
+    return Opacity(
+      opacity: dimmed ? 0.6 : 1,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.5)))),
+          child: Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(color: color.withValues(alpha: 0.12), shape: BoxShape.circle),
+                child: Icon(icon, size: 17, color: color),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(width: 92, child: Text(formatDate(date), style: muted)),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(txMainTitle(t, category), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500)),
+                    if (tags.isNotEmpty)
+                      Text(tags.join(' • '), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.teal.shade400)),
+                  ],
+                ),
+              ),
+              Expanded(flex: 2, child: Text(category, maxLines: 1, overflow: TextOverflow.ellipsis, style: muted)),
+              if (showAccount) SizedBox(width: 130, child: Text(account, maxLines: 1, overflow: TextOverflow.ellipsis, style: muted)),
+              SizedBox(
+                width: 150,
+                child: Text(
+                  ltr(income ? '+' : '-') + formatMoney(t.amount, currency),
+                  textAlign: TextAlign.end,
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5, color: income ? Colors.green.shade700 : Colors.red.shade700),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 String txMainTitle(Transaction t, String categoryName) {
   if (t.merchant.trim().isNotEmpty) return t.merchant.trim();
   return txDetailTitle(t) ?? categoryName;
@@ -6921,7 +7147,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       },
       child: Scaffold(
       appBar: AppBar(
-        title: Text(tr('app_title')),
+        // On a computer the side menu already shows the app's name.
+        title: Text(desktopSideMenu(context) ? tr('home') : tr('app_title')),
         actions: [
           Padding(
             padding: const EdgeInsets.only(left: 16),
@@ -6969,12 +7196,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
         ],
       ),
       drawer: AppDrawer.of(context, 0),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          controller: _homeScroll,
-          padding: const EdgeInsets.all(16),
-          children: [
+      body: () {
+        final filter = <Widget>[
             // Account filter: applies to every number and list on this page.
             if (accounts.length > 1)
               Padding(
@@ -6990,6 +7213,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                   onChanged: (v) => setState(() => dashboardAccountFilter = v),
                 ),
               ),
+        ];
+        final overview = <Widget>[
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -7179,6 +7404,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 ),
               ),
             ],
+        ];
+        final transactions = <Widget>[
             const SizedBox(height: 16),
             Text(tr('transactions'), style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
@@ -7270,10 +7497,45 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 );
               }(),
             ],
-            const SizedBox(height: 80),
-          ],
-        ),
-      ),
+        ];
+        // A wide computer window: the overview and this month's
+        // transactions side by side, each scrolling on its own.
+        if (desktopSideMenu(context) && MediaQuery.sizeOf(context).width >= 1180) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 5,
+                child: ListView(
+                  padding: const EdgeInsetsDirectional.fromSTEB(24, 16, 12, 24),
+                  children: [...filter, ...overview],
+                ),
+              ),
+              Expanded(
+                flex: 6,
+                child: ListView(
+                  controller: _homeScroll,
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 24, 24),
+                  children: transactions,
+                ),
+              ),
+            ],
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: _load,
+          child: ListView(
+            controller: _homeScroll,
+            padding: const EdgeInsets.all(16),
+            children: [
+              ...filter,
+              ...overview,
+              ...transactions,
+              const SizedBox(height: 80),
+            ],
+          ),
+        );
+      }(),
       // On a computer the side menu has this button (and Ctrl+N).
       floatingActionButton: desktopSideMenu(context)
           ? null
@@ -7362,6 +7624,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
 
   Widget _buildTxTile(Transaction t, {bool dimmed = false, bool projected = false, bool recurringDue = false, DateTime? displayDate}) {
     final opacity = dimmed ? 0.55 : 1.0;
+    if (desktopSideMenu(context)) return _desktopTxRow(t, dimmed: dimmed, projected: projected, recurringDue: recurringDue, displayDate: displayDate);
     final tile = Card(
       child: ListTile(
         leading: CircleAvatar(
@@ -7451,6 +7714,54 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
         onDismissed: (_) => _delete(t),
         child: tile,
       ),
+    );
+  }
+
+  /// A transaction as a table line on a computer; a right click offers
+  /// edit and delete (what a swipe does on the phone).
+  Widget _desktopTxRow(Transaction t, {bool dimmed = false, bool projected = false, bool recurringDue = false, DateTime? displayDate}) {
+    final cat = categories.where((c) => c.id == t.categoryId).firstOrNull;
+    final row = DesktopTxRow(
+      t: t,
+      date: displayDate ?? t.date,
+      category: categoryName(t.categoryId),
+      icon: iconForCategory(cat ?? Category(id: t.categoryId, name: '', type: t.type), categories),
+      account: accounts.where((a) => a.id == t.accountId).firstOrNull?.name ?? '',
+      currency: currencyOf(t.accountId),
+      showAccount: false,
+      dimmed: dimmed,
+      badge: projected && !recurringDue ? loc('سررسیدنشده') : null,
+      onTap: () => _openEditor(existing: t),
+    );
+    if (projected) return row;
+    return GestureDetector(
+      onSecondaryTapDown: (d) async {
+        final choice = await showMenu<String>(
+          context: context,
+          position: RelativeRect.fromLTRB(d.globalPosition.dx, d.globalPosition.dy, d.globalPosition.dx, d.globalPosition.dy),
+          items: [
+            PopupMenuItem(value: 'edit', child: ListTile(dense: true, leading: const Icon(Icons.edit_outlined), title: Text(tr('edit')))),
+            PopupMenuItem(value: 'delete', child: ListTile(dense: true, leading: Icon(Icons.delete_outline, color: Colors.red.shade400), title: Text(tr('delete')))),
+          ],
+        );
+        if (!mounted) return;
+        if (choice == 'edit') await _openEditorDirect(t);
+        if (choice == 'delete') {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text(loc('حذف تراکنش')),
+              content: Text(loc('این تراکنش حذف شود؟')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('delete'))),
+              ],
+            ),
+          );
+          if (ok == true) await _delete(t);
+        }
+      },
+      child: row,
     );
   }
 
@@ -9250,9 +9561,11 @@ class UpcomingPaymentsScreen extends StatefulWidget {
 
 enum _UpcomingRange { endOfThisMonth, nextMonth, custom }
 
-const _chartMonths = 4;
 
 class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
+  /// Months shown side by side in the chart: a whole year on a computer's
+  /// wide window, four on the phone.
+  int get _chartMonths => defaultTargetPlatform == TargetPlatform.windows ? 12 : 4;
   bool loading = true;
   List<Transaction> tx = [];
   List<Category> categories = [];
@@ -9499,7 +9812,9 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                     },
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<String?>(
+                  desktopFieldWidth(
+                    context,
+                    DropdownButtonFormField<String?>(
                     initialValue: accountFilter,
                     isExpanded: true,
                     decoration: InputDecoration(
@@ -9513,6 +9828,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                       ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
                     ],
                     onChanged: (v) => setState(() => accountFilter = v),
+                  )
                   ),
                 ],
               ),
@@ -9580,7 +9896,7 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
                                         const SizedBox(height: 4),
                                         Container(
                                           height: 115 * (chartMonths[i].expense / maxChart).clamp(0.02, 1.0),
-                                          margin: const EdgeInsets.symmetric(horizontal: 10),
+                                          margin: EdgeInsets.symmetric(horizontal: _chartMonths > 6 ? 5 : 10),
                                           decoration: BoxDecoration(
                                             color: chartMonths[i].month.start == calendarMonthOf(today).start
                                                 ? Colors.red.shade600
@@ -14026,7 +14342,39 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
           Expanded(
             child: filtered.isEmpty
                 ? Center(child: Text(loc('تراکنشی با این شرایط پیدا نشد.')))
-                : ListView.builder(
+                : LayoutBuilder(builder: (context, box) {
+                    if (desktopTable(box.maxWidth)) {
+                      final showAccount = box.maxWidth >= 760;
+                      return Card(
+                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        clipBehavior: Clip.antiAlias,
+                        child: Column(
+                          children: [
+                            DesktopTxHeader(showAccount: showAccount),
+                            Expanded(
+                              child: ListView.builder(
+                                itemCount: filtered.length,
+                                itemBuilder: (context, i) {
+                                  final e = filtered[i];
+                                  final cat = categories.where((c) => c.id == e.t.categoryId).firstOrNull;
+                                  return DesktopTxRow(
+                                    t: e.t,
+                                    date: e.date,
+                                    category: categoryName(e.t.categoryId),
+                                    icon: iconForCategory(cat ?? Category(id: e.t.categoryId, name: '', type: e.t.type), categories),
+                                    account: accounts.where((a) => a.id == e.t.accountId).firstOrNull?.name ?? '',
+                                    currency: currencyOf(e.t.accountId),
+                                    showAccount: showAccount,
+                                    onTap: () => _openEditor(e.t),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    return ListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: filtered.length,
                     itemBuilder: (context, i) {
@@ -14073,7 +14421,8 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                         ),
                       );
                     },
-                  ),
+                  );
+                  }),
           ),
         ],
       ),
@@ -14584,119 +14933,149 @@ class _ReportsScreenState extends State<ReportsScreen> {
             selected: {typeFilter},
             onSelectionChanged: (s) => setState(() => typeFilter = s.first),
           ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(locf('خلاصه ({0} تراکنش)', [(currentTx.length)]), style: Theme.of(context).textTheme.titleMedium),
-                  const Divider(),
-                  if (typeFilter != TxType.expense) comparisonRow(loc('درآمد'), curIncome, prevIncome, higherIsBad: false, type: TxType.income),
-                  if (typeFilter != TxType.income) comparisonRow(loc('هزینه'), curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
-                  if (typeFilter == null)
-                    comparisonRow(loc('خالص'), curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
-                ],
-              ),
-            ),
-          ),
-          if ((byCategory.isNotEmpty || byMerchant.isNotEmpty) && typeFilter != TxType.income) ...[
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(groupByMerchant ? loc('هزینه بر اساس فروشگاه') : loc('هزینه بر اساس دسته‌بندی'), style: Theme.of(context).textTheme.titleMedium),
-                TextButton.icon(
-                  onPressed: () => setState(() => groupByMerchant = !groupByMerchant),
-                  icon: const Icon(Icons.swap_horiz, size: 16),
-                  label: Text(groupByMerchant ? loc('نمایش بر اساس دسته‌بندی') : loc('نمایش بر اساس فروشگاه'), style: const TextStyle(fontSize: 12)),
+          // On a wide computer window the summary and the breakdown side by side.
+          ...() {
+            final summary = <Widget>[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(locf('خلاصه ({0} تراکنش)', [(currentTx.length)]), style: Theme.of(context).textTheme.titleMedium),
+                      const Divider(),
+                      if (typeFilter != TxType.expense) comparisonRow(loc('درآمد'), curIncome, prevIncome, higherIsBad: false, type: TxType.income),
+                      if (typeFilter != TxType.income) comparisonRow(loc('هزینه'), curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
+                      if (typeFilter == null)
+                        comparisonRow(loc('خالص'), curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
+                    ],
+                  ),
                 ),
+              ),
+            ];
+            final breakdown = <Widget>[
+              if ((byCategory.isNotEmpty || byMerchant.isNotEmpty) && typeFilter != TxType.income) ...[
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(groupByMerchant ? loc('هزینه بر اساس فروشگاه') : loc('هزینه بر اساس دسته‌بندی'), style: Theme.of(context).textTheme.titleMedium),
+                    TextButton.icon(
+                      onPressed: () => setState(() => groupByMerchant = !groupByMerchant),
+                      icon: const Icon(Icons.swap_horiz, size: 16),
+                      label: Text(groupByMerchant ? loc('نمایش بر اساس دسته‌بندی') : loc('نمایش بر اساس فروشگاه'), style: const TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (!groupByMerchant)
+                  ...byCategory.map((e) => InkWell(
+                        onTap: () => _openList(
+                          e.key.name,
+                          currentTx
+                              .where((t) =>
+                                  t.type == TxType.expense &&
+                                  currencyOf(t.accountId) == primaryCurrency &&
+                                  (e.key.id == '_uncategorized_'
+                                      ? !categories.any((c) => c.id == t.categoryId)
+                                      : categoryMatchesFilter(t.categoryId, e.key.id, categories)))
+                              .toList(),
+                        ),
+                        child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(e.key.name),
+                                Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: maxCategoryAmount > 0 ? e.value / maxCategoryAmount : 0,
+                                minHeight: 6,
+                                backgroundColor: Colors.grey.withValues(alpha: 0.2),
+                                color: Colors.indigo.shade300,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      ))
+                else if (byMerchant.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(loc('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                  )
+                else
+                  ...byMerchant.map((e) => InkWell(
+                        onTap: () => _openList(
+                          e.key,
+                          currentTx
+                              .where((t) =>
+                                  t.type == TxType.expense &&
+                                  currencyOf(t.accountId) == primaryCurrency &&
+                                  (t.merchant.trim().isEmpty ? loc('بدون‌نام') : t.merchant.trim()) == e.key)
+                              .toList(),
+                        ),
+                        child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(e.key),
+                                Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: maxMerchantAmount > 0 ? e.value / maxMerchantAmount : 0,
+                                minHeight: 6,
+                                backgroundColor: Colors.grey.withValues(alpha: 0.2),
+                                color: Colors.teal.shade300,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      )),
               ],
-            ),
-            const SizedBox(height: 8),
-            if (!groupByMerchant)
-              ...byCategory.map((e) => InkWell(
-                    onTap: () => _openList(
-                      e.key.name,
-                      currentTx
-                          .where((t) =>
-                              t.type == TxType.expense &&
-                              currencyOf(t.accountId) == primaryCurrency &&
-                              (e.key.id == '_uncategorized_'
-                                  ? !categories.any((c) => c.id == t.categoryId)
-                                  : categoryMatchesFilter(t.categoryId, e.key.id, categories)))
-                          .toList(),
+            ];
+            if (defaultTargetPlatform == TargetPlatform.windows && MediaQuery.sizeOf(context).width >= 1100) {
+              return <Widget>[
+                const SizedBox(height: 16),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: summary)),
+                    const SizedBox(width: 20),
+                    Expanded(
+                      flex: 3,
+                      child: breakdown.isEmpty
+                          ? const SizedBox.shrink()
+                          : Card(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: breakdown),
+                              ),
+                            ),
                     ),
-                    child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(e.key.name),
-                            Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: maxCategoryAmount > 0 ? e.value / maxCategoryAmount : 0,
-                            minHeight: 6,
-                            backgroundColor: Colors.grey.withValues(alpha: 0.2),
-                            color: Colors.indigo.shade300,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  ))
-            else if (byMerchant.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(loc('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-              )
-            else
-              ...byMerchant.map((e) => InkWell(
-                    onTap: () => _openList(
-                      e.key,
-                      currentTx
-                          .where((t) =>
-                              t.type == TxType.expense &&
-                              currencyOf(t.accountId) == primaryCurrency &&
-                              (t.merchant.trim().isEmpty ? loc('بدون‌نام') : t.merchant.trim()) == e.key)
-                          .toList(),
-                    ),
-                    child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(e.key),
-                            Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: maxMerchantAmount > 0 ? e.value / maxMerchantAmount : 0,
-                            minHeight: 6,
-                            backgroundColor: Colors.grey.withValues(alpha: 0.2),
-                            color: Colors.teal.shade300,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  )),
-          ],
+                  ],
+                ),
+              ];
+            }
+            return <Widget>[const SizedBox(height: 16), ...summary, ...breakdown];
+          }(),
         ],
       ),
     );
@@ -15151,7 +15530,9 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: DropdownButtonFormField<String?>(
+            child: desktopFieldWidth(
+              context,
+              DropdownButtonFormField<String?>(
               initialValue: accountFilter,
               isExpanded: true,
               decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
@@ -15160,6 +15541,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                 ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
               ],
               onChanged: (v) => setState(() => accountFilter = v),
+            )
             ),
           ),
           const SizedBox(height: 8),
@@ -15226,7 +15608,11 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
             child: Padding(
               padding: const EdgeInsets.all(8),
               child: GridView.builder(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.72),
+                // On a wide computer window the cells are wide: a fixed
+                // height so the whole month fits.
+                gridDelegate: desktopSideMenu(context)
+                    ? const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, mainAxisExtent: 96)
+                    : const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.72),
                 itemCount: leadingBlanks + daysInMonth,
                 itemBuilder: (context, index) {
                   if (index < leadingBlanks) return const SizedBox.shrink();
@@ -15255,7 +15641,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                         Text(
                           ltr(persianDigits('$day')),
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: desktopSideMenu(context) ? 14 : 12,
                             fontWeight: FontWeight.bold,
                             color: isToday ? todayFg : (future ? Colors.grey.shade400 : null),
                           ),
@@ -15263,12 +15649,12 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                         if (exp > 0)
                           Text(
                             ltr('-${formatAmountInput(exp)}'),
-                            style: TextStyle(fontSize: 9, color: future ? Colors.red.shade200 : Colors.red.shade700),
+                            style: TextStyle(fontSize: desktopSideMenu(context) ? 12 : 9, color: future ? Colors.red.shade200 : Colors.red.shade700),
                           ),
                         if (inc > 0)
                           Text(
                             ltr('+${formatAmountInput(inc)}'),
-                            style: TextStyle(fontSize: 9, color: future ? Colors.green.shade200 : Colors.green.shade700),
+                            style: TextStyle(fontSize: desktopSideMenu(context) ? 12 : 9, color: future ? Colors.green.shade200 : Colors.green.shade700),
                           ),
                       ],
                     ),
@@ -15466,17 +15852,43 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
         setState(() => busy = true);
         imagePath = await rasterizePdfPages(res.files.single.path!);
       } else {
-        final img = await ImagePicker().pickImage(
-          source: source == ScanSource.camera ? ImageSource.camera : ImageSource.gallery,
-          preferredCameraDevice: CameraDevice.rear,
-          imageQuality: 85,
-          maxWidth: 1800,
-          maxHeight: 1800,
-        );
-        if (img == null) return;
+        // One receipt can take several photos (a long receipt, front and
+        // back): several images from the gallery at once, or one photo
+        // after another with the camera. They're joined top to bottom
+        // into one image, read and kept like a single photo.
+        final paths = <String>[];
+        if (source == ScanSource.gallery) {
+          final picked = await ImagePicker().pickMultiImage(imageQuality: 85, maxWidth: 1800, maxHeight: 1800);
+          paths.addAll(picked.map((x) => x.path));
+        } else {
+          while (true) {
+            final shot = await ImagePicker().pickImage(
+              source: ImageSource.camera,
+              preferredCameraDevice: CameraDevice.rear,
+              imageQuality: 85,
+              maxWidth: 1800,
+              maxHeight: 1800,
+            );
+            if (shot != null) paths.add(shot.path);
+            if (shot == null || !context.mounted) break;
+            final another = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: Text(locf('{0} عکس گرفته شد', [persianDigits('${paths.length}')])),
+                content: Text(loc('اگر رسید طولانی است یا پشت و روی آن لازم است، عکس بعدی را بگیرید.')),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('عکس بعدی'))),
+                  FilledButton(onPressed: () => Navigator.pop(ctx, false), child: Text(loc('تمام شد'))),
+                ],
+              ),
+            );
+            if (another != true) break;
+          }
+        }
+        if (paths.isEmpty) return;
         if (!context.mounted) return;
         setState(() => busy = true);
-        imagePath = img.path;
+        imagePath = paths.length == 1 ? paths.first : await stitchImagesVertically(paths);
       }
       // Give the OS a brief moment to finish flushing the captured file to
       // disk before handing it to ML Kit (some camera apps return the path
@@ -15573,7 +15985,14 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
           ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _section(loc('رسید جدید'), loc('تشخیص آفلاین + امکان بهبود با هوش مصنوعی'), Icons.receipt_long, false),
+              _section(
+                loc('رسید جدید'),
+                hasOnDeviceOcr
+                    ? loc('تشخیص آفلاین + امکان بهبود با هوش مصنوعی • برای رسید طولانی چند عکس بگیرید یا چند تصویر انتخاب کنید')
+                    : loc('خواندن با هوش مصنوعی • برای رسید طولانی چند تصویر انتخاب کنید'),
+                Icons.receipt_long,
+                false,
+              ),
               const SizedBox(height: 16),
               _section(loc('فیش حقوقی جدید'), loc('استخراج درآمد ناخالص و خالص، مالیات، بیمه و کلاس مالیاتی'), Icons.badge_outlined, true),
             ],
@@ -18091,62 +18510,68 @@ class _TransactionEditorState extends State<TransactionEditor> {
             }),
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
-            decoration: InputDecoration(labelText: type == TxType.income ? loc('مبلغ دریافتی') : tr('amount'), hintText: loc('مثلاً 250,000'), border: const OutlineInputBorder()),
+          formPair(
+            context,
+            TextField(
+              controller: amountCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: const [AmountInputFormatter()],
+              decoration: InputDecoration(labelText: type == TxType.income ? loc('مبلغ دریافتی') : tr('amount'), hintText: loc('مثلاً 250,000'), border: const OutlineInputBorder()),
+            ),
+            DropdownButtonFormField<Account>(
+              initialValue: selectedAccount,
+              decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
+              items: widget.accounts
+                  .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})')))
+                  .toList(),
+              onChanged: (v) => setState(() {
+                selectedAccount = v;
+                _dirty = true;
+              }),
+            ),
           ),
           const SizedBox(height: 16),
-          DropdownButtonFormField<Account>(
-            initialValue: selectedAccount,
-            decoration: InputDecoration(labelText: tr('account'), border: const OutlineInputBorder()),
-            items: widget.accounts
-                .map((a) => DropdownMenuItem(value: a, child: Text('${a.name} (${currencyLabel(a.currency)})')))
-                .toList(),
-            onChanged: (v) => setState(() {
-              selectedAccount = v;
-              _dirty = true;
-            }),
+          formPair(
+            context,
+            ListTile(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
+              title: Text(selectedCategory?.name ?? tr('select_category')),
+              trailing: const Icon(Icons.chevron_left),
+              onTap: _pickCategory,
+            ),
+            ListTile(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
+              title: Text(locf('تاریخ: {0}', [(formatDate(date))])),
+              trailing: const Icon(Icons.calendar_month),
+              onTap: () async {
+                final d = await showAppDatePicker(
+                  context: context,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                  initialDate: date,
+                  builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+                );
+                if (d != null) {
+                  setState(() {
+                    date = d;
+                    _dirty = true;
+                  });
+                }
+              },
+            ),
           ),
           const SizedBox(height: 16),
-          ListTile(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(selectedCategory?.name ?? tr('select_category')),
-            trailing: const Icon(Icons.chevron_left),
-            onTap: _pickCategory,
-          ),
-          const SizedBox(height: 16),
-          ListTile(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: Colors.grey.shade400)),
-            title: Text(locf('تاریخ: {0}', [(formatDate(date))])),
-            trailing: const Icon(Icons.calendar_month),
-            onTap: () async {
-              final d = await showAppDatePicker(
-                context: context,
-                firstDate: DateTime(2000),
-                lastDate: DateTime(2100),
-                initialDate: date,
-                builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
-              );
-              if (d != null) {
-                setState(() {
-                  date = d;
-                  _dirty = true;
-                });
-              }
-            },
-          ),
-          const SizedBox(height: 16),
-          MerchantField(
-            controller: merchantCtrl,
-            label: type == TxType.expense ? loc('نام فروشگاه') : loc('از طرف (شخص، فروشگاه یا کارفرما)'),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: noteCtrl,
-            maxLines: null,
-            minLines: 1,
-            decoration: InputDecoration(labelText: tr('note'), border: const OutlineInputBorder(), alignLabelWithHint: true),
+          formPair(
+            context,
+            MerchantField(
+              controller: merchantCtrl,
+              label: type == TxType.expense ? loc('نام فروشگاه') : loc('از طرف (شخص، فروشگاه یا کارفرما)'),
+            ),
+            TextField(
+              controller: noteCtrl,
+              maxLines: null,
+              minLines: 1,
+              decoration: InputDecoration(labelText: tr('note'), border: const OutlineInputBorder(), alignLabelWithHint: true),
+            ),
           ),
           if (type == TxType.expense) ...[
             const SizedBox(height: 16),
