@@ -3623,7 +3623,7 @@ const desktopWideRoute = 'wide';
 
 /// Menu entries whose screens use the whole width on a computer (overviews,
 /// lists with columns, charts); the others are forms and settings.
-const desktopWideScreens = {0, 12, 8, 10, 7, 17, 9, 21, 22, 18};
+const desktopWideScreens = {0, 12, 8, 10, 7, 17, 21, 22};
 
 /// Page transitions on a computer, with each page's width: the first page
 /// (Home) and pages pushed as [desktopWideRoute] fill the window, any
@@ -9942,6 +9942,8 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
               padding: const EdgeInsets.symmetric(vertical: 32),
               child: Center(child: Text(loc('در این بازه هزینه‌ی پیش‌رویی وجود ندارد.'))),
             )
+          else if (desktopSideMenu(context))
+            _desktopEntries(entries, today)
           else
             ...entries.map((e) => _entryCard(e, today)),
         ],
@@ -10012,18 +10014,54 @@ class _UpcomingPaymentsScreenState extends State<UpcomingPaymentsScreen> {
             color: e.t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700,
           ),
         ),
-        onTap: () async {
-          final result = await Navigator.push<Object>(
-            context,
-            MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: e.t, categories: categories, accounts: accounts)),
-          );
-          if (result is DeleteTransactionSignal) {
-            await Store.deleteTransaction(result.id);
-          } else if (result is Transaction) {
-            await Store.upsertTransaction(result);
-          }
-          await _load();
-        },
+        onTap: () => _openEntry(e),
+      ),
+    );
+  }
+
+  Future<void> _openEntry(TxOccurrence e) async {
+    final result = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: e.t, categories: categories, accounts: accounts)),
+    );
+    if (result is DeleteTransactionSignal) {
+      await Store.deleteTransaction(result.id);
+    } else if (result is Transaction) {
+      await Store.upsertTransaction(result);
+    }
+    await _load();
+  }
+
+  /// The upcoming payments as a table on a computer.
+  Widget _desktopEntries(List<TxOccurrence> entries, DateTime today) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          const DesktopTxHeader(),
+          for (final e in entries)
+            () {
+              final daysLeft = e.date.difference(today).inDays;
+              final last = _lastPaymentOf(e);
+              final cat = categories.where((c) => c.id == e.t.categoryId).firstOrNull;
+              return DesktopTxRow(
+                t: e.t,
+                date: e.date,
+                category: categoryName(e.t.categoryId),
+                icon: last != null ? Icons.flag : iconForCategory(cat ?? Category(id: e.t.categoryId, name: '', type: e.t.type), categories),
+                account: accounts.where((a) => a.id == e.t.accountId).firstOrNull?.name ?? '',
+                currency: currencyOf(e.t.accountId),
+                badge: [
+                  daysLeft == 0 ? loc('امروز') : locf('{0} روز دیگر', [persianDigits('$daysLeft')]),
+                  if (last != null)
+                    e.t.installments != null
+                        ? locf('آخرین قسط ({0} از {1})', [persianDigits('${last.n}'), persianDigits('${last.total}')])
+                        : loc('آخرین پرداخت'),
+                ].join(' • '),
+                onTap: () => _openEntry(e),
+              );
+            }(),
+        ],
       ),
     );
   }
@@ -10700,7 +10738,7 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                                       m.value.abs() >= 1
                                           ? ltr(persianDigits('${m.value < 0 ? '-' : ''}${_groupThousands(m.value.abs().round().toString())}'))
                                           : '',
-                                      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
+                                      style: TextStyle(fontSize: desktopSideMenu(context) ? 12 : 9, fontWeight: FontWeight.bold),
                                       maxLines: 1,
                                     ),
                                   ),
@@ -10714,7 +10752,9 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 4),
-                                  Text(() { final n = m.month.name; return n.length > 3 ? n.substring(0, 3) : n; }(), style: const TextStyle(fontSize: 8)),
+                                  // Shortened on the phone; whole on a computer's wide chart.
+                                  Text(() { final n = m.month.name; return n.length > 3 && !desktopSideMenu(context) ? n.substring(0, 3) : n; }(),
+                                      style: TextStyle(fontSize: desktopSideMenu(context) ? 12 : 8)),
                                 ],
                               ),
                             ),

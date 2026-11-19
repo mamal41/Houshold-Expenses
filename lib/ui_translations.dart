@@ -790,4 +790,5 @@ const Map<String, List<String>> uiTranslations = {
   'تصویرها خوانده نشدند.': ['The images could not be read.', 'Die Bilder konnten nicht gelesen werden.'],
   'تشخیص آفلاین + امکان بهبود با هوش مصنوعی • برای رسید طولانی چند عکس بگیرید یا چند تصویر انتخاب کنید': ['Offline recognition, improvable with AI • for a long receipt take several photos or pick several images', 'Offline-Erkennung, mit KI verbesserbar • bei langen Belegen mehrere Fotos machen oder mehrere Bilder wählen'],
   'خواندن با هوش مصنوعی • برای رسید طولانی چند تصویر انتخاب کنید': ['Read with AI • for a long receipt pick several images', 'Mit KI lesen • bei langen Belegen mehrere Bilder wählen'],
+  '{0} روز دیگر': ['in {0} days', 'in {0} Tagen'],
 };
