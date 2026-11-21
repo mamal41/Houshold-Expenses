@@ -133,7 +133,9 @@ void main() {
         await show(tester, const MonthCalendarScreen());
         expectMoney(tester, 'calendar income so far', monthIncome);
         expectMoney(tester, 'calendar expense so far', monthExpense);
-        expectMoney(tester, 'calendar not yet due expense', sum(notDueThisMonth.where((b) => b.t.type == TxType.expense)));
+        // (The row is left out when nothing is left to pay this month.)
+        final notDue = sum(notDueThisMonth.where((b) => b.t.type == TxType.expense));
+        if (notDue > 0) expectMoney(tester, 'calendar not yet due expense', notDue);
         await close(tester);
       });
 

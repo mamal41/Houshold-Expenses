@@ -50,7 +50,8 @@ class WindowsUpdater {
   WindowsUpdater._();
   static final instance = WindowsUpdater._();
 
-  bool get supported => (Platform.isWindows || Platform.isAndroid) && _ownBuild > 0;
+  // The Bazaar build is updated by the store only.
+  bool get supported => !kBazaar && (Platform.isWindows || Platform.isAndroid) && _ownBuild > 0;
 
   /// The newest release when it's newer than this build.
   final available = ValueNotifier<WindowsRelease?>(null);

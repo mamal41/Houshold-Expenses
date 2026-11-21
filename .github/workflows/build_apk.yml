@@ -44,6 +44,13 @@ jobs:
           sed -i '/<manifest /a\    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>' "$MANIFEST"
           # In-app update: opening the downloaded APK in Android's installer.
           sed -i '/<manifest /a\    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>' "$MANIFEST"
+          # open_filex (used only to open that APK) asks for access to all
+          # photos, videos and music; the app needs none of it.
+          sed -i 's#<manifest xmlns:android="http://schemas.android.com/apk/res/android"#<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools"#' "$MANIFEST"
+          for PERM in READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_MEDIA_AUDIO; do
+            sed -i "/<manifest /a\    <uses-permission android:name=\"android.permission.$PERM\" tools:node=\"remove\"/>" "$MANIFEST"
+          done
+          grep -q 'xmlns:tools' "$MANIFEST"
           echo "--- AndroidManifest.xml ---"; cat "$MANIFEST"
 
           for STYLES in android/app/src/main/res/values/styles.xml android/app/src/main/res/values-night/styles.xml; do
@@ -305,3 +312,42 @@ jobs:
             sleep $((attempt * 15))
           done
           gh release view "$tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -qx "$(basename ModiriatMali.apk)"
+      - name: Build the Cafe Bazaar APK
+        # No phone/computer sync and no self-update (Bazaar updates the app),
+        # so also no permission to install packages.
+        run: |
+          sed -i '/android.permission.REQUEST_INSTALL_PACKAGES/d' android/app/src/main/AndroidManifest.xml
+          flutter build apk --release --no-tree-shake-icons \
+            --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }} \
+            --dart-define=ANDROID_BUILD=${{ github.run_number }} --dart-define=BAZAAR=true
+          cp build/app/outputs/flutter-apk/app-release.apk ModiriatMali-Bazaar.apk
+      - name: Check the permissions of both APKs
+        run: |
+          AAPT=$(ls -d $ANDROID_HOME/build-tools/*/aapt2 | sort -V | tail -1)
+          for APK in ModiriatMali.apk ModiriatMali-Bazaar.apk; do
+            [ -f "$APK" ] || continue
+            echo "### $APK" | tee -a "$GITHUB_STEP_SUMMARY"
+            "$AAPT" dump permissions "$APK" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          ! "$AAPT" dump permissions ModiriatMali-Bazaar.apk | grep -q REQUEST_INSTALL_PACKAGES
+          ! "$AAPT" dump permissions ModiriatMali-Bazaar.apk | grep -q READ_MEDIA_VIDEO
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Modiriat-Mali-Bazaar-APK
+          path: ModiriatMali-Bazaar.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish the Bazaar APK (for uploading to Cafe Bazaar)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="bazaar-v${{ github.run_number }}"
+          for attempt in 1 2 3 4 5; do
+            gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
+              gh release create "$tag" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+                --title "Cafe Bazaar ${{ github.run_number }}" --notes "APK for uploading to Cafe Bazaar (no self-update, no computer sync)." --latest=false || true
+            gh release upload "$tag" ModiriatMali-Bazaar.apk --repo "${{ github.repository }}" --clobber && break
+            sleep $((attempt * 15))
+          done
+          gh release view "$tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -qx ModiriatMali-Bazaar.apk

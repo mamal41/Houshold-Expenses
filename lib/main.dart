@@ -762,6 +762,11 @@ const kCurrencies = ['IRT', 'IRR', 'EUR', 'USD', 'GBP', 'TRY', 'AED', 'CHF'];
 // store listings. Keep this in sync with pubspec.yaml's `version:` field
 // whenever you bump the version for a new release.
 const kAppVersion = '1.0.0';
+
+/// The build for the Cafe Bazaar store (--dart-define=BAZAAR=true): no
+/// phone/computer sync and no updates from outside the store (Bazaar
+/// updates the app itself).
+const kBazaar = bool.fromEnvironment('BAZAAR');
 const kAppBuildNumber = 1;
 // TODO: replace with your real support email and developer/company name
 // before publishing (shown in the About screen and often required by app
@@ -4451,6 +4456,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
           ),
+          if (!kBazaar)
           ListTile(
             leading: const Icon(Icons.sync),
             title: Text(loc('همگام‌سازی گوشی و کامپیوتر')),
@@ -4733,7 +4739,7 @@ class AboutScreen extends StatelessWidget {
             ),
           ),
           _sectionTitle(context, loc('درباره')),
-          Text(loc('برنامه‌ای برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، بودجه و پس‌انداز شخصی و خانوادگی؛ برای گوشی اندروید و کامپیوتر ویندوز. اطلاعات روی دستگاه خودتان نگه داشته می‌شود و اگر بخواهید، گوشی و کامپیوتر از طریق Google Drive خودتان با هم یکی می‌شوند.'), style: body),
+          Text(kBazaar ? loc('برنامه‌ای برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، بودجه و پس‌انداز شخصی و خانوادگی. همه‌ی اطلاعات روی گوشی خودتان نگه داشته می‌شود.') : loc('برنامه‌ای برای مدیریت هزینه‌ها، درآمدها، حساب‌ها، بودجه و پس‌انداز شخصی و خانوادگی؛ برای گوشی اندروید و کامپیوتر ویندوز. اطلاعات روی دستگاه خودتان نگه داشته می‌شود و اگر بخواهید، گوشی و کامپیوتر از طریق Google Drive خودتان با هم یکی می‌شوند.'), style: body),
           _sectionTitle(context, loc('امکانات')),
           _feature(context, Icons.swap_vert, loc('هزینه، درآمد و انتقال'),
               loc('ثبت هزینه با نام فروشگاه، دسته‌بندی و اقلام خرید؛ درآمد از هر نوع (حقوق با جزئیات فیش، بازگشت وجه، هدیه)؛ انتقال بین حساب‌ها و ارزهای مختلف.')),
@@ -4751,8 +4757,10 @@ class AboutScreen extends StatelessWidget {
               loc('لیست‌های خرید، و یادآوری دو روز پیش از پایان مهلت مرجوعی کالا.')),
           _feature(context, Icons.translate, loc('چند حساب، چند ارز، چند زبان'),
               loc('تومان، ریال، یورو، دلار و ارزهای دیگر با نرخ روز؛ تقویم شمسی یا میلادی؛ فارسی، انگلیسی و آلمانی.')),
+          if (!kBazaar)
           _feature(context, Icons.sync, loc('همگام‌سازی گوشی و کامپیوتر'),
               loc('با یک حساب گوگل، هر وقت به اینترنت وصل باشید اطلاعات گوشی و ویندوز خودکار یکی می‌شود.')),
+          if (!kBazaar)
           _feature(context, Icons.system_update_alt, loc('به‌روزرسانی خودکار'),
               loc('برنامه نسخه‌ی جدید را خودش پیدا می‌کند و با تأیید شما نصب می‌کند؛ اطلاعات سر جایش می‌ماند.')),
           _feature(context, Icons.lock_outline, loc('قفل و پشتیبان‌گیری'),
@@ -4769,7 +4777,7 @@ class AboutScreen extends StatelessWidget {
             ),
           ],
           _sectionTitle(context, loc('حریم خصوصی')),
-          Text(loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی دستگاه خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• همگام‌سازی (اختیاری): اطلاعات در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود که فقط این برنامه به آن دسترسی دارد. تصویر رسیدها و تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس Gemini گوگل و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش برای پردازش فرستاده می‌شود.\n\n• برای به‌روزرسانی، برنامه فقط شماره‌ی آخرین نسخه را از GitHub می‌پرسد و فایل نصب را از همان‌جا دریافت می‌کند؛ هیچ اطلاعاتی از شما فرستاده نمی‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی دستگاه ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.'), style: body),
+          Text(kBazaar ? loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی گوشی خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس Gemini گوگل و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش برای پردازش فرستاده می‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی گوشی ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.') : loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی دستگاه خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• همگام‌سازی (اختیاری): اطلاعات در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود که فقط این برنامه به آن دسترسی دارد. تصویر رسیدها و تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس Gemini گوگل و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش برای پردازش فرستاده می‌شود.\n\n• برای به‌روزرسانی، برنامه فقط شماره‌ی آخرین نسخه را از GitHub می‌پرسد و فایل نصب را از همان‌جا دریافت می‌کند؛ هیچ اطلاعاتی از شما فرستاده نمی‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی دستگاه ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.'), style: body),
           _sectionTitle(context, loc('شرایط استفاده')),
           Text(
             loc('• این برنامه یک ابزار شخصی برای ثبت و پیگیری اطلاعات مالی است و جایگزین مشاوره‌ی مالی، حسابداری یا حقوقی رسمی نیست.\n\n• پیشنهادهای بخش «پیشنهاد پس‌انداز و سرمایه‌گذاری» جنبه‌ی آموزشی و کلی دارند و توصیه‌ی مالی شخصی‌سازی‌شده محسوب نمی‌شوند.\n\n• صحت اطلاعات خوانده‌شده توسط هوش مصنوعی (از روی تصویر رسید/فیش) باید توسط کاربر بررسی و تأیید شود.\n\n• مسئولیت نگهداری از نسخه‌ی پشتیبان اطلاعات بر عهده‌ی کاربر است.'),
@@ -4827,6 +4835,28 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
           Text(
             loc('برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.'),
             style: const TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber.withValues(alpha: 0.5)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline, size: 20, color: Colors.amber.shade800),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    loc('سرویس Gemini گوگل در بعضی کشورها، از جمله ایران، مستقیم در دسترس نیست. در این صورت گرفتن کلید و خواندن رسید با هوش مصنوعی فقط با اینترنتی کار می‌کند که به سرویس‌های گوگل دسترسی داشته باشد (مثلاً با ابزار تغییر IP). بدون آن، باقی برنامه و خواندن آفلاین رسید مثل قبل کار می‌کند.'),
+                    style: const TextStyle(fontSize: 12, height: 1.6),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           TextField(

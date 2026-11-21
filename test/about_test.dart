@@ -21,7 +21,8 @@ void main() {
         final texts = tester.widgetList<Text>(find.byType(Text)).map((t) => t.data ?? '').where(persian.hasMatch).toList();
         expect(texts, isEmpty);
       }
-      expect(find.byIcon(Icons.sync), findsOneWidget);
+      // No phone/computer sync in the Bazaar build.
+      expect(find.byIcon(Icons.sync), kBazaar ? findsNothing : findsOneWidget);
     });
   }
 }

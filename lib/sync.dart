@@ -465,6 +465,7 @@ class SyncService {
 
   /// Reads the saved setting and starts syncing in the background when on.
   Future<void> start() async {
+    if (kBazaar) return; // no phone/computer sync in the Bazaar build
     final sp = await SharedPreferences.getInstance();
     _enabled = sp.getBool(_enabledKey) ?? false;
     final last = sp.getString(_lastSyncKey);
