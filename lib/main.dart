@@ -2363,7 +2363,7 @@ const _aiIconChoices = <String, IconData>{
 };
 
 Future<IconData?> _suggestIconViaGemini(String categoryName) async {
-  final key = await Store.loadGeminiKey();
+  final key = await Store.loadAiKey();
   if (key == null || key.trim().isEmpty) return null;
   try {
     // Uses the shared Gemini request helper (model fallback, retries on
@@ -2832,6 +2832,52 @@ class Store {
   static Future<String?> loadGeminiKey() async {
     final sp = await SharedPreferences.getInstance();
     return sp.getString(_geminiKey);
+  }
+
+  // The AI service used for reading receipts/payslips/statements and the
+  // suggestions: Gemini, any OpenAI-compatible service (OpenAI itself,
+  // OpenRouter, or a local gateway) or Claude.
+  static const _aiProviderKey = 'ai_provider';
+  static const _openAiKey = 'openai_api_key';
+  static const _openAiUrlKey = 'openai_base_url';
+  static const _openAiModelKey = 'openai_model';
+  static const _claudeKey = 'claude_api_key';
+  static const _claudeModelKey = 'claude_model';
+
+  static Future<AiConfig> loadAiConfig() async {
+    final sp = await SharedPreferences.getInstance();
+    final provider = AiProvider.values.where((p) => p.name == sp.getString(_aiProviderKey)).firstOrNull ?? AiProvider.gemini;
+    String val(String k, String fallback) {
+      final v = sp.getString(k)?.trim() ?? '';
+      return v.isEmpty ? fallback : v;
+    }
+
+    return AiConfig(
+      provider: provider,
+      geminiKey: sp.getString(_geminiKey)?.trim() ?? '',
+      openAiKey: sp.getString(_openAiKey)?.trim() ?? '',
+      openAiBaseUrl: val(_openAiUrlKey, AiConfig.defaultOpenAiUrl),
+      openAiModel: val(_openAiModelKey, AiConfig.defaultOpenAiModel),
+      claudeKey: sp.getString(_claudeKey)?.trim() ?? '',
+      claudeModel: val(_claudeModelKey, AiConfig.defaultClaudeModel),
+    );
+  }
+
+  static Future<void> saveAiConfig(AiConfig c) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_aiProviderKey, c.provider.name);
+    await sp.setString(_geminiKey, c.geminiKey);
+    await sp.setString(_openAiKey, c.openAiKey);
+    await sp.setString(_openAiUrlKey, c.openAiBaseUrl);
+    await sp.setString(_openAiModelKey, c.openAiModel);
+    await sp.setString(_claudeKey, c.claudeKey);
+    await sp.setString(_claudeModelKey, c.claudeModel);
+  }
+
+  /// The key of the chosen AI service (empty/null when none is set).
+  static Future<String?> loadAiKey() async {
+    final k = (await loadAiConfig()).activeKey;
+    return k.isEmpty ? null : k;
   }
 
   static Future<bool> loadAppLockEnabled() async {
@@ -3443,7 +3489,7 @@ const Map<String, Map<AppLanguage, String>> _translations = {
   'calendar_title': {AppLanguage.fa: 'تقویم', AppLanguage.en: 'Calendar', AppLanguage.de: 'Kalender'},
   'gemini_key_guide_title': {AppLanguage.fa: 'راهنمای دریافت کلید هوش مصنوعی', AppLanguage.en: 'AI key setup guide', AppLanguage.de: 'Anleitung für den KI-Schlüssel'},
   'about_title': {AppLanguage.fa: 'درباره‌ی برنامه', AppLanguage.en: 'About', AppLanguage.de: 'Über die App'},
-  'gemini_settings_title': {AppLanguage.fa: 'هوش مصنوعی (Gemini)', AppLanguage.en: 'AI (Gemini)', AppLanguage.de: 'KI (Gemini)'},
+  'gemini_settings_title': {AppLanguage.fa: 'هوش مصنوعی', AppLanguage.en: 'AI', AppLanguage.de: 'KI'},
   'savings_suggestion_title': {
     AppLanguage.fa: 'پیشنهاد پس‌انداز و سرمایه‌گذاری',
     AppLanguage.en: 'Savings & investment suggestion',
@@ -4451,8 +4497,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.auto_awesome_outlined),
-            title: Text(loc('هوش مصنوعی (Gemini)')),
-            subtitle: Text(loc('کلید API برای بهبود خواندن رسید و فیش حقوقی')),
+            title: Text(loc('هوش مصنوعی')),
+            subtitle: Text(loc('Gemini، OpenAI و سرویس‌های سازگار، یا Claude • برای خواندن رسید و فیش حقوقی')),
             trailing: const Icon(Icons.chevron_left),
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
           ),
@@ -4598,10 +4644,17 @@ Future<void> promptForGeminiKey(BuildContext context) async {
     builder: (ctx) => AlertDialog(
       title: Text(loc('نیاز به کلید هوش مصنوعی')),
       content: Text(
-        loc('برای استفاده از قابلیت‌های هوش مصنوعی (مثل خواندن خودکار رسید/فیش یا پیشنهاد پس‌انداز)، ابتدا باید یک کلید API رایگان از Gemini بگیری و در تنظیمات برنامه وارد کنی.'),
+        loc('برای استفاده از قابلیت‌های هوش مصنوعی (مثل خواندن خودکار رسید/فیش یا پیشنهاد پس‌انداز)، ابتدا باید کلید API یک سرویس هوش مصنوعی را در «تنظیمات › هوش مصنوعی» وارد کنی: Gemini گوگل (رایگان)، OpenAI یا هر سرویس سازگار با آن (از جمله سرویس‌های واسط داخلی)، یا Claude.'),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('cancel'))),
+        TextButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen()));
+          },
+          child: Text(loc('تنظیمات')),
+        ),
         FilledButton(
           onPressed: () {
             Navigator.pop(ctx);
@@ -4672,7 +4725,7 @@ class GeminiKeyGuideScreen extends StatelessWidget {
           _step(context, 2, loc('با حساب گوگلت وارد شو (همون حسابی که جیمیل داری).')),
           _step(context, 3, loc('روی دکمه‌ی «Create API key» بزن.')),
           _step(context, 4, loc('کلیدی که ساخته می‌شه رو کپی کن (یه رشته‌ی طولانی که با AIza شروع می‌شه).')),
-          _step(context, 5, loc('برگرد به این برنامه، از منو برو به «تنظیمات › هوش مصنوعی (Gemini)»، کلید رو توی همون‌جا بچسبون و ذخیره کن.')),
+          _step(context, 5, loc('برگرد به این برنامه، از منو برو به «تنظیمات › هوش مصنوعی»، سرویس Gemini رو انتخاب کن، کلید رو توی همون‌جا بچسبون و ذخیره کن.')),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiSettingsScreen())),
@@ -4746,7 +4799,7 @@ class AboutScreen extends StatelessWidget {
           _feature(context, Icons.repeat, loc('تراکنش‌های تکرارشونده و اقساط'),
               loc('هفتگی، ماهانه، فصلی، سالانه یا هر چند روز یک بار؛ با تعداد قسط یا تاریخ پایان، شماره‌ی هر قسط و یادآوری پیش از سررسید.')),
           _feature(context, Icons.document_scanner_outlined, loc('خواندن رسید و فیش حقوقی'),
-              loc('عکس، تصویر یا PDF رسید و فیش حقوقی خوانده می‌شود (روی گوشی با تشخیص متن، و با هوش مصنوعی Gemini)؛ برش دقیق تصویر رسید و نگه‌داشتن آن کنار تراکنش.')),
+              loc('عکس، تصویر یا PDF رسید و فیش حقوقی خوانده می‌شود (روی گوشی با تشخیص متن، و با هوش مصنوعی به انتخاب شما: Gemini، OpenAI و سرویس‌های سازگار، یا Claude)؛ برش دقیق تصویر رسید و نگه‌داشتن آن کنار تراکنش.')),
           _feature(context, Icons.upload_file_outlined, loc('صورتحساب بانک و تشخیص تکراری‌ها'),
               loc('ورود صورتحساب بانکی (CSV) به‌صورت پیش‌نویس، مقایسه با تراکنش‌های ثبت‌شده و یادگرفتن از تصمیم‌های شما برای تشخیص تکراری‌ها.')),
           _feature(context, Icons.pie_chart_outline, loc('بودجه و پس‌انداز'),
@@ -4777,7 +4830,7 @@ class AboutScreen extends StatelessWidget {
             ),
           ],
           _sectionTitle(context, loc('حریم خصوصی')),
-          Text(kBazaar ? loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی گوشی خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس Gemini گوگل و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش برای پردازش فرستاده می‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی گوشی ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.') : loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی دستگاه خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• همگام‌سازی (اختیاری): اطلاعات در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود که فقط این برنامه به آن دسترسی دارد. تصویر رسیدها و تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس Gemini گوگل و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش برای پردازش فرستاده می‌شود.\n\n• برای به‌روزرسانی، برنامه فقط شماره‌ی آخرین نسخه را از GitHub می‌پرسد و فایل نصب را از همان‌جا دریافت می‌کند؛ هیچ اطلاعاتی از شما فرستاده نمی‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی دستگاه ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.'), style: body),
+          Text(kBazaar ? loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی گوشی خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس هوش مصنوعی‌ای که خودتان انتخاب می‌کنید (Gemini، OpenAI یا سرویس سازگار، Claude) و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش مستقیم برای همان سرویس فرستاده می‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی گوشی ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.') : loc('• همه‌ی تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و تصاویر رسید روی دستگاه خودتان ذخیره می‌شوند. این برنامه سرور یا پایگاه‌داده‌ی مرکزی ندارد و توسعه‌دهنده به اطلاعات شما دسترسی ندارد.\n\n• همگام‌سازی (اختیاری): اطلاعات در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود که فقط این برنامه به آن دسترسی دارد. تصویر رسیدها و تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.\n\n• خواندن هوشمند رسید/فیش (اختیاری) با سرویس هوش مصنوعی‌ای که خودتان انتخاب می‌کنید (Gemini، OpenAI یا سرویس سازگار، Claude) و کلید API شخصی خودتان انجام می‌شود؛ فقط تصویر همان رسید/فیش مستقیم برای همان سرویس فرستاده می‌شود.\n\n• برای به‌روزرسانی، برنامه فقط شماره‌ی آخرین نسخه را از GitHub می‌پرسد و فایل نصب را از همان‌جا دریافت می‌کند؛ هیچ اطلاعاتی از شما فرستاده نمی‌شود.\n\n• رمز قفل برنامه به‌صورت رمزنگاری‌شده و فقط روی دستگاه ذخیره می‌شود.\n\n• این برنامه هیچ داده‌ای را برای تبلیغات یا فروش به دیگران جمع‌آوری نمی‌کند.'), style: body),
           _sectionTitle(context, loc('شرایط استفاده')),
           Text(
             loc('• این برنامه یک ابزار شخصی برای ثبت و پیگیری اطلاعات مالی است و جایگزین مشاوره‌ی مالی، حسابداری یا حقوقی رسمی نیست.\n\n• پیشنهادهای بخش «پیشنهاد پس‌انداز و سرمایه‌گذاری» جنبه‌ی آموزشی و کلی دارند و توصیه‌ی مالی شخصی‌سازی‌شده محسوب نمی‌شوند.\n\n• صحت اطلاعات خوانده‌شده توسط هوش مصنوعی (از روی تصویر رسید/فیش) باید توسط کاربر بررسی و تأیید شود.\n\n• مسئولیت نگهداری از نسخه‌ی پشتیبان اطلاعات بر عهده‌ی کاربر است.'),
@@ -4801,9 +4854,16 @@ class GeminiSettingsScreen extends StatefulWidget {
 }
 
 class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
-  final ctrl = TextEditingController();
+  final geminiCtrl = TextEditingController();
+  final openAiKeyCtrl = TextEditingController();
+  final openAiUrlCtrl = TextEditingController();
+  final openAiModelCtrl = TextEditingController();
+  final claudeKeyCtrl = TextEditingController();
+  final claudeModelCtrl = TextEditingController();
+  AiProvider provider = AiProvider.gemini;
   bool loading = true;
   bool obscure = true;
+  bool testing = false;
 
   @override
   void initState() {
@@ -4811,84 +4871,201 @@ class _GeminiSettingsScreenState extends State<GeminiSettingsScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    for (final c in [geminiCtrl, openAiKeyCtrl, openAiUrlCtrl, openAiModelCtrl, claudeKeyCtrl, claudeModelCtrl]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   Future<void> _load() async {
-    ctrl.text = await Store.loadGeminiKey() ?? '';
+    final c = await Store.loadAiConfig();
+    provider = c.provider;
+    geminiCtrl.text = c.geminiKey;
+    openAiKeyCtrl.text = c.openAiKey;
+    openAiUrlCtrl.text = c.openAiBaseUrl;
+    openAiModelCtrl.text = c.openAiModel;
+    claudeKeyCtrl.text = c.claudeKey;
+    claudeModelCtrl.text = c.claudeModel;
     setState(() => loading = false);
   }
 
+  AiConfig get _config => AiConfig(
+        provider: provider,
+        geminiKey: geminiCtrl.text.trim(),
+        openAiKey: openAiKeyCtrl.text.trim(),
+        openAiBaseUrl: openAiUrlCtrl.text.trim().isEmpty ? AiConfig.defaultOpenAiUrl : openAiUrlCtrl.text.trim(),
+        openAiModel: openAiModelCtrl.text.trim().isEmpty ? AiConfig.defaultOpenAiModel : openAiModelCtrl.text.trim(),
+        claudeKey: claudeKeyCtrl.text.trim(),
+        claudeModel: claudeModelCtrl.text.trim().isEmpty ? AiConfig.defaultClaudeModel : claudeModelCtrl.text.trim(),
+      );
+
   Future<void> _save() async {
-    await Store.saveGeminiKey(ctrl.text.trim());
-    if (!context.mounted) return;
+    await Store.saveAiConfig(_config);
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('ذخیره شد.'))));
   }
+
+  /// Saves, then sends one tiny request to the chosen service.
+  Future<void> _test() async {
+    final cfg = _config;
+    if (cfg.activeKey.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('کلید API وارد نشده است.'))));
+      return;
+    }
+    await Store.saveAiConfig(cfg);
+    setState(() => testing = true);
+    String message;
+    try {
+      await geminiTextRequest(cfg.activeKey, 'Reply with the single word OK.');
+      message = locf('اتصال به {0} برقرار است و کلید کار می‌کند.', [cfg.provider.label]);
+    } on GeminiException catch (e) {
+      message = e.friendlyMessage;
+    } catch (e) {
+      message = '$e';
+    }
+    if (!mounted) return;
+    setState(() => testing = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), duration: const Duration(seconds: 6)));
+  }
+
+  Widget _note(String text, {Color color = Colors.amber}) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.info_outline, size: 20, color: color == Colors.amber ? Colors.amber.shade800 : color),
+            const SizedBox(width: 8),
+            Expanded(child: Text(text, style: const TextStyle(fontSize: 12, height: 1.6))),
+          ],
+        ),
+      );
+
+  Widget _keyField(TextEditingController ctrl, String label) => TextField(
+        controller: ctrl,
+        obscureText: obscure,
+        textDirection: TextDirection.ltr,
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          suffixIcon: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.copy_outlined),
+                tooltip: loc('کپی کلید'),
+                onPressed: () async {
+                  if (ctrl.text.trim().isEmpty) return;
+                  await Clipboard.setData(ClipboardData(text: ctrl.text.trim()));
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('کلید کپی شد.'))));
+                  }
+                },
+              ),
+              IconButton(
+                icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => obscure = !obscure),
+              ),
+            ],
+          ),
+        ),
+      );
+
+  Widget _textField(TextEditingController ctrl, String label, String hint) => TextField(
+        controller: ctrl,
+        textDirection: TextDirection.ltr,
+        decoration: InputDecoration(labelText: label, hintText: hint, border: const OutlineInputBorder()),
+      );
 
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    const gap = SizedBox(height: 12);
     return Scaffold(
       appBar: AppBar(title: Text(tr('gemini_settings_title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(tr('gemini_key'), style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
           Text(
-            loc('برای بهبود خواندن رسید و فیش حقوقی با هوش مصنوعی (اختیاری). اگر خالی بگذارید، فقط از تشخیص متن آفلاین استفاده می‌شود.'),
+            loc('برای خواندن رسید، فیش حقوقی و صورتحساب بانک با هوش مصنوعی و پیشنهادهای هوشمند (اختیاری). یک سرویس را انتخاب کنید و کلید API خودتان را وارد کنید. بدون کلید، رسید فقط با تشخیص متن آفلاین خوانده می‌شود.'),
             style: const TextStyle(color: Colors.grey),
           ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.amber.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.amber.withValues(alpha: 0.5)),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline, size: 20, color: Colors.amber.shade800),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    loc('سرویس Gemini گوگل در بعضی کشورها، از جمله ایران، مستقیم در دسترس نیست. در این صورت گرفتن کلید و خواندن رسید با هوش مصنوعی فقط با اینترنتی کار می‌کند که به سرویس‌های گوگل دسترسی داشته باشد (مثلاً با ابزار تغییر IP). بدون آن، باقی برنامه و خواندن آفلاین رسید مثل قبل کار می‌کند.'),
-                    style: const TextStyle(fontSize: 12, height: 1.6),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            obscureText: obscure,
-            decoration: InputDecoration(
-              labelText: 'Gemini API Key',
-              border: const OutlineInputBorder(),
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.copy_outlined),
-                    tooltip: loc('کپی کلید'),
-                    onPressed: () async {
-                      if (ctrl.text.trim().isEmpty) return;
-                      await Clipboard.setData(ClipboardData(text: ctrl.text.trim()));
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('کلید کپی شد.'))));
-                      }
-                    },
-                  ),
-                  IconButton(
-                    icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => obscure = !obscure),
-                  ),
-                ],
-              ),
-            ),
+          const SizedBox(height: 16),
+          Text(loc('سرویس هوش مصنوعی'), style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          SegmentedButton<AiProvider>(
+            segments: [
+              const ButtonSegment(value: AiProvider.gemini, label: Text('Gemini')),
+              ButtonSegment(value: AiProvider.openai, label: Text(loc('OpenAI و سازگار'))),
+              const ButtonSegment(value: AiProvider.claude, label: Text('Claude')),
+            ],
+            selected: {provider},
+            showSelectedIcon: false,
+            onSelectionChanged: (v) => setState(() => provider = v.first),
           ),
           const SizedBox(height: 16),
-          FilledButton(onPressed: _save, child: Text(tr('save'))),
+          if (provider == AiProvider.gemini) ...[
+            _note(loc('سرویس Gemini گوگل در بعضی کشورها، از جمله ایران، مستقیم در دسترس نیست. در این صورت گرفتن کلید و خواندن رسید با هوش مصنوعی فقط با اینترنتی کار می‌کند که به سرویس‌های گوگل دسترسی داشته باشد (مثلاً با ابزار تغییر IP). بدون آن، باقی برنامه و خواندن آفلاین رسید مثل قبل کار می‌کند.')),
+            gap,
+            _keyField(geminiCtrl, 'Gemini API Key'),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                icon: const Icon(Icons.help_outline, size: 18),
+                label: Text(loc('راهنمای گرفتن کلید رایگان Gemini')),
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GeminiKeyGuideScreen())),
+              ),
+            ),
+          ],
+          if (provider == AiProvider.openai) ...[
+            _note(
+              loc('برای OpenAI، OpenRouter یا هر سرویسی که رابط سازگار با OpenAI دارد (از جمله سرویس‌های واسط هوش مصنوعی داخل ایران که بدون ابزار تغییر IP کار می‌کنند). آدرس API، نام مدل و کلید را از پنل همان سرویس بردارید. مدل باید خواندن تصویر را پشتیبانی کند (مثلاً gpt-4o-mini یا gpt-4o).'),
+              color: Colors.blue,
+            ),
+            gap,
+            _textField(openAiUrlCtrl, loc('آدرس API'), AiConfig.defaultOpenAiUrl),
+            gap,
+            _textField(openAiModelCtrl, loc('نام مدل'), AiConfig.defaultOpenAiModel),
+            gap,
+            _keyField(openAiKeyCtrl, 'API Key'),
+          ],
+          if (provider == AiProvider.claude) ...[
+            _note(
+              loc('کلید را از console.anthropic.com بگیرید (سرویس پولی است). نام مدل را می‌توانید تغییر دهید؛ مدل‌های کوچک‌تر ارزان‌تر و سریع‌ترند. Claude هم در ایران مستقیم در دسترس نیست؛ اگر سرویس واسط داخلی مدل Claude را با رابط OpenAI ارائه می‌کند، گزینه‌ی «OpenAI و سازگار» را انتخاب کنید.'),
+              color: Colors.blue,
+            ),
+            gap,
+            _textField(claudeModelCtrl, loc('نام مدل'), AiConfig.defaultClaudeModel),
+            gap,
+            _keyField(claudeKeyCtrl, 'Claude API Key'),
+          ],
+          const SizedBox(height: 16),
+          Text(
+            loc('کلیدها فقط روی همین دستگاه ذخیره می‌شوند و تصویر رسید فقط مستقیم برای سرویس انتخاب‌شده فرستاده می‌شود.'),
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(child: FilledButton(onPressed: _save, child: Text(tr('save')))),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: testing ? null : _test,
+                  icon: testing
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.network_check, size: 18),
+                  label: Text(loc('آزمایش اتصال')),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -5977,6 +6154,11 @@ Future<http.Response> _geminiPost(String apiKey, String body) async {
 }
 
 Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, String prompt) async {
+  final cfg = await Store.loadAiConfig();
+  if (cfg.provider != AiProvider.gemini) {
+    final text = await aiChat(cfg, prompt + _jsonOnly, imagePath: imagePath);
+    return parseAiJson(text, cfg.provider.label);
+  }
   final bytes = await File(imagePath).readAsBytes();
   final b64 = base64Encode(bytes);
   final body = jsonEncode({
@@ -6098,6 +6280,8 @@ Future<Map<String, dynamic>?> geminiExtractPayslip(String apiKey, String imagePa
 /// A text-only Gemini call (no image), used for the savings/investment
 /// suggestion feature - returns plain prose, not JSON.
 Future<String> geminiTextRequest(String apiKey, String prompt) async {
+  final cfg = await Store.loadAiConfig();
+  if (cfg.provider != AiProvider.gemini) return (await aiChat(cfg, prompt)).trim();
   final body = jsonEncode({
     'contents': [
       {
@@ -6124,6 +6308,223 @@ Future<String> geminiTextRequest(String apiKey, String prompt) async {
     throw GeminiException(loc('پاسخ Gemini قابل خواندن نبود.'), rawBody);
   }
   return text.trim();
+}
+
+// ============================== Other AI services ==============================
+
+/// The AI service the app talks to. Gemini has its own request code above;
+/// the others go through [aiChat].
+enum AiProvider {
+  gemini('Gemini'),
+  openai('OpenAI'),
+  claude('Claude');
+
+  const AiProvider(this.label);
+  final String label;
+}
+
+class AiConfig {
+  static const defaultOpenAiUrl = 'https://api.openai.com/v1';
+  static const defaultOpenAiModel = 'gpt-4o-mini';
+  static const defaultClaudeModel = 'claude-opus-5-5';
+
+  final AiProvider provider;
+  final String geminiKey;
+  final String openAiKey;
+  final String openAiBaseUrl;
+  final String openAiModel;
+  final String claudeKey;
+  final String claudeModel;
+
+  const AiConfig({
+    this.provider = AiProvider.gemini,
+    this.geminiKey = '',
+    this.openAiKey = '',
+    this.openAiBaseUrl = defaultOpenAiUrl,
+    this.openAiModel = defaultOpenAiModel,
+    this.claudeKey = '',
+    this.claudeModel = defaultClaudeModel,
+  });
+
+  String get activeKey => switch (provider) {
+        AiProvider.gemini => geminiKey,
+        AiProvider.openai => openAiKey,
+        AiProvider.claude => claudeKey,
+      };
+
+  /// The chat-completions address of an OpenAI-compatible service; the user
+  /// may paste the base address with or without the endpoint itself.
+  String get openAiChatUrl {
+    var base = openAiBaseUrl.trim();
+    while (base.endsWith('/')) {
+      base = base.substring(0, base.length - 1);
+    }
+    if (base.endsWith('/chat/completions')) return base;
+    return '$base/chat/completions';
+  }
+}
+
+const _jsonOnly = '\n\nAnswer with the JSON object only: no markdown fences and no other text.';
+
+/// Pulls the JSON object out of a model's answer (which may wrap it in a
+/// ```json fence or a sentence around it).
+Map<String, dynamic> parseAiJson(String text, String service) {
+  var t = text.trim();
+  if (t.startsWith('```')) {
+    t = t.replaceFirst(RegExp(r'^```[a-zA-Z]*\n?'), '').replaceFirst(RegExp(r'```\s*$'), '').trim();
+  }
+  final a = t.indexOf('{');
+  final b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) t = t.substring(a, b + 1);
+  try {
+    return jsonDecode(t) as Map<String, dynamic>;
+  } catch (_) {
+    throw GeminiException(locf('پاسخ {0} به‌صورت JSON معتبر نبود.', [service]), text);
+  }
+}
+
+String _imageMime(String path) => path.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+
+/// The request body for an OpenAI-compatible chat-completions service.
+Map<String, dynamic> openAiRequestBody(String model, String prompt, {String? imageB64, String mime = 'image/jpeg'}) => {
+      'model': model,
+      'messages': [
+        {
+          'role': 'user',
+          'content': imageB64 == null
+              ? prompt
+              : [
+                  {'type': 'text', 'text': prompt},
+                  {
+                    'type': 'image_url',
+                    'image_url': {'url': 'data:$mime;base64,$imageB64'},
+                  },
+                ],
+        },
+      ],
+    };
+
+/// The request body for Claude's Messages API (the image before the text).
+Map<String, dynamic> claudeRequestBody(String model, String prompt, {String? imageB64, String mime = 'image/jpeg'}) => {
+      'model': model,
+      'max_tokens': 16000,
+      'messages': [
+        {
+          'role': 'user',
+          'content': [
+            if (imageB64 != null)
+              {
+                'type': 'image',
+                'source': {'type': 'base64', 'media_type': mime, 'data': imageB64},
+              },
+            {'type': 'text', 'text': prompt},
+          ],
+        },
+      ],
+    };
+
+/// The answer text of an OpenAI-compatible response.
+String openAiResponseText(Map<String, dynamic> decoded, String raw) {
+  final choices = decoded['choices'];
+  if (choices is! List || choices.isEmpty) throw GeminiException(loc('پاسخ نامعتبر از سرویس هوش مصنوعی دریافت شد (بدون نتیجه).'), raw);
+  final content = choices[0]?['message']?['content'];
+  if (content is String && content.trim().isNotEmpty) return content;
+  // Some services return the content as a list of parts.
+  if (content is List) {
+    final text = content.map((p) => p is Map ? '${p['text'] ?? ''}' : '$p').join();
+    if (text.trim().isNotEmpty) return text;
+  }
+  throw GeminiException(loc('پاسخ سرویس هوش مصنوعی قابل خواندن نبود.'), raw);
+}
+
+/// The answer text of a Claude response.
+String claudeResponseText(Map<String, dynamic> decoded, String raw) {
+  if (decoded['stop_reason'] == 'refusal') {
+    throw GeminiException(loc('Claude این درخواست را پردازش نکرد.'), raw);
+  }
+  final blocks = decoded['content'];
+  final text = blocks is List ? blocks.where((b) => b is Map && b['type'] == 'text').map((b) => '${b['text']}').join() : '';
+  if (text.trim().isEmpty) throw GeminiException(loc('پاسخ Claude قابل خواندن نبود.'), raw);
+  return text;
+}
+
+/// One request to an OpenAI-compatible service or Claude, with an optional
+/// image; returns the answer text or throws a [GeminiException] naming the
+/// cause in plain words.
+Future<String> aiChat(AiConfig cfg, String prompt, {String? imagePath}) async {
+  final service = cfg.provider == AiProvider.claude ? 'Claude' : loc('سرویس هوش مصنوعی');
+  if (cfg.activeKey.isEmpty) throw GeminiException(loc('کلید API در تنظیمات هوش مصنوعی وارد نشده است.'), '');
+  final b64 = imagePath == null ? null : base64Encode(await File(imagePath).readAsBytes());
+  final mime = imagePath == null ? 'image/jpeg' : _imageMime(imagePath);
+  final Uri uri;
+  final Map<String, String> headers;
+  final Map<String, dynamic> body;
+  if (cfg.provider == AiProvider.claude) {
+    uri = Uri.parse('https://api.anthropic.com/v1/messages');
+    headers = {'x-api-key': cfg.claudeKey, 'anthropic-version': '2026-10-21', 'content-type': 'application/json'};
+    body = claudeRequestBody(cfg.claudeModel, prompt, imageB64: b64, mime: mime);
+  } else {
+    final url = Uri.tryParse(cfg.openAiChatUrl);
+    if (url == null || !url.hasScheme || url.host.isEmpty) {
+      throw GeminiException(loc('آدرس سرویس هوش مصنوعی در تنظیمات درست نیست.'), cfg.openAiBaseUrl);
+    }
+    uri = url;
+    headers = {'Authorization': 'Bearer ${cfg.openAiKey}', 'Content-Type': 'application/json'};
+    body = openAiRequestBody(cfg.openAiModel, prompt, imageB64: b64, mime: mime);
+  }
+  final model = cfg.provider == AiProvider.claude ? cfg.claudeModel : cfg.openAiModel;
+  http.Response? resp;
+  Object? netError;
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      resp = await http.post(uri, headers: headers, body: jsonEncode(body)).timeout(const Duration(seconds: 120));
+      netError = null;
+    } catch (e) {
+      netError = e;
+      resp = null;
+    }
+    // One more try after a pause when overloaded or the connection dropped.
+    final code = resp?.statusCode;
+    if (resp != null && ![429, 500, 502, 503, 529].contains(code)) break;
+    if (attempt == 0) await Future.delayed(const Duration(seconds: 3));
+  }
+  if (resp == null) {
+    throw GeminiException(
+      locf('اتصال به {0} برقرار نشد. اتصال اینترنت و آدرس سرویس را بررسی کنید و دوباره امتحان کنید.', [service]),
+      '$uri\n$netError',
+    );
+  }
+  final raw = utf8.decode(resp.bodyBytes, allowMalformed: true);
+  final detail = '$uri\nmodel: $model\nHTTP ${resp.statusCode}\n$raw';
+  final code = resp.statusCode;
+  if (code == 200) {
+    final Map<String, dynamic> decoded;
+    try {
+      decoded = jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      throw GeminiException(loc('پاسخ نامعتبر از سرویس هوش مصنوعی دریافت شد (بدون نتیجه).'), detail);
+    }
+    return cfg.provider == AiProvider.claude ? claudeResponseText(decoded, detail) : openAiResponseText(decoded, detail);
+  }
+  if (code == 401 || code == 403) {
+    throw GeminiException(locf('کلید API برای {0} نامعتبر است یا اجازه‌ی دسترسی ندارد (HTTP {1}). آن را در تنظیمات بررسی کنید.', [service, code]), detail);
+  }
+  if (code == 402) {
+    throw GeminiException(locf('اعتبار حساب {0} کافی نیست (HTTP 402). حساب را شارژ کنید.', [service]), detail);
+  }
+  if (code == 404) {
+    throw GeminiException(locf('مدل «{0}» یا آدرس سرویس پیدا نشد (HTTP 404). نام مدل و آدرس را در تنظیمات بررسی کنید.', [model]), detail);
+  }
+  if (code == 429) {
+    throw GeminiException(locf('تعداد درخواست‌ها یا سهمیه‌ی {0} از حد مجاز گذشت. کمی بعد دوباره امتحان کنید.', [service]), detail);
+  }
+  if (code == 400 && RegExp('image|vision', caseSensitive: false).hasMatch(raw) && imagePath != null) {
+    throw GeminiException(locf('مدل «{0}» تصویر را نمی‌پذیرد. مدلی را انتخاب کنید که تصویر را پشتیبانی کند.', [model]), detail);
+  }
+  if (code >= 500) {
+    throw GeminiException(locf('سرورهای {0} موقتاً در دسترس نیستند. چند دقیقه دیگر دوباره امتحان کنید.', [service]), detail);
+  }
+  throw GeminiException(locf('خطای {0} (HTTP {1})', [service, code]), detail);
 }
 
 // ============================== Money formatting ==============================
@@ -10360,7 +10761,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
     accounts = await Store.loadAccounts();
     goals = await Store.loadSavingsGoals();
     contributions = await Store.loadSavingsContributions();
-    final key = await Store.loadGeminiKey();
+    final key = await Store.loadAiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
   }
@@ -10402,7 +10803,7 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
       errorMessage = null;
     });
     try {
-      final key = await Store.loadGeminiKey();
+      final key = await Store.loadAiKey();
       final avg = _averages(3);
       final surplus = avg.income - avg.expense;
       final goalLines = goals.map((g) {
@@ -12568,7 +12969,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(loc('باز کردن فایل PDF ممکن نشد.'))));
       return;
     }
-    final key = (await Store.loadGeminiKey())?.trim();
+    final key = (await Store.loadAiKey())?.trim();
     if (key != null && key.isNotEmpty) {
       await _readPdfWithAi();
     } else if (aiPageRows.isNotEmpty) {
@@ -12627,7 +13028,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
   /// saved as soon as it's read, so when the AI stops (busy, quota used up)
   /// the next attempt - now or later - continues with the remaining pages.
   Future<void> _readPdfWithAi() async {
-    final key = (await Store.loadGeminiKey())?.trim();
+    final key = (await Store.loadAiKey())?.trim();
     if (key == null || key.isEmpty) {
       if (mounted) await promptForGeminiKey(context);
       return;
@@ -12960,7 +13361,7 @@ class _CsvImportScreenState extends State<CsvImportScreen> {
             Column(
               children: [
                 Text(
-                  loc('فایل CSV یا PDF صورتحساب بانک را انتخاب کن.\n\nPDF فقط با هوش مصنوعی (کلید Gemini) درست خوانده می‌شود. صفحه به صفحه خوانده و ذخیره می‌شود؛ اگر همه‌ی صفحات یک‌جا خوانده نشد، صفحه‌های خوانده‌شده را بارگذاری کن و بقیه را بعداً ادامه بده.'),
+                  loc('فایل CSV یا PDF صورتحساب بانک را انتخاب کن.\n\nPDF فقط با هوش مصنوعی (کلید API در تنظیمات) درست خوانده می‌شود. صفحه به صفحه خوانده و ذخیره می‌شود؛ اگر همه‌ی صفحات یک‌جا خوانده نشد، صفحه‌های خوانده‌شده را بارگذاری کن و بقیه را بعداً ادامه بده.'),
                   style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 16),
@@ -16174,7 +16575,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         _matchCategoryHint(widget.initial.categoryHint, categories, TxType.expense);
     _initialSignature = _signature();
     merchantCtrl.addListener(_categoryFromMerchant);
-    final key = await Store.loadGeminiKey();
+    final key = await Store.loadAiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
     if (hasGeminiKey) unawaited(_improveWithGemini());
@@ -16186,7 +16587,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   }
 
   Future<void> _improveWithGemini() async {
-    final key = await Store.loadGeminiKey();
+    final key = await Store.loadAiKey();
     if (key == null || key.trim().isEmpty) return;
     setState(() {
       improving = true;
@@ -16825,7 +17226,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
     final match = categories.where((c) => c.id == (widget.existing?.categoryId ?? 'i_salary')).toList();
     selectedCategory = match.isEmpty ? categories.where((c) => c.id == 'i_salary').firstOrNull : match.first;
     _initialSignature = _signature();
-    final key = await Store.loadGeminiKey();
+    final key = await Store.loadAiKey();
     hasGeminiKey = key != null && key.trim().isNotEmpty;
     setState(() => loading = false);
     if (hasGeminiKey) unawaited(_improveWithGemini());
@@ -16837,7 +17238,7 @@ class _PayslipReviewScreenState extends State<PayslipReviewScreen> {
   }
 
   Future<void> _improveWithGemini() async {
-    final key = await Store.loadGeminiKey();
+    final key = await Store.loadAiKey();
     if (key == null || key.trim().isEmpty) return;
     setState(() {
       improving = true;
