@@ -13797,7 +13797,7 @@ class _ShoppingListDetailScreenState extends State<ShoppingListDetailScreen> {
       amount: total > 0 ? total : 0.01,
       categoryId: '_uncategorized_',
       accountId: accounts.isNotEmpty ? accounts.first.id : 'default',
-      date: DateTime.now(),
+      date: DateUtils.dateOnly(DateTime.now()),
       note: locf('از لیست خرید «{0}»', [(list.name)]),
       items: receiptItems,
       draft: true,
@@ -14636,14 +14636,19 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         children: [
           Icon(icon, size: 16, color: Colors.grey.shade600),
           const SizedBox(width: 6),
-          DropdownButtonHideUnderline(
-            child: DropdownButton<T>(
-              value: value,
-              isDense: true,
-              icon: const Icon(Icons.expand_more, size: 16),
-              style: TextStyle(fontSize: 13, color: Theme.of(context).textTheme.bodyMedium?.color),
-              items: items,
-              onChanged: onChanged,
+          // Shrinks to the space left on a narrow phone (a long label is
+          // cut with an ellipsis instead of overflowing).
+          Flexible(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<T>(
+                value: value,
+                isDense: true,
+                isExpanded: true,
+                icon: const Icon(Icons.expand_more, size: 16),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 13),
+                items: items,
+                onChanged: onChanged,
+              ),
             ),
           ),
         ],
@@ -14756,7 +14761,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
                     context: context,
                     icon: Icons.sort,
                     value: sort,
-                    items: _TxSortMode.values.map((m) => DropdownMenuItem(value: m, child: Text(_sortLabel(m)))).toList(),
+                    items: _TxSortMode.values.map((m) => DropdownMenuItem(value: m, child: Text(_sortLabel(m), overflow: TextOverflow.ellipsis))).toList(),
                     onChanged: (v) => setState(() => sort = v ?? sort),
                   ),
                 ),
@@ -15417,7 +15422,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(locf('خلاصه ({0} تراکنش)', [(currentTx.length)]), style: Theme.of(context).textTheme.titleMedium),
+                      Text(locf('خلاصه ({0} تراکنش)', [persianDigits('${currentTx.length}')]), style: Theme.of(context).textTheme.titleMedium),
                       const Divider(),
                       if (typeFilter != TxType.expense) comparisonRow(loc('درآمد'), curIncome, prevIncome, higherIsBad: false, type: TxType.income),
                       if (typeFilter != TxType.income) comparisonRow(loc('هزینه'), curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
