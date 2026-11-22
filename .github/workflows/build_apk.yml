@@ -313,13 +313,19 @@ jobs:
           done
           gh release view "$tag" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -qx "$(basename ModiriatMali.apk)"
       - name: Build the Cafe Bazaar APK
-        # No phone/computer sync and no self-update (Bazaar updates the app),
-        # so also no permission to install packages.
+        # A separate app: its own package name, so it never replaces (or is
+        # replaced by) the GitHub build on a phone and both can be installed
+        # side by side. No phone/computer sync and no self-update (Bazaar
+        # updates it): no ANDROID_BUILD number, so the updater is off, and no
+        # permission to install packages.
         run: |
           sed -i '/android.permission.REQUEST_INSTALL_PACKAGES/d' android/app/src/main/AndroidManifest.xml
+          sed -i -E 's/applicationId( = |\s+)"com\.personalfinance\.personal_finance"/applicationId\1"com.personalfinance.personal_finance.bazaar"/' android/app/build.gradle*
+          grep -n 'applicationId' android/app/build.gradle*
+          grep -q 'personal_finance.bazaar' android/app/build.gradle*
           flutter build apk --release --no-tree-shake-icons \
             --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }} \
-            --dart-define=ANDROID_BUILD=${{ github.run_number }} --dart-define=BAZAAR=true
+            --dart-define=BAZAAR=true --dart-define=BAZAAR_BUILD=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-release.apk ModiriatMali-Bazaar.apk
       - name: Check the permissions of both APKs
         run: |
@@ -331,6 +337,9 @@ jobs:
           done
           ! "$AAPT" dump permissions ModiriatMali-Bazaar.apk | grep -q REQUEST_INSTALL_PACKAGES
           ! "$AAPT" dump permissions ModiriatMali-Bazaar.apk | grep -q READ_MEDIA_VIDEO
+          "$AAPT" dump badging ModiriatMali.apk | grep -q "package: name='com.personalfinance.personal_finance'"
+          "$AAPT" dump badging ModiriatMali-Bazaar.apk | grep "package: name=" | tee -a "$GITHUB_STEP_SUMMARY"
+          "$AAPT" dump badging ModiriatMali-Bazaar.apk | grep -q "package: name='com.personalfinance.personal_finance.bazaar'"
       - uses: actions/upload-artifact@v4
         with:
           name: Modiriat-Mali-Bazaar-APK
@@ -346,7 +355,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1 ||
               gh release create "$tag" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
-                --title "Cafe Bazaar ${{ github.run_number }}" --notes "APK for uploading to Cafe Bazaar (no self-update, no computer sync)." --latest=false || true
+                --title "Cafe Bazaar ${{ github.run_number }}" --notes "APK for uploading to Cafe Bazaar: a separate app (package com.personalfinance.personal_finance.bazaar), no self-update, no computer sync." --latest=false || true
             gh release upload "$tag" ModiriatMali-Bazaar.apk --repo "${{ github.repository }}" --clobber && break
             sleep $((attempt * 15))
           done

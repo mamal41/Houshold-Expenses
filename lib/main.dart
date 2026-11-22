@@ -767,6 +767,10 @@ const kAppVersion = '1.0.0';
 /// phone/computer sync and no updates from outside the store (Bazaar
 /// updates the app itself).
 const kBazaar = bool.fromEnvironment('BAZAAR');
+
+/// The Bazaar build's number, only for showing the version (it has no
+/// ANDROID_BUILD, so it never looks for updates on GitHub).
+const kBazaarBuild = int.fromEnvironment('BAZAAR_BUILD');
 const kAppBuildNumber = 1;
 // TODO: replace with your real support email and developer/company name
 // before publishing (shown in the About screen and often required by app
@@ -4439,7 +4443,7 @@ class DesktopSideMenu extends StatelessWidget {
 
 /// "Version 1.0.12 · Windows" - the build number is what updates compare.
 String appVersionLabel() {
-  final build = Platform.isWindows ? kWindowsBuild : kAndroidBuild;
+  final build = Platform.isWindows ? kWindowsBuild : (kBazaar ? kBazaarBuild : kAndroidBuild);
   final version = build > 0 ? '1.0.$build' : kAppVersion;
   final platform = Platform.isWindows ? loc('ویندوز') : (Platform.isAndroid ? loc('اندروید') : '');
   return ltr(locf('نسخه‌ی {0}', [persianDigits(version)])) + (platform.isEmpty ? '' : ' • $platform');
