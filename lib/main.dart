@@ -2858,11 +2858,11 @@ class Store {
 
     return AiConfig(
       provider: provider,
-      geminiKey: sp.getString(_geminiKey)?.trim() ?? '',
-      openAiKey: sp.getString(_openAiKey)?.trim() ?? '',
+      geminiKey: sp.getString(_geminiKey)?.replaceAll(RegExp(r'\s'), '') ?? '',
+      openAiKey: sp.getString(_openAiKey)?.replaceAll(RegExp(r'\s'), '') ?? '',
       openAiBaseUrl: val(_openAiUrlKey, AiConfig.defaultOpenAiUrl),
       openAiModel: val(_openAiModelKey, AiConfig.defaultOpenAiModel),
-      claudeKey: sp.getString(_claudeKey)?.trim() ?? '',
+      claudeKey: sp.getString(_claudeKey)?.replaceAll(RegExp(r'\s'), '') ?? '',
       claudeModel: val(_claudeModelKey, AiConfig.defaultClaudeModel),
     );
   }
@@ -6075,6 +6075,8 @@ const _geminiModels = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini
 /// model - which is what used to turn "servers busy" into a spurious
 /// "daily quota exhausted".
 Future<http.Response> _geminiPost(String apiKey, String body) async {
+  // A space or line break copied along with the key makes it invalid.
+  final key = apiKey.replaceAll(RegExp(r'\s'), '');
   http.Response? resp;
   Object? lastNetworkError;
   final attemptedModels = <String>[];
@@ -6083,11 +6085,14 @@ Future<http.Response> _geminiPost(String apiKey, String body) async {
   var sawDailyLimit = false;
   for (final model in _geminiModels) {
     attemptedModels.add(model);
-    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
+    // The key goes in the x-goog-api-key header, as Google documents: newer
+    // keys sent as "?key=" in the address are refused (401,
+    // ACCESS_TOKEN_TYPE_UNSUPPORTED).
+    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent');
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         resp = await http
-            .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+            .post(uri, headers: {'Content-Type': 'application/json', 'x-goog-api-key': key}, body: body)
             .timeout(const Duration(seconds: 45));
         lastNetworkError = null;
       } catch (e) {
@@ -6149,6 +6154,9 @@ Future<http.Response> _geminiPost(String apiKey, String body) async {
   }
   final code = resp.statusCode;
   if (code == 400 && resp.body.contains('API_KEY_INVALID')) {
+    throw GeminiException(loc('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.'), raw);
+  }
+  if (code == 401) {
     throw GeminiException(loc('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.'), raw);
   }
   if (code == 403) {

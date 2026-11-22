@@ -114,6 +114,31 @@ void main() {
     }, () => MockClient((r) async => http.Response('{"error":"bad key"}', 401)));
   });
 
+  test('Gemini gets the key in a header, not in the address', () async {
+    await Store.saveAiConfig(const AiConfig(geminiKey: ' AIza-test\n'));
+    late http.Request seen;
+    await http.runWithClient(() async {
+      expect(await geminiTextRequest((await Store.loadAiKey())!, 'hi'), 'ok');
+    }, () => MockClient((r) async {
+          seen = r;
+          return http.Response(
+              jsonEncode({
+                'candidates': [
+                  {
+                    'content': {
+                      'parts': [
+                        {'text': 'ok'}
+                      ]
+                    }
+                  }
+                ]
+              }),
+              200);
+        }));
+    expect(seen.url.queryParameters.containsKey('key'), isFalse);
+    expect(seen.headers['x-goog-api-key'], 'AIza-test');
+  });
+
   testWidgets('settings screen switches and saves the service', (tester) async {
     tester.view.physicalSize = const Size(500, 1400);
     tester.view.devicePixelRatio = 1;
