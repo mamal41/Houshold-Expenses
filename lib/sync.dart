@@ -84,9 +84,10 @@ bool snapshotsEqual(SyncSnapshot a, SyncSnapshot b) => _same(a, b);
 
 // ============================== Local data ==============================
 
-/// The synced data of this device. A receipt photo stays on the device it
-/// was taken on (its file path means nothing elsewhere), so it's left out
-/// of the synced records and kept as it is locally.
+/// The synced data of this device. A receipt photo's file path means
+/// nothing on the other device, so it's left out of the synced records and
+/// kept as it is locally; the photos themselves travel as separate files
+/// (see Receipt photos below).
 class LocalSyncData {
   static String _id(Map<String, dynamic> j) => '${j['id']}';
 
@@ -418,6 +419,248 @@ class _DriveFile {
   }
 }
 
+// ============================== Receipt photos ==============================
+//
+// Each receipt photo is its own file in the same hidden Drive folder, named
+// "receipt-<version>-<transaction id>.<ext>". The version is taken from the
+// photo file on the device that has it (path, size and time), so a photo
+// changed on one device (cropped again, retaken) is uploaded again and the
+// other device downloads the new one. What each device last uploaded or
+// downloaded is remembered per transaction, so nothing moves twice.
+
+/// A receipt photo file in Drive.
+typedef DriveReceipt = ({String id, String name, String txId, DateTime modified});
+
+/// The transaction a Drive receipt file belongs to, or null for any other
+/// file.
+String? receiptTxId(String name) {
+  final m = RegExp(r'^receipt-[0-9a-f]{10}-(.+)\.[A-Za-z0-9]+$').firstMatch(name);
+  return m?.group(1);
+}
+
+String receiptFileName(String version, String txId, String ext) => 'receipt-$version-$txId.$ext';
+
+/// The version of a photo file on this device.
+String receiptVersion(String path, int length, DateTime modified) =>
+    sha1.convert(utf8.encode('$path|$length|${modified.millisecondsSinceEpoch}')).toString().substring(0, 10);
+
+/// What to do with one transaction's photo.
+sealed class ReceiptAction {
+  final String txId;
+  const ReceiptAction(this.txId);
+}
+
+/// Upload this device's photo under [name] and delete the transaction's
+/// other photo files from Drive.
+class ReceiptUpload extends ReceiptAction {
+  final String name;
+  const ReceiptUpload(super.txId, this.name);
+}
+
+/// Download [file] as this device's photo.
+class ReceiptDownload extends ReceiptAction {
+  final DriveReceipt file;
+  const ReceiptDownload(super.txId, this.file);
+}
+
+/// Delete these Drive files (the photo was removed, or its transaction
+/// deleted).
+class ReceiptDelete extends ReceiptAction {
+  final List<DriveReceipt> files;
+  const ReceiptDelete(super.txId, this.files);
+}
+
+/// Decides what to move for each transaction.
+///
+/// [local]: every transaction on this device -> its photo's version and
+/// file extension, or null when it has no photo here. [state]: per
+/// transaction, the local version and Drive file name of the last transfer.
+List<ReceiptAction> planReceiptSync({
+  required Map<String, ({String version, String ext})?> local,
+  required List<DriveReceipt> drive,
+  required Map<String, ({String local, String drive})> state,
+}) {
+  final byTx = <String, List<DriveReceipt>>{};
+  for (final f in drive) {
+    (byTx[f.txId] ??= []).add(f);
+  }
+  for (final l in byTx.values) {
+    l.sort((a, b) => b.modified.compareTo(a.modified));
+  }
+  final actions = <ReceiptAction>[];
+  for (final e in local.entries) {
+    final id = e.key;
+    final photo = e.value;
+    final files = byTx[id] ?? const <DriveReceipt>[];
+    final newest = files.firstOrNull;
+    final st = state[id];
+    if (photo != null && st?.local != photo.version) {
+      // New or changed here.
+      actions.add(ReceiptUpload(id, receiptFileName(photo.version, id, photo.ext)));
+    } else if (newest != null && (photo == null ? st == null || st.drive != newest.name : st!.drive != newest.name)) {
+      // Only on Drive, or newer there.
+      actions.add(ReceiptDownload(id, newest));
+    } else if (photo == null && st != null && files.isNotEmpty) {
+      // Removed here after it was shared.
+      actions.add(ReceiptDelete(id, files));
+    }
+  }
+  // Photos of transactions deleted.
+  for (final e in byTx.entries) {
+    if (!local.containsKey(e.key)) actions.add(ReceiptDelete(e.key, e.value));
+  }
+  return actions;
+}
+
+class _DriveReceipts {
+  final String token;
+  _DriveReceipts(this.token);
+  Map<String, String> get _auth => {'Authorization': 'Bearer $token'};
+
+  void _check(http.Response r) {
+    if (r.statusCode < 200 || r.statusCode >= 300) throw SyncException(locf('خطای Google Drive ({0})', [r.statusCode]));
+  }
+
+  Future<List<DriveReceipt>> list() async {
+    final out = <DriveReceipt>[];
+    String? page;
+    do {
+      final r = await http.get(
+        Uri.https('www.googleapis.com', '/drive/v3/files', {
+          'spaces': 'appDataFolder',
+          'q': "name contains 'receipt-' and trashed = false",
+          'fields': 'nextPageToken,files(id,name,modifiedTime)',
+          'pageSize': '1000',
+          if (page != null) 'pageToken': page,
+        }),
+        headers: _auth,
+      );
+      _check(r);
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      for (final f in (j['files'] as List? ?? const []).cast<Map<String, dynamic>>()) {
+        final name = '${f['name']}';
+        final tx = receiptTxId(name);
+        if (tx == null) continue;
+        out.add((id: '${f['id']}', name: name, txId: tx, modified: DateTime.tryParse('${f['modifiedTime']}') ?? DateTime(2000)));
+      }
+      page = j['nextPageToken'] as String?;
+    } while (page != null);
+    return out;
+  }
+
+  Future<void> upload(String name, List<int> bytes) async {
+    const boundary = 'receipt-boundary-5c1e';
+    final type = name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+    final meta = jsonEncode({'name': name, 'parents': ['appDataFolder']});
+    final r = await http.post(
+      Uri.https('www.googleapis.com', '/upload/drive/v3/files', {'uploadType': 'multipart'}),
+      headers: {..._auth, 'Content-Type': 'multipart/related; boundary=$boundary'},
+      body: <int>[
+        ...utf8.encode('--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$meta\r\n'),
+        ...utf8.encode('--$boundary\r\nContent-Type: $type\r\n\r\n'),
+        ...bytes,
+        ...utf8.encode('\r\n--$boundary--'),
+      ],
+    );
+    _check(r);
+  }
+
+  Future<List<int>> download(String id) async {
+    final r = await http.get(Uri.https('www.googleapis.com', '/drive/v3/files/$id', {'alt': 'media'}), headers: _auth);
+    _check(r);
+    return r.bodyBytes;
+  }
+
+  Future<void> delete(String id) async {
+    final r = await http.delete(Uri.https('www.googleapis.com', '/drive/v3/files/$id'), headers: _auth);
+    if (r.statusCode != 404) _check(r);
+  }
+}
+
+/// Moves receipt photos between this device and Drive; returns whether
+/// any photo here changed. A photo that fails is tried again next time.
+Future<bool> _syncReceipts(String token) async {
+  const stateKey = 'sync_receipts_state';
+  // At most this many transfers per run; the rest follow in later runs.
+  const maxTransfers = 25;
+  final sp = await SharedPreferences.getInstance();
+  final state = <String, ({String local, String drive})>{};
+  try {
+    final raw = jsonDecode(sp.getString(stateKey) ?? '{}') as Map<String, dynamic>;
+    raw.forEach((k, v) => state[k] = (local: '${v['l']}', drive: '${v['d']}'));
+  } catch (_) {}
+
+  final txs = await Store.loadTransactions();
+  final files = <String, File>{};
+  final local = <String, ({String version, String ext})?>{};
+  for (final t in txs) {
+    final p = t.imagePath;
+    final f = p == null ? null : File(p);
+    if (p != null && !(await f!.exists())) {
+      // The file is gone from this device: fetch it again, never delete it
+      // from Drive for that.
+      state.remove(t.id);
+      local[t.id] = null;
+    } else if (f != null) {
+      final stat = await f.stat();
+      files[t.id] = f;
+      final ext = p!.contains('.') ? p.split('.').last.toLowerCase() : 'jpg';
+      local[t.id] = (version: receiptVersion(p, stat.size, stat.modified), ext: ext.length > 5 ? 'jpg' : ext);
+    } else {
+      local[t.id] = null;
+    }
+  }
+
+  final drive = _DriveReceipts(token);
+  final remote = await drive.list();
+  final actions = planReceiptSync(local: local, drive: remote, state: state);
+  final newPaths = <String, String>{};
+  var transfers = 0;
+  for (final a in actions) {
+    if (transfers >= maxTransfers) break;
+    try {
+      switch (a) {
+        case ReceiptUpload(:final txId, :final name):
+          transfers++;
+          if (!remote.any((f) => f.name == name)) await drive.upload(name, await files[txId]!.readAsBytes());
+          for (final old in remote.where((f) => f.txId == txId && f.name != name)) {
+            await drive.delete(old.id);
+          }
+          state[txId] = (local: local[txId]!.version, drive: name);
+        case ReceiptDownload(:final txId, :final file):
+          transfers++;
+          final bytes = await drive.download(file.id);
+          final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/draft_receipts');
+          await dir.create(recursive: true);
+          final ext = file.name.split('.').last;
+          final path = '${dir.path}${Platform.pathSeparator}$txId.$ext';
+          await File(path).writeAsBytes(bytes, flush: true);
+          final stat = await File(path).stat();
+          newPaths[txId] = path;
+          state[txId] = (local: receiptVersion(path, stat.size, stat.modified), drive: file.name);
+        case ReceiptDelete(:final txId, :final files):
+          for (final f in files) {
+            await drive.delete(f.id);
+          }
+          state.remove(txId);
+      }
+    } on SocketException {
+      rethrow;
+    } catch (_) {
+      // This photo only; the next run tries again.
+    }
+  }
+  // Forget transactions that no longer exist.
+  state.removeWhere((k, _) => !local.containsKey(k));
+  await sp.setString(stateKey, jsonEncode({for (final e in state.entries) e.key: {'l': e.value.local, 'd': e.value.drive}}));
+
+  if (newPaths.isEmpty) return false;
+  // Re-read: the person may have changed something meanwhile.
+  final now = await Store.loadTransactions();
+  await Store.saveTransactions([for (final t in now) newPaths[t.id] != null ? t.copyWith(imagePath: newPaths[t.id]) : t]);
+  return true;
+}
+
 // ============================== Sync service ==============================
 
 enum SyncState { off, idle, syncing, error }
@@ -434,6 +677,10 @@ class SyncService {
   final state = ValueNotifier<SyncState>(SyncState.off);
   String? lastError;
   DateTime? lastSync;
+
+  /// The Google sign-in was lost (e.g. Google ended it): syncing needs the
+  /// person to sign in again.
+  bool needsSignIn = false;
 
   static const _enabledKey = 'sync_enabled';
   static const _lastSyncKey = 'sync_last_at';
@@ -492,6 +739,14 @@ class SyncService {
     return true;
   }
 
+  /// Signs in again after the sign-in was lost, keeping the synced state.
+  Future<bool> signInAgain() async {
+    if (!await google.signIn()) return false;
+    needsSignIn = false;
+    await syncNow();
+    return true;
+  }
+
   Future<void> disable() async {
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_enabledKey, false);
@@ -532,7 +787,11 @@ class SyncService {
     state.value = SyncState.syncing;
     try {
       final token = await google.accessToken();
-      if (token == null) throw SyncException(loc('وارد حساب گوگل نشده‌اید.'));
+      if (token == null) {
+        needsSignIn = true;
+        throw SyncException(loc('ورود به حساب گوگل منقضی شده است. دوباره وارد شوید.'));
+      }
+      needsSignIn = false;
       final drive = _DriveFile(token);
       // Another device may upload between our download and upload; then
       // merge again with what it uploaded.
@@ -558,6 +817,8 @@ class SyncService {
           dataVersion.value++;
         }
         await _saveBase(merged);
+        // Then the receipt photos.
+        if (await _syncReceipts(token)) dataVersion.value++;
         lastSync = DateTime.now();
         lastError = null;
         final sp = await SharedPreferences.getInstance();
@@ -632,6 +893,20 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
     }
   }
 
+  Future<void> _signInAgain() async {
+    setState(() => busy = true);
+    String? error;
+    try {
+      if (!await sync.signInAgain()) error = loc('ورود به حساب گوگل انجام نشد.');
+    } catch (e) {
+      error = locf('ورود به حساب گوگل انجام نشد: {0}', [e]);
+    }
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (error != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+    await _loadEmail();
+  }
+
   Future<void> _turnOff() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -665,7 +940,7 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            loc('اطلاعات در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود؛ فقط این برنامه به آن دسترسی دارد. تصویر رسیدها و تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.'),
+            loc('اطلاعات و تصویر رسیدها در پوشه‌ی مخفی همین برنامه در Google Drive خودتان نگه داشته می‌شود؛ فقط این برنامه به آن دسترسی دارد. تنظیمات هر دستگاه (قفل، زبان، کلید هوش مصنوعی) همگام نمی‌شوند.'),
             style: muted,
           ),
           const SizedBox(height: 20),
@@ -723,6 +998,17 @@ class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            if (sync.needsSignIn) ...[
+              FilledButton.icon(
+                onPressed: busy ? null : _signInAgain,
+                icon: busy
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.login),
+                label: Text(loc('ورود دوباره به حساب گوگل')),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              ),
+              const SizedBox(height: 8),
+            ],
             FilledButton.icon(
               onPressed: st == SyncState.syncing ? null : () => sync.syncNow(),
               icon: const Icon(Icons.sync),

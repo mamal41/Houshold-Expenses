@@ -102,4 +102,62 @@ void main() {
     expect(saved.imagePath, '/data/receipt.jpg');
     expect(saved.note, 'from pc');
   });
+
+  group('receipt photos', () {
+    DriveReceipt f(String name, int minute) =>
+        (id: 'id-$name', name: name, txId: receiptTxId(name)!, modified: DateTime(2026, 1, 1, 0, minute));
+
+    test('file names', () {
+      expect(receiptFileName('0123456789', 'a-b-c', 'jpg'), 'receipt-0123456789-a-b-c.jpg');
+      expect(receiptTxId('receipt-0123456789-a-b-c.jpg'), 'a-b-c');
+      expect(receiptTxId('household-finance-sync.json'), isNull);
+    });
+
+    test('a new photo here is uploaded, one only on Drive is downloaded', () {
+      final a = planReceiptSync(
+        local: {'t1': (version: 'aaaaaaaaaa', ext: 'jpg'), 't2': null},
+        drive: [f('receipt-bbbbbbbbbb-t2.jpg', 1)],
+        state: {},
+      );
+      expect(a, hasLength(2));
+      expect((a[0] as ReceiptUpload).name, 'receipt-aaaaaaaaaa-t1.jpg');
+      expect((a[1] as ReceiptDownload).file.name, 'receipt-bbbbbbbbbb-t2.jpg');
+    });
+
+    test('nothing moves when both sides match the last transfer', () {
+      final a = planReceiptSync(
+        local: {'t1': (version: 'aaaaaaaaaa', ext: 'jpg')},
+        drive: [f('receipt-cccccccccc-t1.jpg', 1)],
+        state: {'t1': (local: 'aaaaaaaaaa', drive: 'receipt-cccccccccc-t1.jpg')},
+      );
+      expect(a, isEmpty);
+    });
+
+    test('a photo changed on the other device is downloaded again', () {
+      final a = planReceiptSync(
+        local: {'t1': (version: 'aaaaaaaaaa', ext: 'jpg')},
+        drive: [f('receipt-cccccccccc-t1.jpg', 1), f('receipt-dddddddddd-t1.jpg', 5)],
+        state: {'t1': (local: 'aaaaaaaaaa', drive: 'receipt-cccccccccc-t1.jpg')},
+      );
+      expect((a.single as ReceiptDownload).file.name, 'receipt-dddddddddd-t1.jpg');
+    });
+
+    test('a photo changed here is uploaded again', () {
+      final a = planReceiptSync(
+        local: {'t1': (version: 'eeeeeeeeee', ext: 'jpg')},
+        drive: [f('receipt-cccccccccc-t1.jpg', 1)],
+        state: {'t1': (local: 'aaaaaaaaaa', drive: 'receipt-cccccccccc-t1.jpg')},
+      );
+      expect((a.single as ReceiptUpload).name, 'receipt-eeeeeeeeee-t1.jpg');
+    });
+
+    test('photos of deleted transactions or removed photos are deleted', () {
+      final a = planReceiptSync(
+        local: {'t1': null},
+        drive: [f('receipt-cccccccccc-t1.jpg', 1), f('receipt-cccccccccc-gone.jpg', 1)],
+        state: {'t1': (local: 'aaaaaaaaaa', drive: 'receipt-cccccccccc-t1.jpg')},
+      );
+      expect(a.whereType<ReceiptDelete>().map((d) => d.txId).toSet(), {'t1', 'gone'});
+    });
+  });
 }
