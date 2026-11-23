@@ -6046,13 +6046,105 @@ class GeminiException implements Exception {
   String toString() => friendlyMessage;
 }
 
-// Gemini model names/aliases change fairly often as Google retires older
-// models; try the primary one first and fall back to an alternative if it
-// 404s (model retired/renamed) rather than failing outright.
-// Lite variants have a much more generous free-tier daily quota (roughly
-// 1000+ requests/day) than the full Flash models (as low as ~20/day for
-// some newer ones), so try those first to avoid hitting quota limits.
-const _geminiModels = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash'];
+// Google renames and retires Gemini models every few months, so the models
+// are not fixed in the app: the list of models this key can use is asked
+// from Google (and remembered for a while), and the best ones are tried in
+// turn. This built-in list is only for when that list can't be read; the
+// "-latest" names always point at Google's newest Flash-Lite / Flash.
+const _geminiFallbackModels = [
+  'gemini-flash-lite-latest',
+  'gemini-2.5-flash-lite',
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
+  'gemini-3.5-flash',
+];
+const _geminiApi = 'https://generativelanguage.googleapis.com/v1beta';
+const _geminiModelsCacheKey = 'gemini_models_cache';
+
+/// Pauses before each round over the models still worth trying: a busy
+/// model ("high demand", 503) often answers a few seconds later. Changed
+/// only by tests.
+List<Duration> geminiRetryPauses = const [Duration.zero, Duration(seconds: 4), Duration(seconds: 10)];
+
+/// The Gemini models worth trying, best first, from Google's list of the
+/// models a key can use: Flash-Lite before Flash (a much bigger free quota,
+/// and less often busy), stable before preview, newest first - at most
+/// three of each - and then one Gemma model as a last resort (served
+/// separately, so usually free when Gemini is busy). Pro, image, audio,
+/// embedding and other special models are left out.
+List<String> rankGeminiModels(List<Map<String, dynamic>> models) {
+  final gemini = <({String id, bool lite, bool preview, double version})>[];
+  final gemma = <({String id, int size})>[];
+  String idOf(Map<String, dynamic> m) => '${m['name'] ?? ''}'.replaceFirst('models/', '');
+  final ids = {for (final m in models) idOf(m)};
+  for (final m in models) {
+    final id = idOf(m);
+    final methods = [for (final x in (m['supportedGenerationMethods'] as List? ?? const [])) '$x'];
+    if (!methods.contains('generateContent')) continue;
+    // A version-pinned copy ("...-001") of a model that's listed anyway.
+    final pinned = RegExp(r'^(.+)-\d{3}$').firstMatch(id);
+    if (pinned != null && ids.contains(pinned.group(1))) continue;
+    if (id.startsWith('gemma-')) {
+      // Only the larger instruction-tuned ones read images well.
+      final size = int.tryParse(RegExp(r'-(\d+)b-').firstMatch('$id-')?.group(1) ?? '');
+      if (size != null && size >= 12 && id.contains('-it')) gemma.add((id: id, size: size));
+      continue;
+    }
+    if (!id.startsWith('gemini-') || !id.contains('flash')) continue;
+    if (RegExp(r'pro|ultra|image|tts|audio|live|embed|robotics|computer|exp|thinking|8b').hasMatch(id)) continue;
+    final alias = id.endsWith('-latest');
+    final version = double.tryParse(RegExp(r'^gemini-(\d+(?:\.\d+)?)-').firstMatch(id)?.group(1) ?? '') ?? 0;
+    gemini.add((id: id, lite: id.contains('lite'), preview: alias || id.contains('preview'), version: alias ? 1000 : version));
+  }
+  gemini.sort((a, b) {
+    if (a.preview != b.preview) return a.preview ? 1 : -1;
+    if (a.version != b.version) return b.version.compareTo(a.version);
+    return a.id.length.compareTo(b.id.length);
+  });
+  gemma.sort((a, b) => b.size.compareTo(a.size));
+  return [
+    ...gemini.where((g) => g.lite).take(3).map((g) => g.id),
+    ...gemini.where((g) => !g.lite).take(3).map((g) => g.id),
+    ...gemma.take(1).map((g) => g.id),
+  ];
+}
+
+/// The models to try for [key]: Google's list, remembered for 12 hours
+/// (per key, by a hash of it); the built-in list when it can't be read.
+Future<List<String>> _geminiModelsFor(String key) async {
+  final sp = await SharedPreferences.getInstance();
+  final tag = sha256.convert(utf8.encode(key)).toString().substring(0, 16);
+  try {
+    final cached = jsonDecode(sp.getString(_geminiModelsCacheKey) ?? 'null');
+    if (cached is Map && cached['key'] == tag) {
+      final at = DateTime.tryParse('${cached['at']}');
+      final list = [for (final m in (cached['models'] as List? ?? const [])) '$m'];
+      if (at != null && DateTime.now().difference(at) < const Duration(hours: 12) && list.isNotEmpty) return list;
+    }
+  } catch (_) {}
+  try {
+    final models = <Map<String, dynamic>>[];
+    String? page;
+    do {
+      final r = await http.get(
+        Uri.parse('$_geminiApi/models').replace(queryParameters: {'pageSize': '1000', if (page != null) 'pageToken': page}),
+        headers: {'x-goog-api-key': key},
+      ).timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) break;
+      final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      models.addAll((j['models'] as List? ?? const []).whereType<Map<String, dynamic>>());
+      page = j['nextPageToken'] as String?;
+    } while (page != null && page.isNotEmpty);
+    final ranked = rankGeminiModels(models);
+    if (ranked.isNotEmpty) {
+      await sp.setString(_geminiModelsCacheKey, jsonEncode({'key': tag, 'at': DateTime.now().toIso8601String(), 'models': ranked}));
+      return ranked;
+    }
+  } catch (_) {
+    // Offline or the list is unavailable: the built-in names.
+  }
+  return _geminiFallbackModels;
+}
 
 /// What a Gemini 429 response is actually about: Google uses the same code
 /// for the per-minute rate limit and for the daily quota, and only the
@@ -6064,105 +6156,157 @@ const _geminiModels = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite', 'gemini
   return (daily: daily, retryAfter: secs == null ? null : Duration(milliseconds: (secs * 1000).round()));
 }
 
-/// Sends [body] to Gemini, walking the model fallback list, and returns the
-/// first successful response or throws a [GeminiException] whose message
-/// names the real cause.
+/// [body] as sent to [model]: Gemma models can't be asked for JSON output
+/// (the prompt asks for JSON anyway, and the answer is parsed leniently).
+Map<String, dynamic> _geminiBodyFor(String model, Map<String, dynamic> body) {
+  if (!model.startsWith('gemma-')) return body;
+  final config = Map<String, dynamic>.from(body['generationConfig'] as Map? ?? const {})..remove('response_mime_type');
+  return {...body}..remove('generationConfig')..addAll({if (config.isNotEmpty) 'generationConfig': config});
+}
+
+/// Sends [body] to Gemini and returns the first successful response, or
+/// throws a [GeminiException] whose message names the real cause and whose
+/// detail lists what each model answered.
 ///
-/// Each attempt counts against the free-tier limits, so retries are kept to
-/// a minimum: an overloaded (503) or rate-limited (429) model gets at most
-/// one more try after a pause and then the next model is used instead
-/// (each model has its own separate quota), rather than hammering the same
-/// model - which is what used to turn "servers busy" into a spurious
-/// "daily quota exhausted".
-Future<http.Response> _geminiPost(String apiKey, String body) async {
+/// The models are tried in rounds: a retired model (404) or one whose daily
+/// quota is gone is dropped, a busy (5xx) or per-minute-limited one is
+/// tried again in the next round after a pause. Each model has its own
+/// quota, so moving on beats hammering one busy model.
+Future<http.Response> _geminiPost(String apiKey, Map<String, dynamic> body) async {
   // A space or line break copied along with the key makes it invalid.
   final key = apiKey.replaceAll(RegExp(r'\s'), '');
-  http.Response? resp;
-  Object? lastNetworkError;
-  final attemptedModels = <String>[];
+  final models = await _geminiModelsFor(key);
+  final inPlay = [...models];
+  final results = <String, String>{};
+  http.Response? last;
+  // The answer that ended the tries early (a wrong key or request).
+  http.Response? fatal;
+  Object? networkError;
+  var networkFailures = 0;
   var sawOverload = false;
   var sawPerMinuteLimit = false;
   var sawDailyLimit = false;
-  for (final model in _geminiModels) {
-    attemptedModels.add(model);
-    // The key goes in the x-goog-api-key header, as Google documents: newer
-    // keys sent as "?key=" in the address are refused (401,
-    // ACCESS_TOKEN_TYPE_UNSUPPORTED).
-    final uri = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent');
-    for (var attempt = 0; attempt < 2; attempt++) {
+
+  String detail() {
+    final lines = [for (final m in models) if (results[m] != null) '$m: ${results[m]}'].join('\n');
+    return last != null
+        ? locf('نتیجه‌ی هر مدل:\n{0}\n\nآخرین پاسخ: HTTP {1}\n{2}', [lines, last.statusCode, utf8.decode(last.bodyBytes, allowMalformed: true)])
+        : locf('نتیجه‌ی هر مدل:\n{0}\n\nخطای شبکه: {1}', [lines, networkError]);
+  }
+
+  rounds:
+  for (final pause in geminiRetryPauses) {
+    if (inPlay.isEmpty) break;
+    if (pause > Duration.zero) await Future.delayed(pause);
+    for (final model in [...inPlay]) {
+      final http.Response r;
       try {
-        resp = await http
-            .post(uri, headers: {'Content-Type': 'application/json', 'x-goog-api-key': key}, body: body)
-            .timeout(const Duration(seconds: 45));
-        lastNetworkError = null;
+        // The key goes in the x-goog-api-key header, as Google documents:
+        // newer keys sent as "?key=" in the address are refused (401,
+        // ACCESS_TOKEN_TYPE_UNSUPPORTED).
+        r = await http
+            .post(
+              Uri.parse('$_geminiApi/models/$model:generateContent'),
+              headers: {'Content-Type': 'application/json', 'x-goog-api-key': key},
+              body: jsonEncode(_geminiBodyFor(model, body)),
+            )
+            .timeout(const Duration(seconds: 60));
       } catch (e) {
-        lastNetworkError = e;
-        resp = null;
-        if (attempt == 1) break;
-        await Future.delayed(const Duration(seconds: 2));
+        networkError = e;
+        results[model] = locf('خطای شبکه: {0}', [e]);
+        // No answer at all yet, twice: there's no connection to Google.
+        if (last == null && ++networkFailures >= 2) break rounds;
         continue;
       }
-      final code = resp.statusCode;
-      if (code == 200) return resp;
-      if (code == 503 || code == 500) {
-        sawOverload = true;
-        if (attempt == 0) {
-          await Future.delayed(const Duration(seconds: 3));
-          continue;
-        }
-        break;
-      }
-      if (code == 429) {
-        final quota = _parseGeminiQuota(resp.body);
-        if (quota.daily) {
+      last = r;
+      results[model] = 'HTTP ${r.statusCode}';
+      final code = r.statusCode;
+      if (code == 200) return r;
+      if (code == 404) {
+        // Retired or renamed: look the list up again next time.
+        inPlay.remove(model);
+        (await SharedPreferences.getInstance()).remove(_geminiModelsCacheKey);
+      } else if (code == 429) {
+        if (_parseGeminiQuota(r.body).daily) {
           // This model's daily quota is gone; retrying it is pointless.
           sawDailyLimit = true;
-          break;
+          inPlay.remove(model);
+        } else {
+          sawPerMinuteLimit = true;
         }
-        sawPerMinuteLimit = true;
-        final wait = quota.retryAfter ?? const Duration(seconds: 10);
-        if (attempt == 0 && wait <= const Duration(seconds: 20)) {
-          await Future.delayed(wait + const Duration(seconds: 1));
-          continue;
-        }
-        break;
+      } else if (code >= 500) {
+        sawOverload = true;
+      } else if (model.startsWith('gemma-')) {
+        // Something the last-resort model can't do; the others decide.
+        inPlay.remove(model);
+      } else {
+        // A wrong key or request: another model won't fix it.
+        fatal = r;
+        break rounds;
       }
-      break;
     }
-    // No connection at all - other models won't fare any better.
-    if (resp == null) break;
-    // Retired/renamed model, overloaded or out of quota: try the next one.
-    // Anything else (bad key, bad request) won't be fixed by another model.
-    if (![404, 429, 500, 503].contains(resp.statusCode)) break;
   }
-  final raw = resp != null
-      ? locf('مدل‌های امتحان‌شده: {0}\nHTTP {1}\n{2}', [(attemptedModels.join(', ')), (resp.statusCode), (resp.body)])
-      : locf('مدل‌های امتحان‌شده: {0}\nخطای شبکه: {1}', [(attemptedModels.join(', ')), lastNetworkError]);
+
+  final resp = last;
   if (resp == null) {
-    throw GeminiException(loc('اتصال به Gemini برقرار نشد. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.'), raw);
+    throw GeminiException(loc('اتصال به Gemini برقرار نشد. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.'), detail());
+  }
+  if (fatal != null) {
+    final code = fatal.statusCode;
+    if (code == 401 || (code == 400 && fatal.body.contains('API_KEY_INVALID'))) {
+      throw GeminiException(loc('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.'), detail());
+    }
+    if (code == 403) {
+      throw GeminiException(loc('کلید API جمنای اجازه‌ی دسترسی ندارد (HTTP 403). آن را در تنظیمات بررسی کنید.'), detail());
+    }
+    throw GeminiException(locf('خطای Gemini API ({0})', [code]), detail());
+  }
+  if (sawOverload) {
+    throw GeminiException(
+        loc('سرورهای Gemini الان شلوغ‌اند و همه‌ی مدل‌های در دسترس امتحان شد. چند دقیقه‌ی دیگر دوباره امتحان کنید، یا در «تنظیمات › هوش مصنوعی» سرویس دیگری انتخاب کنید.'),
+        detail());
   }
   if (sawPerMinuteLimit) {
     throw GeminiException(
         loc('تعداد درخواست‌ها به Gemini در یک دقیقه از حد مجاز رایگان گذشت. حدود یک دقیقه صبر کنید و دوباره امتحان کنید (سهمیه‌ی روزانه تمام نشده).'),
-        raw);
-  }
-  if (sawOverload) {
-    throw GeminiException(loc('سرورهای Gemini موقتاً شلوغ هستند. لطفاً چند دقیقه دیگر دوباره امتحان کنید.'), raw);
+        detail());
   }
   if (sawDailyLimit) {
-    throw GeminiException(loc('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.'), raw);
+    throw GeminiException(loc('سهمیه‌ی رایگان روزانه‌ی Gemini برای امروز تمام شده. فردا دوباره امتحان کنید.'), detail());
   }
-  final code = resp.statusCode;
-  if (code == 400 && resp.body.contains('API_KEY_INVALID')) {
-    throw GeminiException(loc('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.'), raw);
+  if (resp.statusCode == 404) {
+    throw GeminiException(loc('هیچ‌کدام از مدل‌های Gemini برای این کلید در دسترس نبود. کمی بعد دوباره امتحان کنید.'), detail());
   }
-  if (code == 401) {
-    throw GeminiException(loc('کلید API جمنای نامعتبر است. آن را در تنظیمات بررسی کنید.'), raw);
+  throw GeminiException(locf('خطای Gemini API ({0})', [resp.statusCode]), detail());
+}
+
+/// The answer text of a Gemini response (all its text parts, without the
+/// model's thoughts), or throws a [GeminiException] naming why there's none.
+String _geminiText(http.Response resp, {required bool image}) {
+  final rawBody = utf8.decode(resp.bodyBytes);
+  final decoded = jsonDecode(rawBody);
+  final candidates = (decoded is Map) ? decoded['candidates'] : null;
+  if (candidates is! List || candidates.isEmpty) {
+    final feedback = (decoded is Map) ? decoded['promptFeedback'] : null;
+    final blockReason = (feedback is Map) ? feedback['blockReason'] : null;
+    if (blockReason != null) {
+      throw GeminiException(
+          image
+              ? locf('Gemini این تصویر را پردازش نکرد (دلیل: {0}).', [blockReason])
+              : locf('Gemini این درخواست را پردازش نکرد (دلیل: {0}).', [blockReason]),
+          rawBody);
+    }
+    throw GeminiException(loc('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).'), rawBody);
   }
-  if (code == 403) {
-    throw GeminiException(loc('کلید API جمنای اجازه‌ی دسترسی ندارد (HTTP 403). آن را در تنظیمات بررسی کنید.'), raw);
+  final parts = candidates[0]?['content']?['parts'];
+  final text = parts is List
+      ? parts.whereType<Map>().where((p) => p['thought'] != true && p['text'] is String).map((p) => p['text'] as String).join()
+      : '';
+  if (text.trim().isEmpty) {
+    final finishReason = candidates[0]?['finishReason'];
+    throw GeminiException(locf('پاسخ Gemini قابل خواندن نبود{0}.', [(finishReason != null ? ' (finishReason: $finishReason)' : '')]), rawBody);
   }
-  throw GeminiException(locf('خطای Gemini API ({0})', [code]), raw);
+  return text;
 }
 
 Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, String prompt) async {
@@ -6172,48 +6316,22 @@ Future<Map<String, dynamic>?> _geminiRequest(String apiKey, String imagePath, St
     return parseAiJson(text, cfg.provider.label);
   }
   final bytes = await File(imagePath).readAsBytes();
-  final b64 = base64Encode(bytes);
-  final body = jsonEncode({
+  final resp = await _geminiPost(apiKey, {
     'contents': [
       {
         'parts': [
           {'text': prompt},
           {
-            'inline_data': {'mime_type': imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg', 'data': b64}
+            'inline_data': {'mime_type': imagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg', 'data': base64Encode(bytes)}
           },
         ],
       },
     ],
     'generationConfig': {'response_mime_type': 'application/json'},
   });
-
-  final resp = await _geminiPost(apiKey, body);
-  final rawBody = utf8.decode(resp.bodyBytes);
-  final decoded = jsonDecode(rawBody);
-  final candidates = decoded['candidates'];
-  if (candidates == null || candidates is! List || candidates.isEmpty) {
-    final blockReason = decoded['promptFeedback']?['blockReason'];
-    if (blockReason != null) {
-      throw GeminiException(locf('Gemini این تصویر را پردازش نکرد (دلیل: {0}).', [blockReason]), rawBody);
-    }
-    throw GeminiException(loc('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).'), rawBody);
-  }
-  final finishReason = candidates[0]?['finishReason'];
-  var text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
-  if (text == null) {
-    throw GeminiException(locf('پاسخ Gemini قابل خواندن نبود{0}.', [(finishReason != null ? ' (finishReason: $finishReason)' : '')]), rawBody);
-  }
-  // The API is asked for pure JSON, but occasionally still wraps it in a
-  // ```json ... ``` markdown fence - strip that defensively before parsing.
-  text = text.trim();
-  if (text.startsWith('```')) {
-    text = text.replaceFirst(RegExp(r'^```[a-zA-Z]*\n?'), '').replaceFirst(RegExp(r'```\s*$'), '').trim();
-  }
-  try {
-    return jsonDecode(text) as Map<String, dynamic>;
-  } on FormatException {
-    throw GeminiException(loc('پاسخ Gemini به‌صورت JSON معتبر نبود.'), text);
-  }
+  // Asked for pure JSON, but sometimes still wrapped in a ```json fence or
+  // a sentence: read it leniently.
+  return parseAiJson(_geminiText(resp, image: true), 'Gemini');
 }
 
 const _receiptPrompt = 'You are an expert receipt-reading assistant. Read the attached receipt image '
@@ -6294,7 +6412,7 @@ Future<Map<String, dynamic>?> geminiExtractPayslip(String apiKey, String imagePa
 Future<String> geminiTextRequest(String apiKey, String prompt) async {
   final cfg = await Store.loadAiConfig();
   if (cfg.provider != AiProvider.gemini) return (await aiChat(cfg, prompt)).trim();
-  final body = jsonEncode({
+  final resp = await _geminiPost(apiKey, {
     'contents': [
       {
         'parts': [
@@ -6303,23 +6421,7 @@ Future<String> geminiTextRequest(String apiKey, String prompt) async {
       },
     ],
   });
-
-  final resp = await _geminiPost(apiKey, body);
-  final rawBody = utf8.decode(resp.bodyBytes);
-  final decoded = jsonDecode(rawBody);
-  final candidates = decoded['candidates'];
-  if (candidates == null || candidates is! List || candidates.isEmpty) {
-    final blockReason = decoded['promptFeedback']?['blockReason'];
-    if (blockReason != null) {
-      throw GeminiException(locf('Gemini این درخواست را پردازش نکرد (دلیل: {0}).', [blockReason]), rawBody);
-    }
-    throw GeminiException(loc('پاسخ نامعتبر از Gemini دریافت شد (بدون نتیجه).'), rawBody);
-  }
-  final text = candidates[0]?['content']?['parts']?[0]?['text'] as String?;
-  if (text == null) {
-    throw GeminiException(loc('پاسخ Gemini قابل خواندن نبود.'), rawBody);
-  }
-  return text.trim();
+  return _geminiText(resp, image: false).trim();
 }
 
 // ============================== Other AI services ==============================
