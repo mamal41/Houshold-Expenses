@@ -8445,9 +8445,12 @@ class _DashboardChartsState extends State<DashboardCharts> {
             children: [
               Icon(up ? Icons.trending_up : Icons.trending_down, color: up ? Colors.red : Colors.green, size: 18),
               const SizedBox(width: 4),
-              Text(
-                locf('هزینه‌ی این ماه {0} {1} از ماه قبل', [(ltr(persianDigits('${change.abs().round()}%'))), (up ? loc('بیشتر') : loc('کمتر'))]),
-                style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
+              // Wraps where the words are longer (German).
+              Flexible(
+                child: Text(
+                  locf('هزینه‌ی این ماه {0} {1} از ماه قبل', [(ltr(persianDigits('${change.abs().round()}%'))), (up ? loc('بیشتر') : loc('کمتر'))]),
+                  style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
+                ),
               ),
             ],
           ),
@@ -15225,6 +15228,387 @@ class ReportTransactionsScreen extends StatelessWidget {
   }
 }
 
+// ============================== Chart pieces ==============================
+
+/// The colors of the report charts: one set of hues, each with a light and a
+/// dark step, checked for color-blind safety and contrast against the cards
+/// of both themes. Categories take the slots; the status colors mean good /
+/// bad only and always come with an icon and words.
+class ChartColors {
+  const ChartColors._(this.dark);
+  final bool dark;
+  factory ChartColors.of(BuildContext context) => ChartColors._(Theme.of(context).brightness == Brightness.dark);
+
+  /// How many categories get a color of their own; the rest share [other].
+  static const slots = 5;
+  static const _light = [Color(0xFF2A78D6), Color(0xFFEB6834), Color(0xFF1BAF7A), Color(0xFFEDA100), Color(0xFFE87BA4)];
+  static const _dark = [Color(0xFF3987E5), Color(0xFFD95926), Color(0xFF199E70), Color(0xFFC98500), Color(0xFFD55181)];
+
+  Color slot(int i) => (dark ? _dark : _light)[i];
+  Color get accent => slot(0);
+  Color get other => dark ? const Color(0xFF5E5D68) : const Color(0xFFB4B1BD);
+  Color get track => dark ? const Color(0xFF34343A) : const Color(0xFFE4E1E9);
+  Color get good => const Color(0xFF0CA30C);
+  Color get goodText => dark ? const Color(0xFF0CA30C) : const Color(0xFF006300);
+  Color get bad => const Color(0xFFD03B3B);
+  Color get badText => dark ? const Color(0xFFFF8A80) : const Color(0xFFB3261E);
+  Color get warning => const Color(0xFFFAB219);
+  Color get warningText => dark ? const Color(0xFFFAB219) : const Color(0xFF8A5A00);
+}
+
+/// The top-level category [categoryId] belongs to ('_uncategorized_' for one
+/// that no longer exists).
+String topCategoryId(String categoryId, List<Category> categories) {
+  var cat = categories.where((c) => c.id == categoryId).firstOrNull;
+  if (cat == null) return '_uncategorized_';
+  final seen = <String>{};
+  while (cat!.parentId != null && seen.add(cat.id)) {
+    final parent = categories.where((c) => c.id == cat!.parentId).firstOrNull;
+    if (parent == null) break;
+    cat = parent;
+  }
+  return cat.id;
+}
+
+/// A color slot for each of the top-level expense categories spent on most in
+/// the last 12 months: a category keeps its color on every chart and in every
+/// period (its color doesn't change with the filters); the others share
+/// [ChartColors.other].
+Map<String, int> categoryColorSlots(List<Transaction> tx, List<Category> categories, bool Function(Transaction t) counts) {
+  final now = DateTime.now();
+  final since = now.subtract(const Duration(days: 365));
+  final totals = <String, double>{};
+  for (final t in tx) {
+    if (t.type != TxType.expense || t.categoryId.startsWith('_transfer')) continue;
+    if (t.date.isBefore(since) || t.date.isAfter(now) || !counts(t)) continue;
+    final id = topCategoryId(t.categoryId, categories);
+    totals[id] = (totals[id] ?? 0) + t.amount;
+  }
+  final ranked = totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  return {for (var i = 0; i < ranked.length && i < ChartColors.slots; i++) ranked[i].key: i};
+}
+
+/// A headline figure: a label with its icon, the value, and how it compares
+/// with the period before (arrow and words, colored by whether that's good).
+class StatTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+  final ({IconData icon, Color color, String text})? delta;
+  final String? caption;
+  final VoidCallback? onTap;
+  const StatTile({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+    this.delta,
+    this.caption,
+    this.onTap,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final d = delta;
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(color: color.withValues(alpha: 0.16), shape: BoxShape.circle),
+                    child: Icon(icon, size: 17, color: color),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(label, style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant, fontWeight: FontWeight.w500)),
+                  ),
+                  if (onTap != null) Icon(Icons.chevron_left, size: 18, color: scheme.onSurfaceVariant),
+                ],
+              ),
+              const SizedBox(height: 10),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+              ),
+              if (d != null) ...[
+                const SizedBox(height: 6),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(d.icon, size: 16, color: d.color),
+                    const SizedBox(width: 4),
+                    Expanded(child: Text(d.text, style: TextStyle(fontSize: 12, color: d.color, fontWeight: FontWeight.w500))),
+                  ],
+                ),
+              ],
+              if (caption != null) ...[
+                const SizedBox(height: 2),
+                Text(caption!, style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant)),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One whole split into parts, as one thin bar of colored blocks (widths in
+/// proportion, a gap between blocks); the rows below it name the parts.
+class ShareBar extends StatelessWidget {
+  final List<({double value, Color color})> parts;
+  final double height;
+  const ShareBar({required this.parts, this.height = 12, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = parts.where((p) => p.value > 0).toList();
+    final total = shown.fold(0.0, (s, p) => s + p.value);
+    if (total <= 0) return const SizedBox.shrink();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(height / 2),
+      child: SizedBox(
+        height: height,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < shown.length; i++) ...[
+              if (i > 0) const SizedBox(width: 2),
+              Expanded(flex: max(1, (shown[i].value / total * 1000).round()), child: ColoredBox(color: shown[i].color)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A bar on a track: [fraction] of the width filled, and an optional thin
+/// line at [marker] for a second value on the same scale.
+class MeterBar extends StatelessWidget {
+  final double fraction;
+  final Color color;
+  final double? marker;
+  final double height;
+  const MeterBar({required this.fraction, required this.color, this.marker, this.height = 8, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ChartColors.of(context);
+    final ink = Theme.of(context).colorScheme.onSurface;
+    final radius = BorderRadius.circular(height / 2);
+    return LayoutBuilder(builder: (context, c) {
+      final w = c.maxWidth;
+      final f = fraction.isFinite ? fraction.clamp(0.0, 1.0) : 0.0;
+      final fill = f <= 0 ? 0.0 : max(height, w * f);
+      final m = marker;
+      return SizedBox(
+        height: m == null ? height : height + 8,
+        child: Stack(
+          alignment: AlignmentDirectional.centerStart,
+          children: [
+            Container(height: height, decoration: BoxDecoration(color: colors.track, borderRadius: radius)),
+            if (fill > 0) Container(width: fill, height: height, decoration: BoxDecoration(color: color, borderRadius: radius)),
+            if (m != null && m.isFinite)
+              PositionedDirectional(
+                start: (w * m.clamp(0.0, 1.0) - 1.5).clamp(0.0, max(0.0, w - 3)),
+                top: 0,
+                bottom: 0,
+                child: Container(width: 3, decoration: BoxDecoration(color: ink, borderRadius: BorderRadius.circular(2))),
+              ),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+/// A row of a breakdown: the item's icon in its color, its name and amount,
+/// a bar (as long as its share of the largest) and its share of the whole.
+class BreakdownRow extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String name;
+  final String amount;
+  final double fraction;
+  final String? share;
+  final double? marker;
+  final Widget? footnote;
+  final VoidCallback? onTap;
+  const BreakdownRow({
+    required this.icon,
+    required this.color,
+    required this.name,
+    required this.amount,
+    required this.fraction,
+    this.share,
+    this.marker,
+    this.footnote,
+    this.onTap,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.16), shape: BoxShape.circle),
+              child: Icon(icon, size: 19, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500)),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(amount, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                    ],
+                  ),
+                  const SizedBox(height: 7),
+                  Row(
+                    children: [
+                      Expanded(child: MeterBar(fraction: fraction, color: color, marker: marker)),
+                      if (share != null) ...[
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 40,
+                          child: Text(share!, textAlign: TextAlign.end, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if (footnote != null) ...[const SizedBox(height: 4), footnote!],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Twelve columns, one per month of the year: the chosen month in the accent
+/// color, the others in gray; tapping a column chooses its month. A dot marks
+/// the current month.
+class MonthColumns extends StatelessWidget {
+  final List<double> values;
+  final int selected;
+  final int? current;
+  final List<String> labels;
+  final List<String> semanticLabels;
+  final ValueChanged<int> onSelect;
+  final double plotHeight;
+  const MonthColumns({
+    required this.values,
+    required this.selected,
+    required this.labels,
+    required this.semanticLabels,
+    required this.onSelect,
+    this.current,
+    this.plotHeight = 110,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final top = values.fold(0.0, max);
+    return LayoutBuilder(builder: (context, c) {
+      final band = c.maxWidth / values.length;
+      final barWidth = min(22.0, band * 0.62);
+      return Row(
+        children: [
+          for (var i = 0; i < values.length; i++)
+            Expanded(
+              child: Semantics(
+                button: true,
+                selected: i + 1 == selected,
+                label: semanticLabels[i],
+                child: InkWell(
+                  onTap: () => onSelect(i + 1),
+                  borderRadius: BorderRadius.circular(8),
+                  child: ExcludeSemantics(
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: plotHeight,
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: values[i] <= 0 || top <= 0
+                                ? const SizedBox.shrink()
+                                : Container(
+                                    width: barWidth,
+                                    height: max(3.0, plotHeight * values[i] / top),
+                                    decoration: BoxDecoration(
+                                      color: i + 1 == selected ? colors.accent : colors.other,
+                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        Container(height: 1, color: colors.track),
+                        const SizedBox(height: 6),
+                        Text(
+                          labels[i],
+                          maxLines: 1,
+                          overflow: TextOverflow.clip,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: i + 1 == selected ? FontWeight.w700 : FontWeight.w400,
+                            color: i + 1 == selected ? scheme.onSurface : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: i + 1 == current ? colors.accent : Colors.transparent),
+                        ),
+                        const SizedBox(height: 2),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    });
+  }
+}
+
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
   @override
@@ -15319,12 +15703,42 @@ class _ReportsScreenState extends State<ReportsScreen> {
     });
   }
 
-  /// The equivalent-length period immediately before [rangeStart].
+  /// The period the figures are compared with: the same stretch of the
+  /// month, quarter or year before (the 1st-2nd of this month against the
+  /// 1st-2nd of last month - not the two days just before), and for a custom
+  /// range the same number of days right before it.
   DateTimeRange get _previousRange {
-    final days = rangeEnd.difference(rangeStart).inDays + 1;
-    final prevEnd = rangeStart.subtract(const Duration(days: 1));
-    final prevStart = prevEnd.subtract(Duration(days: days - 1));
-    return DateTimeRange(start: prevStart, end: prevEnd);
+    final now = DateTime.now();
+    final monthNo = currentCalendarSystem.value == CalendarSystem.jalali
+        ? gregorianToJalali(now.year, now.month, now.day)[1]
+        : now.month;
+    final intoQuarter = (monthNo - 1) % 3;
+    final intoYear = monthNo - 1;
+    final days = DateTime(rangeEnd.year, rangeEnd.month, rangeEnd.day).difference(DateTime(rangeStart.year, rangeStart.month, rangeStart.day)).inDays;
+    DateTimeRange sameStretch(DateTime start, DateTime periodEnd) {
+      var end = DateTime(start.year, start.month, start.day + days);
+      if (end.isAfter(periodEnd)) end = periodEnd;
+      return DateTimeRange(start: start, end: end);
+    }
+
+    DateTimeRange months(int from, int to) => DateTimeRange(start: calendarMonthOf(now, from).start, end: calendarMonthOf(now, to).end);
+    switch (preset) {
+      case _ReportPreset.thisMonth:
+        return sameStretch(calendarMonthOf(now, -1).start, calendarMonthOf(now, -1).end);
+      case _ReportPreset.lastMonth:
+        return months(-2, -2);
+      case _ReportPreset.thisQuarter:
+        return sameStretch(calendarMonthOf(now, -intoQuarter - 3).start, calendarMonthOf(now, -intoQuarter - 1).end);
+      case _ReportPreset.lastQuarter:
+        return months(-intoQuarter - 6, -intoQuarter - 4);
+      case _ReportPreset.thisYear:
+        return sameStretch(calendarMonthOf(now, -intoYear - 12).start, calendarMonthOf(now, -intoYear - 1).end);
+      case _ReportPreset.lastYear:
+        return months(-intoYear - 24, -intoYear - 13);
+      case _ReportPreset.custom:
+        final prevEnd = DateTime(rangeStart.year, rangeStart.month, rangeStart.day - 1);
+        return DateTimeRange(start: DateTime(prevEnd.year, prevEnd.month, prevEnd.day - days), end: prevEnd);
+    }
   }
 
   bool _matchesFilters(Transaction t) {
@@ -15413,18 +15827,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
     final currentTx = _inRange(DateTimeRange(start: rangeStart, end: rangeEnd));
     final prevRange = _previousRange;
     final prevTx = _inRange(prevRange);
 
     // Primary currency for this report = most common currency among the
     // filtered accounts (or the filtered account itself, if one is chosen).
-    String primaryCurrency;
-    if (accountFilter != null) {
-      primaryCurrency = currencyOf(accountFilter!);
-    } else {
-      primaryCurrency = mainCurrencyOf(accounts);
-    }
+    final primaryCurrency = accountFilter != null ? currencyOf(accountFilter!) : mainCurrencyOf(accounts);
+    String money(double v) => formatMoney(v, primaryCurrency);
 
     double sumFor(List<Transaction> list, TxType type) => list
         .where((t) => t.type == type && currencyOf(t.accountId) == primaryCurrency)
@@ -15437,103 +15850,289 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     final byCategory = _expenseByTopCategory(currentTx, primaryCurrency).entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    final maxCategoryAmount = byCategory.isEmpty ? 0.0 : byCategory.first.value;
     final byMerchant = _expenseByMerchant(currentTx, primaryCurrency).entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    final maxMerchantAmount = byMerchant.isEmpty ? 0.0 : byMerchant.first.value;
+    final expenseTotal = byCategory.fold(0.0, (s, e) => s + e.value);
+    // Each category keeps its color in every period (see categoryColorSlots).
+    final slots = categoryColorSlots(tx, categories, (t) => currencyOf(t.accountId) == primaryCurrency);
+    Color colorOf(Category c) => slots[c.id] == null ? colors.other : colors.slot(slots[c.id]!);
+    String percent(double part) => ltr(persianDigits('${(expenseTotal > 0 ? part / expenseTotal * 100 : 0).round()}%'));
 
-    Widget comparisonRow(String label, double cur, double prev, {required bool higherIsBad, TxType? type}) {
-      String changeText = '';
-      Color changeColor = Colors.grey;
-      if (prev > 0) {
-        final change = (cur - prev) / prev * 100;
-        final up = change >= 0;
-        final bad = higherIsBad ? up : !up;
-        changeColor = bad ? Colors.red.shade700 : Colors.green.shade700;
-        changeText = locf('{0} نسبت به دوره‌ی قبل', [(ltr(persianDigits('${up ? '+' : ''}${change.round()}%')))]);
-      }
-      return InkWell(
-        onTap: () => _openList(
-          label,
-          currentTx.where((t) => (type == null || t.type == type) && currencyOf(t.accountId) == primaryCurrency).toList(),
+    // How a figure compares with the period before: arrow, words, and green
+    // or red by whether that's good.
+    ({IconData icon, Color color, String text}) change(bool up, String amount, bool upIsGood) => (
+          icon: up ? Icons.trending_up : Icons.trending_down,
+          color: up == upIsGood ? colors.goodText : colors.badText,
+          text: locf(up ? '{0} بیشتر از دوره‌ی قبل' : '{0} کمتر از دوره‌ی قبل', [amount]),
+        );
+    final same = (icon: Icons.trending_flat, color: scheme.onSurfaceVariant, text: loc('مثل دوره‌ی قبل'));
+    ({IconData icon, Color color, String text})? percentChange(double cur, double prev, {required bool upIsGood}) {
+      if (prev <= 0) return null;
+      final pct = (cur - prev) / prev * 100;
+      if (pct.abs() < 0.5) return same;
+      return change(pct > 0, ltr(persianDigits('${pct.abs().round()}%')), upIsGood);
+    }
+
+    ({IconData icon, Color color, String text})? amountChange(double cur, double prev) {
+      if (cur == 0 && prev == 0) return null;
+      final diff = cur - prev;
+      if (diff.abs() < 0.005) return same;
+      return change(diff > 0, money(diff.abs()), true);
+    }
+
+    String? before(double prev, double cur) => prev == 0 && cur == 0 ? null : locf('دوره‌ی قبل: {0}', [money(prev)]);
+    List<Transaction> ofType(TxType? type) =>
+        currentTx.where((t) => (type == null || t.type == type) && currencyOf(t.accountId) == primaryCurrency).toList();
+
+    Widget incomeTile() => StatTile(
+          icon: Icons.arrow_downward_rounded,
+          color: colors.good,
+          label: loc('درآمد'),
+          value: money(curIncome),
+          delta: percentChange(curIncome, prevIncome, upIsGood: true),
+          caption: before(prevIncome, curIncome),
+          onTap: () => _openList(loc('درآمد'), ofType(TxType.income)),
+        );
+    Widget expenseTile() => StatTile(
+          icon: Icons.arrow_upward_rounded,
+          color: colors.bad,
+          label: loc('هزینه'),
+          value: money(curExpense),
+          delta: percentChange(curExpense, prevExpense, upIsGood: false),
+          caption: before(prevExpense, curExpense),
+          onTap: () => _openList(loc('هزینه'), ofType(TxType.expense)),
+        );
+    Widget netTile() => StatTile(
+          icon: Icons.account_balance_wallet_outlined,
+          color: colors.accent,
+          label: loc('خالص (درآمد منهای هزینه)'),
+          value: money(curIncome - curExpense),
+          delta: amountChange(curIncome - curExpense, prevIncome - prevExpense),
+          caption: before(prevIncome - prevExpense, curIncome - curExpense),
+          onTap: () => _openList(loc('خالص'), ofType(null)),
+        );
+
+    final summary = <Widget>[
+      Row(
+        children: [
+          Expanded(child: Text(loc('خلاصه'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
+          Text(locf('{0} تراکنش', [persianDigits('${currentTx.length}')]), style: muted),
+        ],
+      ),
+      const SizedBox(height: 10),
+      if (typeFilter == null) ...[
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [Expanded(child: incomeTile()), const SizedBox(width: 10), Expanded(child: expenseTile())],
+          ),
         ),
-        child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(mainAxisSize: MainAxisSize.min, children: [Text(label), Icon(Icons.chevron_left, size: 16, color: Colors.grey.shade500)]),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(ltr(formatMoney(cur, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.bold)),
-                if (changeText.isNotEmpty) Text(changeText, style: TextStyle(fontSize: 11, color: changeColor)),
-              ],
+        const SizedBox(height: 10),
+        netTile(),
+      ] else if (typeFilter == TxType.income)
+        incomeTile()
+      else
+        expenseTile(),
+    ];
+
+    Widget categoryRows() {
+      final top = byCategory.isEmpty ? 0.0 : byCategory.first.value;
+      // The categories with a color each as its own block, the rest together.
+      final rest = byCategory.where((e) => slots[e.key.id] == null).fold(0.0, (s, e) => s + e.value);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ShareBar(parts: [
+            for (final e in byCategory)
+              if (slots[e.key.id] != null) (value: e.value, color: colorOf(e.key)),
+            (value: rest, color: colors.other),
+          ]),
+          const SizedBox(height: 10),
+          for (final e in byCategory)
+            BreakdownRow(
+              icon: iconForCategory(e.key, categories),
+              color: colorOf(e.key),
+              name: e.key.name,
+              amount: money(e.value),
+              fraction: top > 0 ? e.value / top : 0,
+              share: percent(e.value),
+              onTap: () => _openList(
+                e.key.name,
+                currentTx
+                    .where((t) =>
+                        t.type == TxType.expense &&
+                        currencyOf(t.accountId) == primaryCurrency &&
+                        (e.key.id == '_uncategorized_'
+                            ? !categories.any((c) => c.id == t.categoryId)
+                            : categoryMatchesFilter(t.categoryId, e.key.id, categories)))
+                    .toList(),
+              ),
             ),
-          ],
-        ),
-        ),
+        ],
       );
     }
 
+    Widget merchantRows() {
+      if (byMerchant.isEmpty) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(loc('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.'), style: muted),
+        );
+      }
+      final top = byMerchant.first.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final e in byMerchant)
+            BreakdownRow(
+              icon: Icons.storefront_outlined,
+              color: colors.accent,
+              name: e.key,
+              amount: money(e.value),
+              fraction: top > 0 ? e.value / top : 0,
+              share: percent(e.value),
+              onTap: () => _openList(
+                e.key,
+                currentTx
+                    .where((t) =>
+                        t.type == TxType.expense &&
+                        currencyOf(t.accountId) == primaryCurrency &&
+                        (t.merchant.trim().isEmpty ? loc('بدون‌نام') : t.merchant.trim()) == e.key)
+                    .toList(),
+              ),
+            ),
+        ],
+      );
+    }
+
+    final breakdown = typeFilter == TxType.income
+        ? null
+        : Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(loc('هزینه‌ها به تفکیک'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      ),
+                      SegmentedButton<bool>(
+                        segments: [
+                          ButtonSegment(value: false, label: Text(loc('دسته‌بندی'))),
+                          ButtonSegment(value: true, label: Text(loc('فروشگاه'))),
+                        ],
+                        selected: {groupByMerchant},
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                        onSelectionChanged: (s) => setState(() => groupByMerchant = s.first),
+                      ),
+                    ],
+                  ),
+                  if (expenseTotal > 0) ...[
+                    const SizedBox(height: 2),
+                    Text(locf('جمع هزینه‌ها: {0}', [money(expenseTotal)]), style: muted),
+                  ],
+                  const SizedBox(height: 12),
+                  if (byCategory.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Row(
+                        children: [
+                          Icon(Icons.receipt_long_outlined, color: scheme.onSurfaceVariant),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(loc('در این بازه هزینه‌ای ثبت نشده.'), style: muted.copyWith(fontSize: 13))),
+                        ],
+                      ),
+                    )
+                  else if (groupByMerchant)
+                    merchantRows()
+                  else
+                    categoryRows(),
+                ],
+              ),
+            ),
+          );
+
+    final dropdowns = Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String?>(
+            initialValue: categoryFilter,
+            isExpanded: true,
+            decoration: InputDecoration(labelText: loc('دسته‌بندی'), border: const OutlineInputBorder(), isDense: true),
+            // Same order as the filter in All transactions: expense
+            // categories then income ones, each subcategory indented
+            // under its parent.
+            items: [
+              DropdownMenuItem(value: null, child: Text(loc('همه‌ی دسته‌بندی‌ها'))),
+              for (final type in [TxType.expense, TxType.income])
+                ...categoriesInHierarchicalOrder(categories, type).map((c) => DropdownMenuItem(
+                      value: c.id,
+                      child: Text(c.parentId == null ? c.name : '　　${c.name}', overflow: TextOverflow.ellipsis),
+                    )),
+            ],
+            onChanged: (v) => setState(() => categoryFilter = v),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: DropdownButtonFormField<String?>(
+            initialValue: accountFilter,
+            isExpanded: true,
+            decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
+            items: [
+              DropdownMenuItem(value: null, child: Text(loc('همه'))),
+              ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis))),
+            ],
+            onChanged: (v) => setState(() => accountFilter = v),
+          ),
+        ),
+      ],
+    );
+
+    final wide = defaultTargetPlatform == TargetPlatform.windows && MediaQuery.sizeOf(context).width >= 1100;
     return Scaffold(
       appBar: AppBar(title: Text(tr('full_reporting'))),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final p in _ReportPreset.values.where((p) => p != _ReportPreset.custom))
-                ChoiceChip(label: Text(_presetLabel(p)), selected: preset == p, onSelected: (_) => _applyPreset(p)),
-              ActionChip(
-                label: Text(preset == _ReportPreset.custom
-                    ? '${formatDate(rangeStart)} - ${formatDate(rangeEnd)}'
-                    : loc('بازه‌ی دلخواه')),
-                avatar: const Icon(Icons.date_range, size: 18),
-                onPressed: _pickCustomRange,
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<String?>(
-                  initialValue: categoryFilter,
-                  isExpanded: true,
-                  decoration: InputDecoration(labelText: loc('دسته‌بندی'), border: const OutlineInputBorder(), isDense: true),
-                  // Same order as the filter in All transactions: expense
-                  // categories then income ones, each subcategory indented
-                  // under its parent.
-                  items: [
-                    DropdownMenuItem(value: null, child: Text(loc('همه‌ی دسته‌بندی‌ها'))),
-                    for (final type in [TxType.expense, TxType.income])
-                      ...categoriesInHierarchicalOrder(categories, type).map((c) => DropdownMenuItem(
-                            value: c.id,
-                            child: Text(c.parentId == null ? c.name : '　　${c.name}', overflow: TextOverflow.ellipsis),
-                          )),
-                  ],
-                  onChanged: (v) => setState(() => categoryFilter = v),
+          // The periods in one row (scrolls sideways on a narrow screen).
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final p in _ReportPreset.values.where((p) => p != _ReportPreset.custom)) ...[
+                  ChoiceChip(label: Text(_presetLabel(p)), selected: preset == p, onSelected: (_) => _applyPreset(p)),
+                  const SizedBox(width: 8),
+                ],
+                ChoiceChip(
+                  avatar: const Icon(Icons.date_range, size: 18),
+                  label: Text(loc('بازه‌ی دلخواه')),
+                  selected: preset == _ReportPreset.custom,
+                  onSelected: (_) => _pickCustomRange(),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: DropdownButtonFormField<String?>(
-                  initialValue: accountFilter,
-                  isExpanded: true,
-                  decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
-                  items: [
-                    DropdownMenuItem(value: null, child: Text(loc('همه'))),
-                    ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text(a.name, overflow: TextOverflow.ellipsis))),
-                  ],
-                  onChanged: (v) => setState(() => accountFilter = v),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
           const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(padding: const EdgeInsets.only(top: 1), child: Icon(Icons.event_outlined, size: 15, color: scheme.onSurfaceVariant)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '${locf('{0} تا {1}', [formatDate(rangeStart), formatDate(rangeEnd)])} • '
+                  '${locf('مقایسه با {0} تا {1}', [formatDate(prevRange.start), formatDate(prevRange.end)])}',
+                  style: muted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
           SegmentedButton<TxType?>(
             segments: [
               ButtonSegment(value: null, label: Text(loc('همه'))),
@@ -15541,151 +16140,25 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ButtonSegment(value: TxType.expense, label: Text(loc('هزینه'))),
             ],
             selected: {typeFilter},
+            showSelectedIcon: false,
             onSelectionChanged: (s) => setState(() => typeFilter = s.first),
           ),
+          const SizedBox(height: 12),
+          dropdowns,
+          const SizedBox(height: 20),
           // On a wide computer window the summary and the breakdown side by side.
-          ...() {
-            final summary = <Widget>[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(locf('خلاصه ({0} تراکنش)', [persianDigits('${currentTx.length}')]), style: Theme.of(context).textTheme.titleMedium),
-                      const Divider(),
-                      if (typeFilter != TxType.expense) comparisonRow(loc('درآمد'), curIncome, prevIncome, higherIsBad: false, type: TxType.income),
-                      if (typeFilter != TxType.income) comparisonRow(loc('هزینه'), curExpense, prevExpense, higherIsBad: true, type: TxType.expense),
-                      if (typeFilter == null)
-                        comparisonRow(loc('خالص'), curIncome - curExpense, prevIncome - prevExpense, higherIsBad: false),
-                    ],
-                  ),
-                ),
-              ),
-            ];
-            final breakdown = <Widget>[
-              if ((byCategory.isNotEmpty || byMerchant.isNotEmpty) && typeFilter != TxType.income) ...[
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(groupByMerchant ? loc('هزینه بر اساس فروشگاه') : loc('هزینه بر اساس دسته‌بندی'), style: Theme.of(context).textTheme.titleMedium),
-                    TextButton.icon(
-                      onPressed: () => setState(() => groupByMerchant = !groupByMerchant),
-                      icon: const Icon(Icons.swap_horiz, size: 16),
-                      label: Text(groupByMerchant ? loc('نمایش بر اساس دسته‌بندی') : loc('نمایش بر اساس فروشگاه'), style: const TextStyle(fontSize: 12)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                if (!groupByMerchant)
-                  ...byCategory.map((e) => InkWell(
-                        onTap: () => _openList(
-                          e.key.name,
-                          currentTx
-                              .where((t) =>
-                                  t.type == TxType.expense &&
-                                  currencyOf(t.accountId) == primaryCurrency &&
-                                  (e.key.id == '_uncategorized_'
-                                      ? !categories.any((c) => c.id == t.categoryId)
-                                      : categoryMatchesFilter(t.categoryId, e.key.id, categories)))
-                              .toList(),
-                        ),
-                        child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(e.key.name),
-                                Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: LinearProgressIndicator(
-                                value: maxCategoryAmount > 0 ? e.value / maxCategoryAmount : 0,
-                                minHeight: 6,
-                                backgroundColor: Colors.grey.withValues(alpha: 0.2),
-                                color: Colors.indigo.shade300,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      ))
-                else if (byMerchant.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(loc('هیچ فروشگاهی برای این تراکنش‌ها ثبت نشده.'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                  )
-                else
-                  ...byMerchant.map((e) => InkWell(
-                        onTap: () => _openList(
-                          e.key,
-                          currentTx
-                              .where((t) =>
-                                  t.type == TxType.expense &&
-                                  currencyOf(t.accountId) == primaryCurrency &&
-                                  (t.merchant.trim().isEmpty ? loc('بدون‌نام') : t.merchant.trim()) == e.key)
-                              .toList(),
-                        ),
-                        child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(e.key),
-                                Text(ltr(formatMoney(e.value, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: LinearProgressIndicator(
-                                value: maxMerchantAmount > 0 ? e.value / maxMerchantAmount : 0,
-                                minHeight: 6,
-                                backgroundColor: Colors.grey.withValues(alpha: 0.2),
-                                color: Colors.teal.shade300,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      )),
+          if (wide)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: summary)),
+                if (breakdown != null) ...[const SizedBox(width: 20), Expanded(flex: 3, child: breakdown)],
               ],
-            ];
-            if (defaultTargetPlatform == TargetPlatform.windows && MediaQuery.sizeOf(context).width >= 1100) {
-              return <Widget>[
-                const SizedBox(height: 16),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: summary)),
-                    const SizedBox(width: 20),
-                    Expanded(
-                      flex: 3,
-                      child: breakdown.isEmpty
-                          ? const SizedBox.shrink()
-                          : Card(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: breakdown),
-                              ),
-                            ),
-                    ),
-                  ],
-                ),
-              ];
-            }
-            return <Widget>[const SizedBox(height: 16), ...summary, ...breakdown];
-          }(),
+            )
+          else ...[
+            ...summary,
+            if (breakdown != null) ...[const SizedBox(height: 20), breakdown],
+          ],
         ],
       ),
     );
@@ -15760,164 +16233,308 @@ class _ForecastScreenState extends State<ForecastScreen> {
   List<String> get _monthNames =>
       currentCalendarSystem.value == CalendarSystem.jalali ? _jalaliMonthNames : _gregorianMonthNames;
 
+  /// Day of the month of [d] in the calendar chosen in settings.
+  static int _dayOfMonth(DateTime d) =>
+      currentCalendarSystem.value == CalendarSystem.jalali ? gregorianToJalali(d.year, d.month, d.day)[2] : d.day;
+
+  /// Short label of month [m] under its column: its number in Persian, its
+  /// first three letters otherwise.
+  String _monthShort(int m) {
+    if (currentLanguage.value == AppLanguage.fa) return persianDigits('$m');
+    final name = _monthNames[m - 1];
+    return name.length <= 3 ? name : name.substring(0, 3);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    final titleStyle = Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600);
     final currency = primaryCurrency;
+    String money(double v) => formatMoney(v, currency);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
+    final thisMonth = _yearMonth(today)[1];
     // Expenses only - money moved between own accounts isn't spending.
     bool isSpending(Transaction t) => t.type == TxType.expense && !t.categoryId.startsWith('_transfer');
 
-    // Only count a past occurrence of the target month if that whole month
-    // has already elapsed - an in-progress month would unfairly drag the
-    // average down.
-    final years = <int>{};
+    // For each month of the year: the past years in which it is over and had
+    // spending, and its total in each of them. A month still in progress
+    // would unfairly drag the average down.
+    final years = {for (var m = 1; m <= 12; m++) m: <int>{}};
+    final totals = {for (var m = 1; m <= 12; m++) m: <int, double>{}};
     for (final t in tx) {
       if (!isSpending(t)) continue;
-      final ym = _yearMonth(t.date);
-      if (ym[1] != targetMonth) continue;
       if (!calendarMonthOf(t.date).end.isBefore(today)) continue;
-      years.add(ym[0]);
-    }
-
-    final yearTotal = <int, double>{};
-    final categoryYearTotal = <String, Map<int, double>>{};
-    for (final t in tx) {
-      if (!isSpending(t)) continue;
       final ym = _yearMonth(t.date);
-      if (ym[1] != targetMonth) continue;
-      if (!years.contains(ym[0])) continue;
+      years[ym[1]]!.add(ym[0]);
       if (currencyOf(t.accountId) != currency) continue;
-      yearTotal[ym[0]] = (yearTotal[ym[0]] ?? 0) + t.amount;
-      final match = categories.where((c) => c.id == t.categoryId).toList();
-      var cat = match.isEmpty ? null : match.first;
-      while (cat?.parentId != null) {
-        final pm = categories.where((c) => c.id == cat!.parentId).toList();
-        if (pm.isEmpty) break;
-        cat = pm.first;
-      }
-      final key = cat?.id ?? '_uncategorized_';
-      categoryYearTotal.putIfAbsent(key, () => {});
-      categoryYearTotal[key]![ym[0]] = (categoryYearTotal[key]![ym[0]] ?? 0) + t.amount;
+      totals[ym[1]]![ym[0]] = (totals[ym[1]]![ym[0]] ?? 0) + t.amount;
     }
+    final averages = [
+      for (var m = 1; m <= 12; m++) years[m]!.isEmpty ? 0.0 : totals[m]!.values.fold(0.0, (a, b) => a + b) / years[m]!.length,
+    ];
+    final selYears = years[targetMonth]!;
+    final avgTotal = averages[targetMonth - 1];
+    final isCurrent = targetMonth == thisMonth;
+    final monthName = _monthNames[targetMonth - 1];
 
-    final avgTotal = years.isEmpty ? 0.0 : yearTotal.values.fold(0.0, (a, b) => a + b) / years.length;
-    final categoryAverages = <Category, double>{};
-    categoryYearTotal.forEach((id, yearMap) {
-      final avg = yearMap.values.fold(0.0, (a, b) => a + b) / years.length;
-      final match = categories.where((c) => c.id == id).toList();
-      categoryAverages[match.isEmpty ? Category(id: id, name: loc('بدون‌دسته'), type: TxType.expense) : match.first] = avg;
-    });
-    final sortedCategories = categoryAverages.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-    final maxCategoryAvg = sortedCategories.isEmpty ? 0.0 : sortedCategories.first.value;
+    // The chosen month's average per top-level category.
+    final categorySums = <String, double>{};
+    for (final t in tx) {
+      if (!isSpending(t) || currencyOf(t.accountId) != currency) continue;
+      final ym = _yearMonth(t.date);
+      if (ym[1] != targetMonth || !selYears.contains(ym[0])) continue;
+      if (!calendarMonthOf(t.date).end.isBefore(today)) continue;
+      final key = topCategoryId(t.categoryId, categories);
+      categorySums[key] = (categorySums[key] ?? 0) + t.amount;
+    }
+    final categoryAvg = {for (final e in categorySums.entries) e.key: e.value / max(1, selYears.length)};
 
-    // What's actually spent so far, if the target month is the current
-    // (in-progress) month - useful as a live comparison point.
-    double? spentSoFar;
-    if (targetMonth == _yearMonth(today)[1]) {
+    // This month so far, in all and per category, and what had been spent
+    // by this same day of the month in past years on average.
+    var spentSoFar = 0.0;
+    final spentByCategory = <String, double>{};
+    double? avgToDay;
+    if (isCurrent) {
       final month = calendarMonthOf(today);
-      // Up to today: a future-dated transaction hasn't been spent yet.
-      spentSoFar = tx
-          .where((t) =>
-              isSpending(t) &&
-              !t.date.isBefore(month.start) &&
-              !t.date.isAfter(today) &&
-              currencyOf(t.accountId) == currency)
-          .fold<double>(0.0, (s, t) => s + t.amount);
+      for (final t in tx) {
+        if (!isSpending(t) || currencyOf(t.accountId) != currency) continue;
+        // Up to today: a future-dated transaction hasn't been spent yet.
+        if (t.date.isBefore(month.start) || t.date.isAfter(today)) continue;
+        spentSoFar += t.amount;
+        final key = topCategoryId(t.categoryId, categories);
+        spentByCategory[key] = (spentByCategory[key] ?? 0) + t.amount;
+      }
+      if (selYears.isNotEmpty) {
+        final day = _dayOfMonth(today);
+        var sum = 0.0;
+        for (final t in tx) {
+          if (!isSpending(t) || currencyOf(t.accountId) != currency) continue;
+          final ym = _yearMonth(t.date);
+          if (ym[1] != targetMonth || !selYears.contains(ym[0]) || _dayOfMonth(t.date) > day) continue;
+          sum += t.amount;
+        }
+        avgToDay = sum / selYears.length;
+      }
     }
 
+    // Each category keeps the color it has in the reports.
+    final slots = categoryColorSlots(tx, categories, (t) => currencyOf(t.accountId) == currency);
+    Color colorOf(String id) => slots[id] == null ? colors.other : colors.slot(slots[id]!);
+    Category categoryOf(String id) =>
+        categories.where((c) => c.id == id).firstOrNull ?? Category(id: id, name: loc('بدون‌دسته'), type: TxType.expense);
+    final rowIds = {...categoryAvg.keys, if (isCurrent) ...spentByCategory.keys}.toList()
+      ..sort((a, b) {
+        final byAvg = (categoryAvg[b] ?? 0).compareTo(categoryAvg[a] ?? 0);
+        return byAvg != 0 ? byAvg : (spentByCategory[b] ?? 0).compareTo(spentByCategory[a] ?? 0);
+      });
+    final rowTop = rowIds.fold(0.0, (m, id) => max(m, max(categoryAvg[id] ?? 0, isCurrent ? spentByCategory[id] ?? 0 : 0)));
+
+    // How this month is going against the past years: over the month's whole
+    // average, ahead of where past years were by today, or within both.
+    ({IconData icon, Color mark, Color text, String words})? status;
+    if (isCurrent && avgTotal > 0) {
+      final toDay = avgToDay ?? 0;
+      if (spentSoFar > avgTotal) {
+        status = (
+          icon: Icons.error_outline,
+          mark: colors.bad,
+          text: colors.badText,
+          words: locf('{0} بیشتر از میانگین کل این ماه خرج شده', [money(spentSoFar - avgTotal)]),
+        );
+      } else if (toDay > 0 && spentSoFar > toDay * 1.1) {
+        status = (
+          icon: Icons.speed,
+          mark: colors.warning,
+          text: colors.warningText,
+          words: locf('تندتر از معمول: {0} بیشتر از میانگینِ تا امروز', [money(spentSoFar - toDay)]),
+        );
+      } else {
+        status = (
+          icon: Icons.check_circle_outline,
+          mark: colors.good,
+          text: colors.goodText,
+          words: locf('{0} تا رسیدن به میانگین این ماه مانده', [money(avgTotal - spentSoFar)]),
+        );
+      }
+    }
+
+    final anyHistory = averages.any((a) => a > 0);
     return Scaffold(
       appBar: AppBar(title: Text(tr('expense_forecast'))),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          Text(loc('ماه مورد نظر برای پیش‌بینی:'), style: const TextStyle(color: Colors.grey)),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (var m = 1; m <= 12; m++)
-                ChoiceChip(
-                  label: Text(_monthNames[m - 1]),
-                  selected: targetMonth == m,
-                  onSelected: (_) => setState(() => targetMonth = m),
-                ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          if (years.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                loc('برای این ماه، داده‌ی کافی از سال‌های قبل ثبت نشده تا بشه پیش‌بینی کرد.'),
-                style: const TextStyle(color: Colors.grey),
+          // The year at a glance; a column is also how a month is chosen.
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(loc('الگوی هزینه در ماه‌های سال'), style: titleStyle),
+                  const SizedBox(height: 2),
+                  Text(
+                    anyHistory
+                        ? loc('میانگین هزینه‌ی هر ماه در سال‌های گذشته؛ برای دیدن جزئیات روی یک ماه بزنید.')
+                        : loc('هنوز داده‌ی کافی از سال‌های قبل ثبت نشده؛ برای دیدن یک ماه روی آن بزنید.'),
+                    style: muted,
+                  ),
+                  const SizedBox(height: 14),
+                  MonthColumns(
+                    values: averages,
+                    selected: targetMonth,
+                    current: thisMonth,
+                    labels: [for (var m = 1; m <= 12; m++) _monthShort(m)],
+                    semanticLabels: [for (var m = 1; m <= 12; m++) '${_monthNames[m - 1]}: ${money(averages[m - 1])}'],
+                    onSelect: (m) => setState(() => targetMonth = m),
+                  ),
+                ],
               ),
-            )
-          else ...[
+            ),
+          ),
+          const SizedBox(height: 14),
+          // The chosen month.
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(monthName, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                      if (isCurrent) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(color: colors.accent.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(20)),
+                          child: Text(loc('ماه جاری'), style: TextStyle(fontSize: 11.5, color: scheme.onSurface, fontWeight: FontWeight.w500)),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (selYears.isEmpty)
+                    Text(loc('برای این ماه، داده‌ی کافی از سال‌های قبل ثبت نشده تا بشه پیش‌بینی کرد.'), style: muted.copyWith(fontSize: 13))
+                  else ...[
+                    Text(loc('میانگین هزینه در سال‌های قبل'), style: muted.copyWith(fontSize: 13)),
+                    const SizedBox(height: 2),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(money(avgTotal), style: TextStyle(fontSize: 30, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                    ),
+                    Text(locf('بر اساس {0} سال گذشته', [persianDigits('${selYears.length}')]), style: muted),
+                  ],
+                  if (isCurrent) ...[
+                    const Divider(height: 28),
+                    Row(
+                      children: [
+                        Expanded(child: Text(loc('هزینه‌ی این ماه تا الان'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500))),
+                        Text(money(spentSoFar), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                      ],
+                    ),
+                    if (status != null) ...[
+                      const SizedBox(height: 10),
+                      MeterBar(
+                        fraction: spentSoFar / avgTotal,
+                        color: status.mark,
+                        marker: avgToDay == null ? null : avgToDay / avgTotal,
+                        height: 10,
+                      ),
+                      if (avgToDay != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Container(width: 3, height: 12, decoration: BoxDecoration(color: scheme.onSurface, borderRadius: BorderRadius.circular(2))),
+                            const SizedBox(width: 6),
+                            Expanded(child: Text(locf('میانگینِ تا همین روز در سال‌های قبل: {0}', [money(avgToDay)]), style: muted)),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(status.icon, size: 18, color: status.text),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text(status.words, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: status.text))),
+                        ],
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (rowIds.isNotEmpty) ...[
+            const SizedBox(height: 14),
             Card(
+              margin: EdgeInsets.zero,
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(
-                      locf('میانگین هزینه‌ی {0} بر اساس {1} سال گذشته', [(_monthNames[targetMonth - 1]), (years.length)]),
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(ltr(formatMoney(avgTotal, currency)), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                    if (spentSoFar != null) ...[
-                      const Divider(height: 24),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    Text(loc('میانگین بر اساس دسته‌بندی'), style: titleStyle),
+                    if (isCurrent) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 4,
                         children: [
-                          Text(loc('هزینه‌ی این ماه تا الان')),
-                          Text(ltr(formatMoney(spentSoFar, currency)), style: const TextStyle(fontWeight: FontWeight.bold)),
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            Container(width: 16, height: 6, decoration: BoxDecoration(color: colors.other, borderRadius: BorderRadius.circular(3))),
+                            const SizedBox(width: 6),
+                            Text(loc('میانگین سال‌های قبل'), style: muted),
+                          ]),
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            Container(width: 3, height: 12, decoration: BoxDecoration(color: scheme.onSurface, borderRadius: BorderRadius.circular(2))),
+                            const SizedBox(width: 6),
+                            Text(loc('این ماه تا الان'), style: muted),
+                          ]),
                         ],
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        spentSoFar > avgTotal
-                            ? loc('تا الان بیشتر از میانگین سال‌های قبل خرج شده.')
-                            : loc('تا الان کمتر از میانگین سال‌های قبل خرج شده.'),
-                        style: TextStyle(fontSize: 12, color: spentSoFar > avgTotal ? Colors.red.shade700 : Colors.green.shade700),
-                      ),
                     ],
+                    const SizedBox(height: 8),
+                    for (final id in rowIds)
+                      () {
+                        final avg = categoryAvg[id] ?? 0;
+                        final spent = spentByCategory[id] ?? 0;
+                        final over = isCurrent && spent > avg && spent > 0;
+                        final cat = categoryOf(id);
+                        return BreakdownRow(
+                          icon: iconForCategory(cat, categories),
+                          color: colorOf(id),
+                          name: cat.name,
+                          amount: money(avg),
+                          fraction: rowTop > 0 ? avg / rowTop : 0,
+                          marker: isCurrent && rowTop > 0 ? spent / rowTop : null,
+                          footnote: !isCurrent
+                              ? null
+                              : Row(
+                                  children: [
+                                    if (over) ...[Icon(Icons.arrow_upward_rounded, size: 13, color: colors.badText), const SizedBox(width: 2)],
+                                    Expanded(
+                                      child: Text(
+                                        locf('این ماه تا الان: {0}', [money(spent)]),
+                                        style: TextStyle(fontSize: 11.5, color: over ? colors.badText : scheme.onSurfaceVariant),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        );
+                      }(),
                   ],
                 ),
               ),
             ),
-            if (sortedCategories.isNotEmpty) ...[
-              const SizedBox(height: 20),
-              Text(loc('میانگین بر اساس دسته‌بندی'), style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              ...sortedCategories.map((e) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(e.key.name),
-                            Text(ltr(formatMoney(e.value, currency)), style: const TextStyle(fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: maxCategoryAvg > 0 ? e.value / maxCategoryAvg : 0,
-                            minHeight: 6,
-                            backgroundColor: Colors.grey.shade200,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )),
-            ],
           ],
         ],
       ),
