@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show SynchronousFuture, compute, defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart' show SynchronousFuture, compute, defaultTargetPlatform, TargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart'
@@ -3067,12 +3067,32 @@ class Store {
     }
     return _byId[id];
   }
-  // id -> that transaction's own encoded JSON string, reused across saves so
-  // only the transaction(s) that actually changed get re-encoded - encoding
-  // the whole list on every single save is what made saving (and the
-  // keyboard-close right after it) get slower as the number of transactions
-  // grew.
-  static final Map<String, String> _txJsonCache = {};
+  // id -> the transaction object last encoded and its JSON string, reused
+  // across saves while the list still holds that very object (transactions
+  // are immutable, so a changed one is always a new object) - only the
+  // transactions that actually changed get re-encoded. Encoding the whole
+  // list on every single save is what made saving (and the keyboard-close
+  // right after it) get slower as the number of transactions grew.
+  // Keyed by id alone, a changed transaction passed to [saveTransactions]
+  // kept its old JSON: the change stayed in memory but was lost on restart
+  // (e.g. an edit or a receipt photo that came from the other device).
+  static final Map<String, ({Transaction t, String json})> _txJsonCache = {};
+
+  static String _txJson(Transaction t) {
+    final cached = _txJsonCache[t.id];
+    if (cached != null && identical(cached.t, t)) return cached.json;
+    final json = jsonEncode(t.toJson());
+    _txJsonCache[t.id] = (t: t, json: json);
+    return json;
+  }
+
+  /// Forgets the transactions held in memory, so the next load reads what's
+  /// stored (as after a restart). For tests.
+  @visibleForTesting
+  static void forgetLoadedTransactions() {
+    _txCache = null;
+    _txJsonCache.clear();
+  }
 
   static Future<List<Transaction>> loadTransactions() async {
     final cached = _txCache;
@@ -3117,7 +3137,7 @@ class Store {
     final ids = list.map((t) => t.id).toSet();
     _txJsonCache.removeWhere((id, _) => !ids.contains(id)); // drop deleted ones
     final encoded = [
-      for (final t in list) _txJsonCache[t.id] ??= jsonEncode(t.toJson()),
+      for (final t in list) _txJson(t),
     ];
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_txKey, encoded);
@@ -3137,7 +3157,7 @@ class Store {
     final ids = list.map((t) => t.id).toSet();
     _txJsonCache.removeWhere((id, _) => !ids.contains(id));
     final encoded = [
-      for (final t in list) _txJsonCache[t.id] ??= jsonEncode(t.toJson()),
+      for (final t in list) _txJson(t),
     ];
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_txKey, encoded);

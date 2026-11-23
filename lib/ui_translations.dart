@@ -834,4 +834,8 @@ const Map<String, List<String>> uiTranslations = {
   'خطای شبکه: {0}': ['Network error: {0}', 'Netzwerkfehler: {0}'],
   'سرورهای Gemini الان شلوغ‌اند و همه‌ی مدل‌های در دسترس امتحان شد. چند دقیقه‌ی دیگر دوباره امتحان کنید، یا در «تنظیمات › هوش مصنوعی» سرویس دیگری انتخاب کنید.': ['The Gemini servers are busy right now; every available model was tried. Try again in a few minutes, or choose another service in “Settings › AI”.', 'Die Gemini-Server sind gerade ausgelastet; alle verfügbaren Modelle wurden versucht. Versuche es in ein paar Minuten erneut oder wähle unter „Einstellungen › KI“ einen anderen Dienst.'],
   'هیچ‌کدام از مدل‌های Gemini برای این کلید در دسترس نبود. کمی بعد دوباره امتحان کنید.': ['None of the Gemini models was available for this key. Try again a little later.', 'Keines der Gemini-Modelle war für diesen Schlüssel verfügbar. Versuche es etwas später erneut.'],
+  'تصویر رسیدها': ['Receipt photos', 'Belegfotos'],
+  '{0} تصویر روی این دستگاه • {1} همگام': ['{0} photos on this device • {1} in sync', '{0} Fotos auf diesem Gerät • {1} synchron'],
+  '{0} تصویر در صف (در همگام‌سازی‌های بعدی)': ['{0} photos waiting (in the next syncs)', '{0} Fotos warten (bei den nächsten Synchronisierungen)'],
+  'آخرین خطا: {0}': ['Last error: {0}', 'Letzter Fehler: {0}'],
 };
