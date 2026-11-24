@@ -701,7 +701,7 @@ Widget formPair(BuildContext context, Widget a, Widget b, {double gap = 16}) {
   );
 }
 
-Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons, {List<Widget> trailing = const []}) {
+Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons, {List<Widget> trailing = const [], Widget? above}) {
   final children = <Widget>[];
   for (var i = 0; i < buttons.length; i++) {
     if (i > 0) children.add(const SizedBox(width: 12));
@@ -721,7 +721,13 @@ Widget pinnedBottomButtons(BuildContext context, List<Widget> buttons, {List<Wid
       top: false,
       child: Padding(
         padding: desktop ? const EdgeInsets.fromLTRB(20, 12, 20, 12) : const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        child: Row(children: children),
+        child: above == null
+            ? Row(children: children)
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [above, const SizedBox(height: 10), Row(children: children)],
+              ),
       ),
     ),
   );
@@ -4197,7 +4203,10 @@ class AppDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     return Drawer(
       child: SafeArea(
-        child: ListView(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
           padding: EdgeInsets.zero,
           children: [
             DrawerHeader(
@@ -4222,6 +4231,17 @@ class AppDrawer extends StatelessWidget {
                 Navigator.push(context, MaterialPageRoute(builder: (_) => m.builder()));
               }
             }),
+          ],
+              ),
+            ),
+            // The sync line stays at the bottom of the menu (the list above
+            // scrolls), with its button that syncs right away.
+            if (!kBazaar) ...[
+              const Divider(height: 1),
+              SyncStatusTile(
+                onOpenSettings: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncSettingsScreen())),
+              ),
+            ],
           ],
         ),
       ),
@@ -4370,15 +4390,47 @@ class DesktopSideMenu extends StatelessWidget {
                 ],
               ),
             ),
+            // Home and New transaction stay at the top: the list below
+            // scrolls, they never do.
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: Tooltip(
-                message: 'Ctrl+N',
-                child: FilledButton.icon(
-                  onPressed: desktopNewTransaction,
-                  icon: const Icon(Icons.add),
-                  label: Text(tr('new_transaction')),
-                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+              child: ValueListenableBuilder<int>(
+                valueListenable: desktopMenuIndex,
+                builder: (context, selected, _) => Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: Tooltip(
+                        message: 'Ctrl+1',
+                        child: selected == 0
+                            ? FilledButton.tonalIcon(
+                                onPressed: () => desktopOpen(0),
+                                icon: const Icon(Icons.home, size: 20),
+                                label: Text(tr('home')),
+                                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44), padding: const EdgeInsets.symmetric(horizontal: 8)),
+                              )
+                            : OutlinedButton.icon(
+                                onPressed: () => desktopOpen(0),
+                                icon: const Icon(Icons.home_outlined, size: 20),
+                                label: Text(tr('home')),
+                                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44), padding: const EdgeInsets.symmetric(horizontal: 8)),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 3,
+                      child: Tooltip(
+                        message: 'Ctrl+N',
+                        child: FilledButton.icon(
+                          onPressed: desktopNewTransaction,
+                          icon: const Icon(Icons.add),
+                          label: Text(tr('new_transaction'), maxLines: 1, overflow: TextOverflow.ellipsis),
+                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44), padding: const EdgeInsets.symmetric(horizontal: 10)),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -4388,7 +4440,8 @@ class DesktopSideMenu extends StatelessWidget {
                 builder: (context, selected, _) => ListView(
                   padding: const EdgeInsets.only(bottom: 8),
                   children: [
-                    for (final m in appMenuEntries()) ...[
+                    // Home is the button above.
+                    for (final m in appMenuEntries().where((m) => m.index != 0)) ...[
                       if (m.section != null)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
@@ -4420,34 +4473,14 @@ class DesktopSideMenu extends StatelessWidget {
               ),
             ),
             const Divider(height: 1),
-            ValueListenableBuilder<SyncState>(
-              valueListenable: SyncService.instance.state,
-              builder: (context, st, _) => ListTile(
-                dense: true,
-                leading: Icon(
-                  switch (st) {
-                    SyncState.off => Icons.cloud_off_outlined,
-                    SyncState.syncing => Icons.cloud_sync_outlined,
-                    SyncState.error => Icons.cloud_off,
-                    SyncState.idle => Icons.cloud_done_outlined,
-                  },
-                  size: 20,
-                  color: st == SyncState.error ? Colors.red.shade400 : (st == SyncState.idle ? Colors.green.shade600 : null),
-                ),
-                title: Text(switch (st) {
-                  SyncState.off => loc('همگام‌سازی خاموش'),
-                  SyncState.syncing => loc('در حال همگام‌سازی...'),
-                  SyncState.error => loc('همگام‌سازی انجام نشد'),
-                  SyncState.idle => loc('همگام است'),
-                }, style: const TextStyle(fontSize: 12.5)),
-                trailing: Tooltip(
-                  message: loc('میانبرهای صفحه‌کلید (F1)'),
-                  child: const IconButton(icon: Icon(Icons.keyboard_outlined, size: 20), onPressed: showDesktopShortcuts),
-                ),
-                onTap: () {
-                  desktopOpen(3);
-                  rootNavigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => const SyncSettingsScreen()));
-                },
+            SyncStatusTile(
+              onOpenSettings: () {
+                desktopOpen(3);
+                rootNavigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => const SyncSettingsScreen()));
+              },
+              extra: Tooltip(
+                message: loc('میانبرهای صفحه‌کلید (F1)'),
+                child: const IconButton(icon: Icon(Icons.keyboard_outlined, size: 20), onPressed: showDesktopShortcuts),
               ),
             ),
             Padding(
@@ -4457,6 +4490,80 @@ class DesktopSideMenu extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The sync line of the menus: how syncing stands and when it last ran, a
+/// button that syncs right away (or opens the sync settings while it's off or
+/// needs a new sign-in), and a tap for the sync settings.
+class SyncStatusTile extends StatelessWidget {
+  final VoidCallback onOpenSettings;
+  final Widget? extra;
+  const SyncStatusTile({required this.onOpenSettings, this.extra, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final sync = SyncService.instance;
+    return ValueListenableBuilder<SyncState>(
+      valueListenable: sync.state,
+      builder: (context, st, _) {
+        final last = sync.lastSync;
+        final needsSettings = st == SyncState.off || sync.needsSignIn;
+        return ListTile(
+          dense: true,
+          leading: Icon(
+            switch (st) {
+              SyncState.off => Icons.cloud_off_outlined,
+              SyncState.syncing => Icons.cloud_sync_outlined,
+              SyncState.error => Icons.cloud_off,
+              SyncState.idle => Icons.cloud_done_outlined,
+            },
+            size: 20,
+            color: st == SyncState.error ? Colors.red.shade400 : (st == SyncState.idle ? Colors.green.shade600 : null),
+          ),
+          title: Text(switch (st) {
+            SyncState.off => loc('همگام‌سازی خاموش'),
+            SyncState.syncing => loc('در حال همگام‌سازی...'),
+            SyncState.error => loc('همگام‌سازی انجام نشد'),
+            SyncState.idle => loc('همگام است'),
+          }, style: const TextStyle(fontSize: 12.5)),
+          subtitle: st == SyncState.off || last == null
+              ? null
+              : Text(
+                  locf('آخرین همگام‌سازی: {0}', [
+                    DateUtils.isSameDay(last, DateTime.now())
+                        ? ltr(persianDigits(DateFormat('HH:mm').format(last)))
+                        : formatDate(last)
+                  ]),
+                  style: const TextStyle(fontSize: 11),
+                ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (st == SyncState.syncing)
+                const SizedBox(width: 40, height: 40, child: Padding(padding: EdgeInsets.all(11), child: CircularProgressIndicator(strokeWidth: 2)))
+              else
+                Tooltip(
+                  message: needsSettings
+                      ? loc('تنظیمات همگام‌سازی')
+                      : (defaultTargetPlatform == TargetPlatform.windows ? loc('همگام‌سازی الان (F5)') : loc('همگام‌سازی الان')),
+                  child: IconButton(
+                    icon: const Icon(Icons.sync, size: 22),
+                    onPressed: needsSettings
+                        ? onOpenSettings
+                        : () {
+                            homeRefresh?.call();
+                            unawaited(sync.syncNow());
+                          },
+                  ),
+                ),
+              if (extra != null) extra!,
+            ],
+          ),
+          onTap: onOpenSettings,
+        );
+      },
     );
   }
 }
@@ -7041,6 +7148,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   int shoppingPending = 0; // items not yet ticked off across all shopping lists
   int confirmedDuplicates = 0; // likely double-entered confirmed transactions
   bool _startupChecksDone = false;
+  // The goals the dashboard sums up (they cover every account).
+  List<BudgetGoal> _budgetGoals = [];
+  List<SavingsGoal> _savingsGoals = [];
+  List<SavingsContribution> _savingsContribs = [];
+  int _goalsVersion = 0;
+
+  /// Best effort: a damaged goal entry must not keep Home from opening.
+  Future<void> _loadGoals() async {
+    try {
+      _budgetGoals = await Store.loadBudgetGoals();
+    } catch (_) {}
+    try {
+      _savingsGoals = await Store.loadSavingsGoals();
+      _savingsContribs = await Store.loadSavingsContributions();
+    } catch (_) {}
+    _goalsVersion++;
+  }
 
   Future<void> _countConfirmedDuplicates() async {
     final n = findConfirmedDuplicatePairs(await Store.loadTransactions(), await loadDismissedDuplicatePairs()).length;
@@ -7117,6 +7241,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
   void dispose() {
     SyncService.instance.dataVersion.removeListener(_onSynced);
     homeNewTransaction = null;
+    stopAutoBackupTimer();
     homeRefresh = null;
     appRouteObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
@@ -7158,6 +7283,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       accounts = await Store.loadAccounts();
       _memo.clear();
       shoppingPending = await _loadShoppingPending();
+      await _loadGoals();
       if (mounted) setState(() {});
       if (_startupChecksDone && !appLocked.value) unawaited(_countConfirmedDuplicates());
       // Something may have been changed on the screen just closed.
@@ -7184,6 +7310,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       _memo.clear();
       _loadStep = loc('خواندن لیست‌های خرید');
       shoppingPending = await _loadShoppingPending();
+      await _loadGoals();
     } catch (e, st) {
       if (mounted) setState(() => _loadError = '$_loadStep:\n$e\n\n$st');
       return;
@@ -7223,7 +7350,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
           checkSpendingAnomalies,
           checkReturnDeadlines,
           maybeRunAutoBackup,
+          startAutoBackupTimer,
         ]) {
+          // Home is gone (e.g. the app is closing): no more background work,
+          // and above all no timer left running after it.
+          if (!mounted) break;
           try {
             await step();
           } catch (_) {}
@@ -7387,6 +7518,279 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
       total += (byAccount[a.id] ?? 0) * a.exchangeRateToMain;
     }
     return {mainCurrencyOf(accounts): total};
+  }
+
+  // ---- The dashboard's summary cards ----
+
+  /// The currency the dashboard cards add up in: the chosen account's, or
+  /// the main account's (other currencies converted at their day rate).
+  String get _dashCurrency => dashboardAccountFilter != null ? currencyOf(dashboardAccountFilter!) : mainCurrencyOf(accounts);
+  double _dashAmount(Transaction t) => dashboardAccountFilter != null ? t.amount : amountInMain(t, accounts);
+
+  static DateTime _dayOf(DateTime d) => DateTime(d.year, d.month, d.day);
+  static int _daysBetween(DateTime from, DateTime to) => (_dayOf(to).difference(_dayOf(from)).inHours / 24).round();
+
+  /// Payments of the coming week (tomorrow through 7 days from now):
+  /// future-dated expenses and the coming payments of recurring ones.
+  List<TxOccurrence> get _weekAhead => _memoized('week|$_dayKey|$_calKey', () {
+        final today = _dayOf(DateTime.now());
+        final end = DateTime(today.year, today.month, today.day + 7);
+        return occurrencesWithRecurringProjections(tx, horizonDays: 9)
+            .where((e) => _dayOf(e.date).isAfter(today) && !_dayOf(e.date).isAfter(end))
+            .where((e) => e.t.type == TxType.expense && (dashboardAccountFilter != null || !e.t.categoryId.startsWith('_transfer')))
+            .toList()
+          ..sort((x, y) => x.date.compareTo(y.date));
+      });
+
+  /// This month's spending so far against the same days of last month.
+  ({double now, double before, int days}) get _spendTrend => _memoized('trend|$_dayKey|$_calKey', () {
+        final today = _dayOf(DateTime.now());
+        final month = calendarMonthOf(today);
+        final prev = calendarMonthOf(today, -1);
+        final days = _daysBetween(month.start, today) + 1;
+        var prevEnd = DateTime(prev.start.year, prev.start.month, prev.start.day + days - 1);
+        if (prevEnd.isAfter(prev.end)) prevEnd = prev.end;
+        double spent(DateTime from, DateTime to) {
+          var sum = 0.0;
+          for (final t in _effectiveTx) {
+            if (t.type != TxType.expense || t.categoryId.startsWith('_transfer')) continue;
+            final d = _dayOf(t.date);
+            if (d.isBefore(from) || d.isAfter(to)) continue;
+            sum += _dashAmount(t);
+          }
+          return sum;
+        }
+
+        return (now: spent(month.start, today), before: spent(prev.start, prevEnd), days: days);
+      });
+
+  /// This month's budget limits (every account, like the goals page).
+  ({int goals, int over, int near, double spent, double limit}) get _budgetSummary => _memoized('budget|$_dayKey|$_calKey|$_goalsVersion', () {
+        final spending = spendingByTopCategoryThisMonth(_txAll, categories, accounts);
+        final shown = {
+          for (final c in categories)
+            if (c.type == TxType.expense && c.parentId == null && !c.id.startsWith('_transfer')) c.id,
+        };
+        var goals = 0, over = 0, near = 0;
+        var spent = 0.0, limit = 0.0;
+        for (final g in _budgetGoals) {
+          if (!shown.contains(g.categoryId) || g.monthlyAmount <= 0) continue;
+          final s = spending[g.categoryId] ?? 0;
+          goals++;
+          spent += s;
+          limit += g.monthlyAmount;
+          final r = s / g.monthlyAmount;
+          if (r >= 1) {
+            over++;
+          } else if (r >= 0.8) {
+            near++;
+          }
+        }
+        return (goals: goals, over: over, near: near, spent: spent, limit: limit);
+      });
+
+  /// Bought items whose return period ends within a week (today included),
+  /// the soonest first.
+  List<({Transaction t, String item, int daysLeft, DateTime until})> get _returnsSoon => _memoized('returns|$_dayKey', () {
+        final today = _dayOf(DateTime.now());
+        final list = <({Transaction t, String item, int daysLeft, DateTime until})>[];
+        for (final t in tx) {
+          for (final it in t.items) {
+            final until = it.returnUntil;
+            if (until == null) continue;
+            final left = _daysBetween(today, until);
+            if (left < 0 || left > 7) continue;
+            list.add((t: t, item: it.name.trim().isEmpty ? categoryName(t.categoryId) : it.name.trim(), daysLeft: left, until: until));
+          }
+        }
+        list.sort((a, b) => a.daysLeft.compareTo(b.daysLeft));
+        return list;
+      });
+
+  /// "tomorrow" / "in 3 days" for a date [days] days ahead.
+  String _inDays(int days) => days <= 0
+      ? loc('امروز')
+      : days == 1
+          ? loc('فردا')
+          : locf('{0} روز دیگر', [persianDigits('$days')]);
+
+  /// Opens menu page [index] from a dashboard card: next to the side menu on
+  /// a computer (so the menu shows where you are), over Home on the phone.
+  Future<void> _openMenuPage(int index) async {
+    if (desktopSideMenu(context)) {
+      desktopOpen(index);
+      return;
+    }
+    final entry = appMenuEntries().where((m) => m.index == index).firstOrNull;
+    if (entry == null) return;
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => entry.builder()));
+  }
+
+  /// Things that want a look: drafts to confirm, likely duplicates and
+  /// return periods running out.
+  List<Widget> _attentionRows(ChartColors colors) {
+    final rows = <Widget>[
+      if (draftCount > 0)
+        AttentionRow(
+          icon: Icons.edit_note_outlined,
+          color: colors.warning,
+          iconColor: colors.warningText,
+          text: locf('{0} پیش‌نویس منتظر بررسی و ثبت نهایی', [persianDigits('$draftCount')]),
+          onTap: _openDrafts,
+        ),
+      if (confirmedDuplicates > 0)
+        AttentionRow(
+          icon: Icons.content_copy_outlined,
+          color: colors.warning,
+          iconColor: colors.warningText,
+          text: locf('{0} مورد احتمالاً تکراری بین تراکنش‌های ثبت‌شده - بررسی کن', [(persianDigits('$confirmedDuplicates'))]),
+          onTap: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen(initialTab: 2)));
+            await _countConfirmedDuplicates();
+          },
+        ),
+      for (final r in _returnsSoon.take(3))
+        AttentionRow(
+          icon: Icons.assignment_return_outlined,
+          color: r.daysLeft <= 1 ? colors.bad : colors.warning,
+          iconColor: r.daysLeft <= 1 ? colors.badText : colors.warningText,
+          text: locf('مهلت مرجوعی «{0}»: {1}', [r.item, r.daysLeft == 0 ? loc('امروز آخرین روز است') : _inDays(r.daysLeft)]),
+          detail: [if (r.t.merchant.trim().isNotEmpty) r.t.merchant.trim(), formatDate(r.until)].join(' • '),
+          onTap: () => _openEditor(existing: r.t),
+        ),
+    ];
+    return [
+      for (final r in rows) ...[r, const SizedBox(height: 8)],
+    ];
+  }
+
+  /// The summary cards: the coming week's payments, this month's budget,
+  /// savings goals and how spending compares with last month.
+  Widget _dashboardTiles(BuildContext context) {
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final cur = _dashCurrency;
+    String money(double v) => formatMoney(v, cur);
+
+    // The coming week.
+    final week = _weekAhead;
+    final weekTotal = week.fold(0.0, (s, e) => s + _dashAmount(e.t));
+    final next = week.firstOrNull;
+    final weekTile = DashTile(
+      icon: Icons.upcoming_outlined,
+      color: scheme.primary,
+      title: loc('پرداخت‌های ۷ روز آینده'),
+      value: week.isEmpty ? loc('بدون پرداخت') : money(weekTotal),
+      valueColor: week.isEmpty ? colors.goodText : null,
+      valueIcon: week.isEmpty ? Icons.check_circle_outline : null,
+      detail: next == null
+          ? loc('تا یک هفته‌ی دیگر پرداختی در پیش نیست.')
+          : locf('{0} پرداخت • بعدی: {1}، {2}', [
+              persianDigits('${week.length}'),
+              next.t.merchant.trim().isNotEmpty ? next.t.merchant.trim() : categoryName(next.t.categoryId),
+              _inDays(_daysBetween(DateTime.now(), next.date)),
+            ]),
+      onTap: () => _openMenuPage(8),
+    );
+
+    // This month's budget.
+    final b = _budgetSummary;
+    final Widget budgetTile;
+    if (b.goals == 0) {
+      budgetTile = DashTile(
+        icon: Icons.flag_outlined,
+        color: scheme.onSurfaceVariant,
+        title: loc('بودجه‌ی این ماه'),
+        value: loc('بدون سقف'),
+        valueColor: scheme.onSurfaceVariant,
+        detail: loc('برای هر دسته یک سقف خرج ماهانه بگذار تا اینجا ببینی چقدر مانده.'),
+        onTap: () => _openMenuPage(14),
+      );
+    } else {
+      final main = mainCurrencyOf(accounts);
+      final left = b.limit - b.spent;
+      final status = limitStatus(colors, b.limit > 0 ? b.spent / b.limit : 0);
+      final worst = b.over > 0 ? colors.badText : (b.near > 0 ? colors.warningText : colors.goodText);
+      budgetTile = DashTile(
+        icon: Icons.flag_outlined,
+        color: worst,
+        title: loc('بودجه‌ی این ماه'),
+        value: left >= 0 ? locf('{0} مانده', [formatMoney(left, main)]) : locf('{0} بیشتر از سقف', [formatMoney(-left, main)]),
+        valueColor: left < 0 ? colors.badText : null,
+        meter: TileMeter(fraction: b.limit > 0 ? b.spent / b.limit : 0, color: status.mark, marker: monthElapsedFraction()),
+        detail: b.over > 0
+            ? locf('{0} دسته از سقف گذشته', [persianDigits('${b.over}')])
+            : b.near > 0
+                ? locf('{0} دسته نزدیک سقف', [persianDigits('${b.near}')])
+                : loc('همه‌ی دسته‌ها در محدوده‌اند'),
+        detailColor: worst,
+        onTap: () => _openMenuPage(14),
+      );
+    }
+
+    // Savings goals (always in the main account's currency).
+    final Widget savingsTile;
+    if (_savingsGoals.isEmpty) {
+      savingsTile = DashTile(
+        icon: Icons.savings_outlined,
+        color: scheme.onSurfaceVariant,
+        title: loc('اهداف پس‌انداز'),
+        value: loc('هنوز هدفی نیست'),
+        valueColor: scheme.onSurfaceVariant,
+        detail: loc('برای خرید بزرگ بعدی یک هدف پس‌انداز بساز.'),
+        onTap: () => _openMenuPage(15),
+      );
+    } else {
+      final main = mainCurrencyOf(accounts);
+      double savedFor(SavingsGoal g) => _savingsContribs.where((c) => c.goalId == g.id).fold(0.0, (s, c) => s + c.amount);
+      final saved = _savingsGoals.fold(0.0, (s, g) => s + min(savedFor(g), g.targetAmount));
+      final target = _savingsGoals.fold(0.0, (s, g) => s + g.targetAmount);
+      final reached = _savingsGoals.where((g) => savedFor(g) >= g.targetAmount).length;
+      final share = target > 0 ? saved / target : 0.0;
+      savingsTile = DashTile(
+        icon: Icons.savings_outlined,
+        color: colors.accent,
+        title: loc('اهداف پس‌انداز'),
+        value: formatMoney(saved, main),
+        meter: TileMeter(fraction: share, color: reached == _savingsGoals.length ? colors.good : colors.accent),
+        detail: [
+          locf('{0} از {1}', [ltr(persianDigits('${(share * 100).round()}%')), formatMoney(target, main)]),
+          if (reached > 0) locf('{0} هدف رسیده', [persianDigits('$reached')]),
+        ].join(' • '),
+        onTap: () => _openMenuPage(15),
+      );
+    }
+
+    // Spending against the same days of last month.
+    final trend = _spendTrend;
+    final Widget trendTile;
+    if (trend.before > 0) {
+      final change = (trend.now - trend.before) / trend.before * 100;
+      final pct = ltr(persianDigits('${change.abs().round()}%'));
+      final same = change.abs() < 1;
+      final color = same ? scheme.onSurface : (change > 0 ? colors.badText : colors.goodText);
+      trendTile = DashTile(
+        icon: Icons.insights_outlined,
+        color: same ? scheme.primary : color,
+        title: loc('روند خرج این ماه'),
+        value: same ? loc('مثل ماه قبل') : (change > 0 ? locf('{0} بیشتر', [pct]) : locf('{0} کمتر', [pct])),
+        valueColor: color,
+        valueIcon: same ? Icons.trending_flat : (change > 0 ? Icons.trending_up : Icons.trending_down),
+        detail: '${loc('نسبت به همین روزهای ماه قبل')}\n${locf('میانگین روزانه: {0}', [money(trend.now / trend.days)])}',
+        onTap: () => _openMenuPage(7),
+      );
+    } else {
+      trendTile = DashTile(
+        icon: Icons.insights_outlined,
+        color: scheme.primary,
+        title: loc('روند خرج این ماه'),
+        value: money(trend.days > 0 ? trend.now / trend.days : 0),
+        detail: trend.now > 0 ? loc('میانگین خرج روزانه‌ی این ماه') : loc('این ماه هنوز خرجی ثبت نشده.'),
+        onTap: () => _openMenuPage(7),
+      );
+    }
+
+    return DashGrid(tiles: [weekTile, budgetTile, savingsTile, trendTile]);
   }
 
   /// What the "safe to spend" figure subtracts, so a surprising number can
@@ -7581,6 +7985,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
             : TransactionDetailScreen(t: existing, categories: categories, accounts: accounts),
       ),
     );
+    await _handleEditorResult(result);
+  }
+
+  /// Reads a receipt or payslip straight from Home (camera, gallery or PDF);
+  /// the transaction it gives is saved like one from the editor.
+  Future<void> _openScan() async {
+    final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
     await _handleEditorResult(result);
   }
 
@@ -7876,36 +8287,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
                 ),
               ),
             ),
-            if (confirmedDuplicates > 0) ...[
-              const SizedBox(height: 12),
-              Material(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(16),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () async {
-                    await Navigator.push(context, MaterialPageRoute(builder: (_) => const DraftsScreen(initialTab: 2)));
-                    await _countConfirmedDuplicates();
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    child: Row(
-                      children: [
-                        Icon(Icons.content_copy_outlined, color: Colors.orange.shade900),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            locf('{0} مورد احتمالاً تکراری بین تراکنش‌های ثبت‌شده - بررسی کن', [(persianDigits('$confirmedDuplicates'))]),
-                            style: TextStyle(fontSize: 13, color: Colors.orange.shade900, fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Icon(Icons.chevron_left, color: Colors.orange.shade900),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            const SizedBox(height: 12),
+            ..._attentionRows(ChartColors.of(context)),
+            // The coming week, this month's budget, savings goals and the
+            // spending trend - each card opens its own page.
+            if (_txAll.isNotEmpty) _dashboardTiles(context),
             const SizedBox(height: 12),
             Material(
               color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.6),
@@ -8096,18 +8482,36 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware, SingleTickerPr
               ...filter,
               ...overview,
               ...transactions,
-              const SizedBox(height: 80),
+              // Room for the two buttons at the bottom.
+              const SizedBox(height: 150),
             ],
           ),
         );
       }(),
-      // On a computer the side menu has this button (and Ctrl+N).
+      // On a computer the side menu has this button (and Ctrl+N). On the
+      // phone reading a receipt is right above it, in thumb's reach.
       floatingActionButton: desktopSideMenu(context)
           ? null
-          : FloatingActionButton.extended(
-              onPressed: () => _openEditor(),
-              icon: const Icon(Icons.add),
-              label: Text(tr('new_transaction')),
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                FloatingActionButton.extended(
+                  heroTag: 'home-scan',
+                  onPressed: _openScan,
+                  backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                  foregroundColor: Theme.of(context).colorScheme.onSecondaryContainer,
+                  icon: const Icon(Icons.document_scanner_outlined),
+                  label: Text(loc('خواندن رسید')),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton.extended(
+                  heroTag: 'home-new',
+                  onPressed: () => _openEditor(),
+                  icon: const Icon(Icons.add),
+                  label: Text(tr('new_transaction')),
+                ),
+              ],
             ),
     ),
     );
@@ -8432,36 +8836,11 @@ class _DashboardChartsState extends State<DashboardCharts> {
     final otherSum = entries.skip(6).fold(0.0, (s, e) => s + e.value);
     final monthly = widget.monthly;
     final maxMonthly = monthly.fold(0.0, (m, e) => [m, e.income, e.expense].reduce((a, b) => a > b ? a : b));
-    Widget? comparison;
-    if (drilldown == null && monthly.length >= 2) {
-      final curr = monthly.last.expense;
-      final prev = monthly[monthly.length - 2].expense;
-      if (prev > 0) {
-        final change = (curr - prev) / prev * 100;
-        final up = change >= 0;
-        comparison = Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Row(
-            children: [
-              Icon(up ? Icons.trending_up : Icons.trending_down, color: up ? Colors.red : Colors.green, size: 18),
-              const SizedBox(width: 4),
-              // Wraps where the words are longer (German).
-              Flexible(
-                child: Text(
-                  locf('هزینه‌ی این ماه {0} {1} از ماه قبل', [(ltr(persianDigits('${change.abs().round()}%'))), (up ? loc('بیشتر') : loc('کمتر'))]),
-                  style: TextStyle(fontSize: 12, color: up ? Colors.red.shade700 : Colors.green.shade700),
-                ),
-              ),
-            ],
-          ),
-        );
-      }
-    }
-
+    // (How this month compares with last month is on the dashboard's
+    // spending-trend card, day for day.)
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (comparison != null) comparison,
         if (total > 0 || drilldown != null) ...[
           Row(
             children: [
@@ -10739,52 +11118,93 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
 
 // ============================== Backup, restore & Excel export ==============================
 
-enum AutoBackupFrequency { off, weekly, monthly, quarterly }
+enum AutoBackupFrequency { off, daily, weekly, monthly, quarterly }
+
+/// How many automatic backups are kept (the oldest beyond that are deleted).
+const kAutoBackupsKept = 30;
 
 extension AutoBackupFrequencyX on AutoBackupFrequency {
   String get label => switch (this) {
         AutoBackupFrequency.off => loc('خاموش'),
+        AutoBackupFrequency.daily => loc('روزانه'),
         AutoBackupFrequency.weekly => loc('هفتگی'),
         AutoBackupFrequency.monthly => loc('ماهانه'),
         AutoBackupFrequency.quarterly => loc('فصلی (هر ۳ ماه)'),
       };
   int get days => switch (this) {
         AutoBackupFrequency.off => 0,
+        AutoBackupFrequency.daily => 1,
         AutoBackupFrequency.weekly => 7,
         AutoBackupFrequency.monthly => 30,
         AutoBackupFrequency.quarterly => 90,
       };
 }
 
+Future<Directory> _autoBackupsDir() async =>
+    Directory('${(await getApplicationDocumentsDirectory()).path}${Platform.pathSeparator}auto_backups');
+
+/// The automatic backups on this device, newest first.
+Future<List<File>> listAutoBackups() async {
+  final dir = await _autoBackupsDir();
+  if (!await dir.exists()) return [];
+  return dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json')).toList()
+    ..sort((a, b) => b.path.compareTo(a.path));
+}
+
+/// When an automatic backup file was made (from its name).
+DateTime? autoBackupTime(File f) {
+  final m = RegExp(r'backup_(\d+)\.json$').firstMatch(f.path);
+  return m == null ? null : DateTime.fromMillisecondsSinceEpoch(int.parse(m.group(1)!));
+}
+
 /// Silently writes a backup file to the app's own storage (no share sheet)
-/// when the interval the person chose in Settings has passed, keeping only
-/// the most recent few so this can't quietly fill up the device.
-Future<void> maybeRunAutoBackup() async {
+/// when the interval the person chose in Settings has passed (daily: once a
+/// calendar day), or right away with [force], keeping only the most recent
+/// [kAutoBackupsKept] so this can't quietly fill up the device. Returns
+/// whether a backup was written.
+Future<bool> maybeRunAutoBackup({bool force = false}) async {
   final freq = await Store.loadAutoBackupFrequency();
-  if (freq == AutoBackupFrequency.off) return;
+  if (freq == AutoBackupFrequency.off && !force) return false;
   final last = await Store.loadLastAutoBackupAt();
   final now = DateTime.now();
-  if (last != null && now.difference(last).inDays < freq.days) return;
+  if (!force && last != null) {
+    final due = freq == AutoBackupFrequency.daily
+        ? DateUtils.dateOnly(last).isBefore(DateUtils.dateOnly(now))
+        : now.difference(last).inDays >= freq.days;
+    if (!due) return false;
+  }
   try {
     final data = await Store.exportBackupData();
     final json = const JsonEncoder.withIndent('  ').convert(data);
-    final dir = await getApplicationDocumentsDirectory();
-    final backupsDir = Directory('${dir.path}/auto_backups');
+    final backupsDir = await _autoBackupsDir();
     if (!await backupsDir.exists()) await backupsDir.create(recursive: true);
-    final path = '${backupsDir.path}/backup_${now.millisecondsSinceEpoch}.json';
+    final path = '${backupsDir.path}${Platform.pathSeparator}backup_${now.millisecondsSinceEpoch}.json';
     await File(path).writeAsString(json);
-    // Keep only the 5 most recent auto-backups.
-    final files = backupsDir.listSync().whereType<File>().toList()
-      ..sort((a, b) => b.path.compareTo(a.path));
-    for (final f in files.skip(5)) {
+    // Keep only the most recent ones.
+    for (final f in (await listAutoBackups()).skip(kAutoBackupsKept)) {
       try {
         await f.delete();
       } catch (_) {}
     }
     await Store.saveLastAutoBackupAt(now);
+    return true;
   } catch (_) {
     // Best-effort only - a failed silent backup shouldn't interrupt the person.
+    return false;
   }
+}
+
+Timer? _autoBackupTimer;
+
+/// Looks again every hour while the app stays open (the computer app can
+/// stay open for days), so a daily backup still happens every day.
+Future<void> startAutoBackupTimer() async {
+  _autoBackupTimer ??= Timer.periodic(const Duration(hours: 1), (_) => unawaited(maybeRunAutoBackup()));
+}
+
+void stopAutoBackupTimer() {
+  _autoBackupTimer?.cancel();
+  _autoBackupTimer = null;
 }
 
 Future<String> _buildBackupFile() async {
@@ -10974,113 +11394,185 @@ class _SavingsSuggestionScreenState extends State<SavingsSuggestionScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
     final avg = _averages(3);
     final surplus = avg.income - avg.expense;
     final currency = primaryCurrency;
+    String money(double v) => formatMoney(v, currency);
+    // How much of the income is left over: 20% and up is a healthy rate.
+    final rate = avg.income > 0 ? surplus / avg.income : 0.0;
+    final ({Color mark, Color text, IconData icon}) rateStatus = rate >= 0.2
+        ? (mark: colors.good, text: colors.goodText, icon: Icons.check_circle_outline)
+        : rate > 0
+            ? (mark: colors.warning, text: colors.warningText, icon: Icons.info_outline)
+            : (mark: colors.bad, text: colors.badText, icon: Icons.error_outline);
+    final goalsShare = surplus / 2;
+
+    Widget splitRow(Color c, IconData icon, String label, String value) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              IconChip(icon: icon, color: c, size: 32),
+              const SizedBox(width: 10),
+              Expanded(child: Text(label, style: const TextStyle(fontSize: 13.5))),
+              Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+            ],
+          ),
+        );
+
     return Scaffold(
       appBar: AppBar(title: Text(tr('savings_suggestion_title'))),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
+          Text(loc('میانگین ۳ ماه اخیر'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 10),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: StatTile(icon: Icons.arrow_downward_rounded, color: colors.good, label: loc('میانگین درآمد'), value: money(avg.income)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: StatTile(icon: Icons.arrow_upward_rounded, color: colors.bad, label: loc('میانگین هزینه'), value: money(avg.expense)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
           Card(
+            margin: EdgeInsets.zero,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(loc('میانگین ۳ ماه اخیر'), style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 12),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(loc('میانگین درآمد')),
-                      Text(ltr(formatMoney(avg.income, currency)), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
+                      IconChip(icon: Icons.savings_outlined, color: colors.accent, size: 30),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(loc('مازاد قابل پس‌انداز'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: scheme.onSurfaceVariant))),
+                      Text(loc('در ماه'), style: muted),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(loc('میانگین هزینه')),
-                      Text(ltr(formatMoney(avg.expense, currency)), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
-                    ],
+                  const SizedBox(height: 8),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(money(surplus), style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: scheme.onSurface)),
                   ),
-                  const Divider(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(loc('مازاد قابل پس‌انداز'), style: const TextStyle(fontWeight: FontWeight.bold)),
-                      Text(
-                        ltr(formatMoney(surplus, currency)),
-                        style: TextStyle(fontWeight: FontWeight.bold, color: surplus >= 0 ? Colors.indigo : Colors.red),
-                      ),
-                    ],
-                  ),
+                  if (avg.income > 0) ...[
+                    const SizedBox(height: 10),
+                    MeterBar(fraction: max(0.0, rate), color: rateStatus.mark, height: 10),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(rateStatus.icon, size: 17, color: rateStatus.text),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            locf('نرخ پس‌انداز: {0} از درآمد', [ltr(persianDigits('${(rate * 100).round()}%'))]) +
+                                (rate >= 0.2 ? loc(' - خوب است') : (rate > 0 ? loc(' - بهتر است به ۲۰٪ برسد') : '')),
+                            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: rateStatus.text),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           if (surplus > 0)
+            SectionCard(
+              title: loc('یک نقطه‌ی شروع ساده'),
+              children: [
+                Text(
+                  locf('با مازاد ماهانه‌ی حدود {0}، یک شروع رایج اینه: حدود نیمی رو برای اهداف نزدیک‌مدت (مثل چیزهایی که توی «اهداف پس‌انداز» تعریف کردی) کنار بذاری، و باقی رو به‌صورت ماهانه و خودکار وارد یه حساب سرمایه‌گذاری بلندمدت کنی. این فقط یه نقطه‌ی شروعه، نه یه قانون ثابت.', [(ltr(money(surplus)))]),
+                  style: const TextStyle(fontSize: 13, height: 1.7),
+                ),
+                const SizedBox(height: 12),
+                ShareBar(height: 14, parts: [(value: goalsShare, color: colors.accent), (value: surplus - goalsShare, color: colors.slot(2))]),
+                const SizedBox(height: 6),
+                splitRow(colors.accent, Icons.flag_outlined, loc('اهداف نزدیک‌مدت'), money(goalsShare)),
+                splitRow(colors.slot(2), Icons.trending_up, loc('سرمایه‌گذاری بلندمدت'), money(surplus - goalsShare)),
+              ],
+            )
+          else
             Card(
+              margin: EdgeInsets.zero,
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Column(
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(loc('یک نقطه‌ی شروع ساده'), style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    Text(
-                      locf('با مازاد ماهانه‌ی حدود {0}، یک شروع رایج اینه: حدود نیمی رو برای اهداف نزدیک‌مدت (مثل چیزهایی که توی «اهداف پس‌انداز» تعریف کردی) کنار بذاری، و باقی رو به‌صورت ماهانه و خودکار وارد یه حساب سرمایه‌گذاری بلندمدت کنی. این فقط یه نقطه‌ی شروعه، نه یه قانون ثابت.', [(ltr(formatMoney(surplus, currency)))]),
-                      style: const TextStyle(fontSize: 13, height: 1.6),
+                    Icon(Icons.warning_amber_rounded, color: colors.warningText),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        loc('در ۳ ماه اخیر، میانگین هزینه‌هات از درآمدت بیشتر بوده. قبل از فکر به پس‌انداز/سرمایه‌گذاری، شاید بهتر باشه اول روی کم‌کردن هزینه‌ها یا افزایش درآمد تمرکز کنی.'),
+                        style: const TextStyle(fontSize: 13, height: 1.7),
+                      ),
                     ),
                   ],
                 ),
               ),
-            )
-          else
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  loc('در ۳ ماه اخیر، میانگین هزینه‌هات از درآمدت بیشتر بوده. قبل از فکر به پس‌انداز/سرمایه‌گذاری، شاید بهتر باشه اول روی کم‌کردن هزینه‌ها یا افزایش درآمد تمرکز کنی.'),
-                  style: const TextStyle(fontSize: 13, height: 1.6),
-                ),
-              ),
             ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: requesting ? null : () => hasGeminiKey ? _requestAiSuggestion() : promptForGeminiKey(context),
-            icon: requesting
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.auto_awesome),
-            label: Text(requesting ? loc('در حال دریافت...') : loc('پیشنهاد هوشمند‌تر (با هوش مصنوعی)')),
-          ),
-          if (errorMessage != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-            ),
-          if (aiSuggestion != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Card(
-                // Theme colours: the light box with the default (light in
-                // dark mode) text was unreadable.
-                color: Theme.of(context).colorScheme.primaryContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    aiSuggestion!,
-                    style: TextStyle(fontSize: 13, height: 1.7, color: Theme.of(context).colorScheme.onPrimaryContainer),
+          const SizedBox(height: 14),
+          // A note written by the AI from these same figures.
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      IconChip(icon: Icons.auto_awesome, color: colors.slot(4), size: 32),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(loc('پیشنهاد هوشمند'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
+                    ],
                   ),
-                ),
+                  const SizedBox(height: 6),
+                  Text(loc('یک یادداشت کوتاه و کلی بر اساس همین اعداد و اهداف پس‌اندازت، با سرویس هوش مصنوعی‌ای که در تنظیمات انتخاب کرده‌ای.'), style: muted.copyWith(fontSize: 12.5)),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: requesting ? null : () => hasGeminiKey ? _requestAiSuggestion() : promptForGeminiKey(context),
+                    icon: requesting
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.auto_awesome),
+                    label: Text(requesting ? loc('در حال دریافت...') : loc('پیشنهاد هوشمند‌تر (با هوش مصنوعی)')),
+                  ),
+                  if (errorMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(errorMessage!, style: TextStyle(color: colors.badText, fontSize: 12)),
+                    ),
+                  if (aiSuggestion != null)
+                    Container(
+                      margin: const EdgeInsets.only(top: 12),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(12)),
+                      child: Text(aiSuggestion!, style: TextStyle(fontSize: 13, height: 1.8, color: scheme.onPrimaryContainer)),
+                    ),
+                ],
               ),
             ),
-          const SizedBox(height: 8),
-          Text(
-            loc('این صفحه اطلاعات آموزشی و کلی ارائه می‌دهد و جایگزین مشاوره‌ی مالی رسمی نیست.'),
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 14, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(child: Text(loc('این صفحه اطلاعات آموزشی و کلی ارائه می‌دهد و جایگزین مشاوره‌ی مالی رسمی نیست.'), style: muted.copyWith(fontSize: 11))),
+            ],
           ),
         ],
       ),
@@ -11429,12 +11921,57 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    final colorOf = categoryColorsOf(context, tx, categories, accounts);
     final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null && !c.id.startsWith('_transfer')).toList()
       ..sort((a, b) => persianCompare(a.name, b.name));
+    final currency = primaryCurrency;
+    String money(double v) => formatMoney(v, currency);
     final income = _monthIncome;
     final allocated = _totalAllocated;
     final unallocated = income - allocated;
-    final unallocatedColor = unallocated.abs() < 0.01 ? Colors.green : (unallocated > 0 ? Colors.amber.shade800 : Colors.red);
+    final month = calendarMonthOf(DateTime.now());
+    final elapsed = monthElapsedFraction();
+    final allocatedCats = topCategories.where((c) => _allocationFor(c.id) > 0).toList()
+      ..sort((a, b) => (_spendFor(b.id) / _allocationFor(b.id)).compareTo(_spendFor(a.id) / _allocationFor(a.id)));
+    final freeCats = topCategories.where((c) => _allocationFor(c.id) <= 0).toList()
+      ..sort((a, b) => _spendFor(b.id).compareTo(_spendFor(a.id)));
+    // Every unit of income given a job: nothing left (good), some left
+    // (to do) or more given out than comes in (too much).
+    final ({Color mark, Color text, IconData icon, String words}) status = unallocated.abs() < 0.01
+        ? (mark: colors.good, text: colors.goodText, icon: Icons.check_circle_outline, words: loc('همه‌ی درآمد تخصیص یافته - عالی!'))
+        : unallocated > 0
+            ? (mark: colors.warning, text: colors.warningText, icon: Icons.pending_outlined, words: locf('{0} هنوز تخصیص‌نیافته', [money(unallocated)]))
+            : (mark: colors.bad, text: colors.badText, icon: Icons.error_outline, words: locf('{0} بیش از درآمد تخصیص یافته', [money(-unallocated)]));
+
+    Widget legendItem(Color c, String label, String value) => Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Container(width: 10, height: 10, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: muted),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+
     return Scaffold(
       appBar: AppBar(
         title: Text(tr('zero_based_budget_title')),
@@ -11446,91 +11983,96 @@ class _ZeroBasedBudgetScreenState extends State<ZeroBasedBudgetScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           Card(
-            margin: const EdgeInsets.all(16),
+            margin: EdgeInsets.zero,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(child: Text(incomeIsEstimate ? loc('درآمد این ماه (برآورد: میانگین ۳ ماه قبل)') : loc('درآمد این ماه'))),
-                      Text(ltr(formatMoney(income, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(locf('بودجه‌ی {0}', ['${month.name} ${month.yearText}']), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 10),
+                  Text(incomeIsEstimate ? loc('درآمد این ماه (برآورد: میانگین ۳ ماه قبل)') : loc('درآمد این ماه'), style: muted.copyWith(fontSize: 13)),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(money(income), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                  ),
+                  const SizedBox(height: 12),
+                  // Income split into what has a job and what doesn't yet.
+                  ShareBar(
+                    height: 14,
+                    parts: [
+                      (value: min(allocated, max(income, allocated)), color: unallocated < -0.01 ? colors.bad : colors.accent),
+                      (value: max(0.0, unallocated), color: colors.track),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 10),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(loc('تخصیص‌یافته')),
-                      Text(ltr(formatMoney(allocated, primaryCurrency)), style: const TextStyle(fontWeight: FontWeight.w600)),
+                      legendItem(unallocated < -0.01 ? colors.bad : colors.accent, loc('تخصیص‌یافته'), money(allocated)),
+                      const SizedBox(width: 12),
+                      legendItem(colors.track, loc('مانده برای تخصیص'), money(max(0.0, unallocated))),
                     ],
                   ),
-                  const Divider(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        unallocated.abs() < 0.01 ? loc('همه‌چیز تخصیص یافته') : (unallocated > 0 ? loc('هنوز تخصیص‌نیافته') : loc('بیش از درآمد تخصیص یافته')),
-                        style: TextStyle(fontWeight: FontWeight.bold, color: unallocatedColor),
-                      ),
-                      Text(
-                        ltr(formatMoney(unallocated, primaryCurrency)),
-                        style: TextStyle(fontWeight: FontWeight.bold, color: unallocatedColor, fontSize: 16),
-                      ),
-                    ],
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(color: status.mark.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+                    child: Row(
+                      children: [
+                        Icon(status.icon, size: 18, color: status.text),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(status.words, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: status.text))),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              itemCount: topCategories.length,
-              itemBuilder: (context, i) {
-                final c = topCategories[i];
-                final alloc = _allocationFor(c.id);
-                final spend = _spendFor(c.id);
-                final ratio = alloc > 0 ? (spend / alloc).clamp(0.0, 1.0) : 0.0;
-                return Card(
-                  child: ListTile(
-                    leading: Icon(iconForCategory(c, categories)),
-                    title: Text(c.name),
-                    subtitle: alloc > 0
-                        ? Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: LinearProgressIndicator(
-                                    value: ratio,
-                                    minHeight: 6,
-                                    backgroundColor: Colors.grey.withValues(alpha: 0.2),
-                                    color: ratio >= 1.0 ? Colors.red : Colors.indigo.shade300,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  locf('{0} از {1} خرج شده', [(formatMoney(spend, primaryCurrency)), (formatMoney(alloc, primaryCurrency))]),
-                                  style: const TextStyle(fontSize: 11),
-                                ),
-                              ],
-                            ),
-                          )
-                        : Text(loc('تخصیصی داده نشده'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                    trailing: const Icon(Icons.edit_outlined, size: 18),
+          if (allocatedCats.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            SectionCard(
+              title: loc('تخصیص‌ها و خرج این ماه'),
+              subtitle: loc('برای تغییر مبلغ روی هر دسته بزنید.'),
+              children: [
+                paceLegend(context, elapsed),
+                const SizedBox(height: 4),
+                for (final c in allocatedCats)
+                  LimitRow(
+                    icon: iconForCategory(c, categories),
+                    color: colorOf(c.id),
+                    name: c.name,
+                    spent: _spendFor(c.id),
+                    limit: _allocationFor(c.id),
+                    currency: currency,
+                    pace: elapsed,
                     onTap: () => _editAllocation(c),
                   ),
-                );
-              },
+              ],
             ),
-          ),
+          ],
+          if (freeCats.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            SectionCard(
+              title: loc('بدون تخصیص'),
+              children: [
+                for (final c in freeCats)
+                  NoLimitRow(
+                    icon: iconForCategory(c, categories),
+                    color: colorOf(c.id),
+                    name: c.name,
+                    detail: locf('این ماه: {0}', [money(_spendFor(c.id))]),
+                    action: loc('تخصیص'),
+                    onTap: () => _editAllocation(c),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -11609,8 +12151,32 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    final colorOf = categoryColorsOf(context, tx, categories, accounts);
     final topCategories = categories.where((c) => c.type == TxType.expense && c.parentId == null && !c.id.startsWith('_transfer')).toList()
       ..sort((a, b) => persianCompare(a.name, b.name));
+    double? goalFor(String id) => goals.where((g) => g.categoryId == id).firstOrNull?.monthlyAmount;
+    // The categories with a limit, the closest to (or furthest over) it first.
+    final withGoal = topCategories.where((c) => goalFor(c.id) != null).toList()
+      ..sort((a, b) => (_spendFor(b.id) / goalFor(b.id)!).compareTo(_spendFor(a.id) / goalFor(a.id)!));
+    final withoutGoal = topCategories.where((c) => goalFor(c.id) == null).toList()
+      ..sort((a, b) => _spendFor(b.id).compareTo(_spendFor(a.id)));
+    final totalLimit = withGoal.fold(0.0, (s, c) => s + goalFor(c.id)!);
+    final totalSpent = withGoal.fold(0.0, (s, c) => s + _spendFor(c.id));
+    final elapsed = monthElapsedFraction();
+    final month = calendarMonthOf(DateTime.now());
+    final over = withGoal.where((c) => _spendFor(c.id) >= goalFor(c.id)!).length;
+    final near = withGoal.where((c) {
+      final r = _spendFor(c.id) / goalFor(c.id)!;
+      return r >= 0.8 && r < 1;
+    }).length;
+    final within = withGoal.length - over - near;
+    final totalStatus = limitStatus(colors, totalLimit > 0 ? totalSpent / totalLimit : 0);
+    final daysTotal = month.end.difference(month.start).inDays + 1;
+    final dayNo = (DateTime.now().difference(month.start).inDays + 1).clamp(1, daysTotal);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(tr('budget_goals')),
@@ -11622,58 +12188,114 @@ class _BudgetGoalsScreenState extends State<BudgetGoalsScreen> {
           ),
         ],
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: topCategories.length + (hasOtherCurrencies ? 1 : 0),
-        itemBuilder: (context, i) {
-          if (hasOtherCurrencies && i == 0) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                locf('هدف‌ها به واحد حساب اصلی ({0}) هستند؛ هزینه‌های حساب‌هایی با واحد دیگر با نرخ روز همان حساب تبدیل و حساب می‌شوند.', [(currencyLabel(mainCurrency))]),
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-              ),
-            );
-          }
-          final c = topCategories[hasOtherCurrencies ? i - 1 : i];
-          final goalMatch = goals.where((g) => g.categoryId == c.id).toList();
-          final goal = goalMatch.isEmpty ? null : goalMatch.first;
-          final spend = goal == null ? 0.0 : _spendFor(c.id);
-          final ratio = goal == null ? 0.0 : (spend / goal.monthlyAmount).clamp(0.0, 1.5);
-          final color = ratio >= 1.0 ? Colors.red : (ratio >= 0.8 ? Colors.orange : Colors.green);
-          return Card(
-            child: ListTile(
-              leading: Icon(iconForCategory(c, categories)),
-              title: Text(c.name),
-              subtitle: goal == null
-                  ? Text(loc('هدفی تنظیم نشده'), style: const TextStyle(color: Colors.grey, fontSize: 12))
-                  : Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          // The month at a glance.
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('${month.name} ${month.yearText}', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      ),
+                      Text(locf('روز {0} از {1}', [persianDigits('$dayNo'), persianDigits('$daysTotal')]), style: muted),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (withGoal.isEmpty)
+                    Row(
+                      children: [
+                        Icon(Icons.flag_outlined, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(loc('هنوز برای هیچ دسته‌ای سقف ماهانه تعیین نکرده‌اید. از فهرست زیر برای هر دسته یک هدف بگذارید.'), style: muted.copyWith(fontSize: 13))),
+                      ],
+                    )
+                  else ...[
+                    Text(loc('هزینه‌ی دسته‌های دارای هدف'), style: muted.copyWith(fontSize: 13)),
+                    const SizedBox(height: 2),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
                         children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: ratio > 1.0 ? 1.0 : ratio,
-                              minHeight: 8,
-                              backgroundColor: Colors.grey.shade200,
-                              color: color,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            locf('{0} از {1} ({2})', [(formatMoney(spend, mainCurrency)), (formatMoney(goal.monthlyAmount, mainCurrency)), (ltr(persianDigits('${(ratio * 100).round()}%')))]),
-                            style: TextStyle(fontSize: 12, color: color),
-                          ),
+                          Text(formatMoney(totalSpent, mainCurrency), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                          const SizedBox(width: 6),
+                          Text(locf('از {0}', [formatMoney(totalLimit, mainCurrency)]), style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant)),
                         ],
                       ),
                     ),
-              trailing: const Icon(Icons.edit_outlined, size: 18),
-              onTap: () => _editGoal(c),
+                    const SizedBox(height: 10),
+                    MeterBar(fraction: totalLimit > 0 ? totalSpent / totalLimit : 0, color: totalStatus.mark, marker: elapsed, height: 10),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (over > 0) StatusChip(color: colors.bad, text: locf('{0} رد شده', [persianDigits('$over')])),
+                        if (near > 0) StatusChip(color: colors.warning, text: locf('{0} نزدیک سقف', [persianDigits('$near')])),
+                        if (within > 0) StatusChip(color: colors.good, text: locf('{0} در محدوده', [persianDigits('$within')])),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    paceLegend(context, elapsed),
+                  ],
+                  if (hasOtherCurrencies) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      locf('هدف‌ها به واحد حساب اصلی ({0}) هستند؛ هزینه‌های حساب‌هایی با واحد دیگر با نرخ روز همان حساب تبدیل و حساب می‌شوند.', [(currencyLabel(mainCurrency))]),
+                      style: muted.copyWith(fontSize: 11.5),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          );
-        },
+          ),
+          if (withGoal.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            SectionCard(
+              title: loc('دسته‌های دارای هدف'),
+              subtitle: loc('برای تغییر سقف روی هر دسته بزنید.'),
+              children: [
+                for (final c in withGoal)
+                  LimitRow(
+                    icon: iconForCategory(c, categories),
+                    color: colorOf(c.id),
+                    name: c.name,
+                    spent: _spendFor(c.id),
+                    limit: goalFor(c.id)!,
+                    currency: mainCurrency,
+                    pace: elapsed,
+                    onTap: () => _editGoal(c),
+                  ),
+              ],
+            ),
+          ],
+          if (withoutGoal.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            SectionCard(
+              title: loc('بدون هدف'),
+              children: [
+                for (final c in withoutGoal)
+                  NoLimitRow(
+                    icon: iconForCategory(c, categories),
+                    color: colorOf(c.id),
+                    name: c.name,
+                    detail: locf('این ماه: {0}', [formatMoney(_spendFor(c.id), mainCurrency)]),
+                    action: loc('هدف'),
+                    onTap: () => _editGoal(c),
+                  ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -11906,6 +12528,157 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
+    String money(double v) => formatMoney(v, mainCurrency);
+    final totalSaved = goals.fold(0.0, (s, g) => s + min(_totalFor(g.id), g.targetAmount));
+    final totalTarget = goals.fold(0.0, (s, g) => s + g.targetAmount);
+    final reachedCount = goals.where((g) => _totalFor(g.id) >= g.targetAmount).length;
+
+    Widget goalCard(SavingsGoal g) {
+      final current = _totalFor(g.id);
+      final ratio = (current / g.targetAmount).clamp(0.0, 1.0);
+      final growth = _avgMonthlyContribution(g.id);
+      final reached = current >= g.targetAmount;
+      final lines = <String>[];
+      // The goal's state: reached, on track for its date, behind, or just
+      // moving along without a date.
+      var tone = 0; // 0 info, 1 good, 2 warning, 3 bad
+      if (reached) {
+        lines.add('${loc('به هدف رسیدی!')} \u{1F389}');
+        tone = 1;
+      } else {
+        if (growth > 0) {
+          final monthsLeft = ((g.targetAmount - current) / growth).ceil();
+          lines.add(locf('با روند فعلی، حدود {0} ماه دیگر به هدف می‌رسی.', [(persianDigits('$monthsLeft'))]));
+        } else {
+          lines.add(loc('هنوز واریزی‌ای ثبت نشده.'));
+        }
+        final date = g.targetDate;
+        if (date != null) {
+          if (date.isBefore(DateTime.now())) {
+            lines.add(loc('تاریخ هدف گذشته است.'));
+            tone = 3;
+          } else {
+            final perMonth = (g.targetAmount - current) / _monthsUntil(date);
+            final onTrack = growth >= perMonth;
+            lines.add(locf('برای رسیدن تا تاریخ هدف، ماهی {0} لازم است{1}', [
+              (ltr(formatMoney(perMonth, mainCurrency))),
+              (growth > 0 ? (onTrack ? loc(' - روند فعلی کافی است.') : loc(' - روند فعلی کمتر از این است.')) : '.')
+            ]));
+            tone = onTrack && growth > 0 ? 1 : 2;
+          }
+        }
+      }
+      final (Color mark, Color text, IconData icon) = switch (tone) {
+        1 => (colors.good, colors.goodText, reached ? Icons.celebration_outlined : Icons.check_circle_outline),
+        2 => (colors.warning, colors.warningText, Icons.trending_down),
+        3 => (colors.bad, colors.badText, Icons.event_busy_outlined),
+        _ => (colors.accent, scheme.onSurface, Icons.lightbulb_outline),
+      };
+      return Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  // Progress as a ring with the percentage inside.
+                  SizedBox(
+                    width: 64,
+                    height: 64,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        SizedBox.expand(
+                          child: CircularProgressIndicator(
+                            value: ratio,
+                            strokeWidth: 7,
+                            strokeCap: StrokeCap.round,
+                            backgroundColor: colors.track,
+                            color: reached ? colors.good : colors.accent,
+                          ),
+                        ),
+                        Text(ltr(persianDigits('${(ratio * 100).round()}%')), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(g.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text(locf('{0} از {1}', [money(current), money(g.targetAmount)]), style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                        if (g.targetDate != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Row(
+                              children: [
+                                Icon(Icons.event_outlined, size: 13, color: scheme.onSurfaceVariant),
+                                const SizedBox(width: 4),
+                                Text(locf('تا {0}', [(formatDate(g.targetDate!))]), style: muted),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 19),
+                    tooltip: loc('ویرایش هدف'),
+                    onPressed: () => _addOrEditGoal(existing: g),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(end: 8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(color: mark.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(icon, size: 18, color: tone == 0 ? colors.accent : text),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(lines.join('\n'), style: TextStyle(fontSize: 12.5, height: 1.6, color: text))),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  FilledButton.tonalIcon(
+                    onPressed: () => _addContribution(g),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: Text(loc('واریز')),
+                  ),
+                  const SizedBox(width: 4),
+                  TextButton.icon(
+                    onPressed: () => _showContributions(g),
+                    icon: const Icon(Icons.history, size: 18),
+                    label: Text(loc('تاریخچه')),
+                  ),
+                  const Spacer(),
+                  if (!reached)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 8),
+                      child: Text(locf('{0} مانده', [money(g.targetAmount - current)]), style: muted),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(tr('savings_goals')),
@@ -11923,105 +12696,62 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
         label: Text(tr('new_goal')),
       ),
       body: goals.isEmpty
-          ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(loc('هنوز هدف پس\u200cاندازی تعریف نشده.'))))
-          : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-              itemCount: goals.length,
-              itemBuilder: (context, i) {
-                final g = goals[i];
-                final current = _totalFor(g.id);
-                final ratio = (current / g.targetAmount).clamp(0.0, 1.0);
-                final growth = _avgMonthlyContribution(g.id);
-                String? projection;
-                String? needed;
-                var onTrack = true;
-                if (current >= g.targetAmount) {
-                  projection = '${loc('به هدف رسیدی!')} \u{1F389}';
-                } else {
-                  if (growth > 0) {
-                    final monthsLeft = ((g.targetAmount - current) / growth).ceil();
-                    projection = locf('با روند فعلی، حدود {0} ماه دیگر به هدف می\u200cرسی.', [(persianDigits('$monthsLeft'))]);
-                  }
-                  // With a target date: how much is needed each month from
-                  // now on to make it, and whether the current pace does.
-                  if (g.targetDate != null) {
-                    final perMonth = (g.targetAmount - current) / _monthsUntil(g.targetDate!);
-                    onTrack = growth >= perMonth;
-                    needed = g.targetDate!.isBefore(DateTime.now())
-                        ? loc('تاریخ هدف گذشته است.')
-                        : locf('برای رسیدن تا تاریخ هدف، ماهی {0} لازم است{1}', [(ltr(formatMoney(perMonth, mainCurrency))), (growth > 0 ? (onTrack ? loc(' - روند فعلی کافی است.') : loc(' - روند فعلی کمتر از این است.')) : '.')]);
-                    if (g.targetDate!.isBefore(DateTime.now())) onTrack = false;
-                  }
-                }
-                return Card(
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconChip(icon: Icons.savings_outlined, color: colors.accent, size: 72),
+                    const SizedBox(height: 16),
+                    Text(loc('هنوز هدف پس‌اندازی تعریف نشده.'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500), textAlign: TextAlign.center),
+                    const SizedBox(height: 6),
+                    Text(loc('برای سفر، خرید یا ذخیره‌ی اضطراری یک هدف بسازید و هر بار پس‌انداز کردید، واریزی را ثبت کنید.'), style: muted.copyWith(fontSize: 13), textAlign: TextAlign.center),
+                  ],
+                ),
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+              children: [
+                // All goals together.
+                Card(
+                  margin: EdgeInsets.zero,
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Expanded(child: Text(g.name, style: Theme.of(context).textTheme.titleMedium)),
-                            IconButton(
-                              icon: const Icon(Icons.edit_outlined, size: 18),
-                              onPressed: () => _addOrEditGoal(existing: g),
-                            ),
+                            IconChip(icon: Icons.savings_outlined, color: colors.accent, size: 32),
+                            const SizedBox(width: 10),
+                            Expanded(child: Text(loc('همه‌ی اهداف'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
+                            Text(locf('{0} هدف • {1} رسیده', [persianDigits('${goals.length}'), persianDigits('$reachedCount')]), style: muted),
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: ratio,
-                            minHeight: 10,
-                            backgroundColor: Colors.grey.shade200,
-                            color: ratio >= 1.0 ? Colors.green : Colors.indigo,
+                        const SizedBox(height: 12),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: AlignmentDirectional.centerStart,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(money(totalSaved), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                              const SizedBox(width: 6),
+                              Text(locf('از {0}', [money(totalTarget)]), style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant)),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          locf('{0} از {1} ({2})', [(ltr(formatMoney(current, mainCurrency))), (ltr(formatMoney(g.targetAmount, mainCurrency))), (ltr(persianDigits('${(ratio * 100).round()}%')))]),
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                        ),
-                        if (g.targetDate != null)
-                          Text(
-                            locf('تا {0}', [(formatDate(g.targetDate!))]),
-                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-                          ),
-                        if (projection != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(projection, style: TextStyle(fontSize: 12, color: Colors.indigo.shade700)),
-                          ),
-                        if (needed != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Text(
-                              needed,
-                              style: TextStyle(fontSize: 12, color: onTrack ? Colors.green.shade700 : Colors.orange.shade800),
-                            ),
-                          ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            TextButton.icon(
-                              onPressed: () => _addContribution(g),
-                              icon: const Icon(Icons.add, size: 16),
-                              label: Text(loc('واریز')),
-                            ),
-                            TextButton.icon(
-                              onPressed: () => _showContributions(g),
-                              icon: const Icon(Icons.history, size: 16),
-                              label: Text(loc('تاریخچه')),
-                            ),
-                          ],
-                        ),
+                        const SizedBox(height: 10),
+                        MeterBar(fraction: totalTarget > 0 ? totalSaved / totalTarget : 0, color: colors.accent, height: 10),
                       ],
                     ),
                   ),
-                );
-              },
+                ),
+                for (final g in goals) ...[const SizedBox(height: 12), goalCard(g)],
+              ],
             ),
     );
   }
@@ -15609,6 +16339,461 @@ class MonthColumns extends StatelessWidget {
   }
 }
 
+/// The color each top-level category wears on every chart (see
+/// [categoryColorSlots]), from the confirmed transactions of the app.
+Color Function(String categoryId) categoryColorsOf(
+    BuildContext context, List<Transaction> confirmed, List<Category> categories, List<Account> accounts) {
+  final colors = ChartColors.of(context);
+  final main = mainCurrencyOf(accounts);
+  String currencyOf(String accountId) => accounts.where((a) => a.id == accountId).firstOrNull?.currency ?? 'IRT';
+  final slots = categoryColorSlots([...confirmed, ...dueRecurringPayments(confirmed)], categories, (t) => currencyOf(t.accountId) == main);
+  return (id) => slots[id] == null ? colors.other : colors.slot(slots[id]!);
+}
+
+/// How much of the current month (in the chosen calendar) has gone by,
+/// today included: 0..1.
+double monthElapsedFraction() {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final cm = calendarMonthOf(today);
+  final total = cm.end.difference(cm.start).inDays + 1;
+  return ((today.difference(cm.start).inDays + 1) / total).clamp(0.0, 1.0);
+}
+
+/// How a spend stands against its limit: over it, near it (80% and up) or
+/// within it - as the mark color, the text color and an icon.
+({Color mark, Color text, IconData icon}) limitStatus(ChartColors colors, double ratio) => ratio >= 1
+    ? (mark: colors.bad, text: colors.badText, icon: Icons.error_outline)
+    : ratio >= 0.8
+        ? (mark: colors.warning, text: colors.warningText, icon: Icons.warning_amber_rounded)
+        : (mark: colors.good, text: colors.goodText, icon: Icons.check_circle_outline);
+
+/// A colored round icon (a category, a goal...).
+class IconChip extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final double size;
+  const IconChip({required this.icon, required this.color, this.size = 36, super.key});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.16), shape: BoxShape.circle),
+        child: Icon(icon, size: size * 0.53, color: color),
+      );
+}
+
+/// A small label with a colored dot, e.g. "● 2 over the limit".
+class StatusChip extends StatelessWidget {
+  final Color color;
+  final String text;
+  const StatusChip({required this.color, required this.text, super.key});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.13), borderRadius: BorderRadius.circular(20)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+            const SizedBox(width: 6),
+            Text(text, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface)),
+          ],
+        ),
+      );
+}
+
+/// A spend against its monthly limit: the category's icon, a bar in the
+/// status color (green / amber / red) with a line at how much of the month
+/// has gone by, the share used, and what's left or how much over.
+class LimitRow extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String name;
+  final double spent;
+  final double limit;
+  final String currency;
+  final double? pace;
+  final VoidCallback? onTap;
+  const LimitRow({
+    required this.icon,
+    required this.color,
+    required this.name,
+    required this.spent,
+    required this.limit,
+    required this.currency,
+    this.pace,
+    this.onTap,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final ratio = limit > 0 ? spent / limit : 0.0;
+    final status = limitStatus(colors, ratio);
+    final left = limit - spent;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            IconChip(icon: icon, color: color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500)),
+                      ),
+                      Text(ltr(persianDigits('${(ratio * 100).round()}%')),
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: status.text)),
+                    ],
+                  ),
+                  const SizedBox(height: 7),
+                  MeterBar(fraction: ratio, color: status.mark, marker: pace),
+                  const SizedBox(height: 5),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(status.icon, size: 14, color: status.text),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          '${locf('{0} از {1}', [formatMoney(spent, currency), formatMoney(limit, currency)])} • '
+                          '${left >= 0 ? locf('{0} مانده', [formatMoney(left, currency)]) : locf('{0} بیشتر از سقف', [formatMoney(-left, currency)])}',
+                          style: TextStyle(fontSize: 12, color: ratio >= 0.8 ? status.text : scheme.onSurfaceVariant),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A category without a limit yet: its icon, this month's spending, and a
+/// button to set one.
+class NoLimitRow extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String name;
+  final String detail;
+  final String action;
+  final VoidCallback onTap;
+  const NoLimitRow({required this.icon, required this.color, required this.name, required this.detail, required this.action, required this.onTap, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Row(
+          children: [
+            IconChip(icon: icon, color: color, size: 32),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+                  Text(detail, style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
+            TextButton.icon(onPressed: onTap, icon: const Icon(Icons.add, size: 16), label: Text(action)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A section card with a title (and optional words under it).
+class SectionCard extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final List<Widget> children;
+  const SectionCard({required this.title, this.subtitle, this.trailing, required this.children, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
+                if (trailing != null) trailing!,
+              ],
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Text(subtitle!, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+            ],
+            const SizedBox(height: 8),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The legend of the month line drawn on the limit bars.
+Widget paceLegend(BuildContext context, double elapsed) {
+  final scheme = Theme.of(context).colorScheme;
+  return Row(
+    children: [
+      Container(width: 3, height: 12, decoration: BoxDecoration(color: scheme.onSurface, borderRadius: BorderRadius.circular(2))),
+      const SizedBox(width: 6),
+      Expanded(
+        child: Text(
+          locf('خط روی نوارها: امروز ({0} از ماه گذشته)', [ltr(persianDigits('${(elapsed * 100).round()}%'))]),
+          style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
+        ),
+      ),
+    ],
+  );
+}
+
+/// A thin bar for the dashboard cards. Unlike [MeterBar] it can be measured
+/// before layout, so cards in a row can all take the tallest one's height.
+class TileMeter extends StatelessWidget {
+  final double fraction;
+  final Color color;
+  final double? marker;
+  const TileMeter({required this.fraction, required this.color, this.marker, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ChartColors.of(context);
+    final f = fraction.isFinite ? fraction.clamp(0.0, 1.0) : 0.0;
+    final m = marker;
+    final radius = BorderRadius.circular(3);
+    return SizedBox(
+      height: m == null ? 6 : 12,
+      child: Stack(
+        alignment: AlignmentDirectional.centerStart,
+        children: [
+          Container(height: 6, decoration: BoxDecoration(color: colors.track, borderRadius: radius)),
+          if (f > 0)
+            FractionallySizedBox(
+              widthFactor: max(f, 0.04),
+              child: Container(height: 6, decoration: BoxDecoration(color: color, borderRadius: radius)),
+            ),
+          if (m != null && m.isFinite)
+            Align(
+              alignment: AlignmentDirectional(m.clamp(0.0, 1.0) * 2 - 1, 0),
+              child: Container(
+                width: 2.5,
+                height: 12,
+                decoration: BoxDecoration(color: Theme.of(context).colorScheme.onSurface, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A small card of the Home dashboard: an icon and a title, one headline
+/// figure, an optional bar and a line or two of detail - tap to open the
+/// page it sums up.
+class DashTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String value;
+  final Color? valueColor;
+  final IconData? valueIcon;
+  final TileMeter? meter;
+  final String? detail;
+  final Color? detailColor;
+  final VoidCallback? onTap;
+  const DashTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.value,
+    this.valueColor,
+    this.valueIcon,
+    this.meter,
+    this.detail,
+    this.detailColor,
+    this.onTap,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  IconChip(icon: icon, color: color, size: 30),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                  if (onTap != null) Icon(Icons.chevron_left, size: 18, color: scheme.onSurfaceVariant),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  if (valueIcon != null) ...[
+                    Icon(valueIcon, size: 18, color: valueColor ?? scheme.onSurface),
+                    const SizedBox(width: 4),
+                  ],
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(
+                        value,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: valueColor ?? scheme.onSurface),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (meter != null) ...[const SizedBox(height: 8), meter!],
+              if (detail != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  detail!,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11.5, height: 1.35, color: detailColor ?? scheme.onSurfaceVariant),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dashboard cards in rows of two (four on a wide window), the cards of a
+/// row as tall as its tallest.
+class DashGrid extends StatelessWidget {
+  final List<Widget> tiles;
+  const DashGrid({required this.tiles, super.key});
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) {
+        final perRow = c.maxWidth >= 640 ? 4 : 2;
+        final rows = <Widget>[];
+        for (var i = 0; i < tiles.length; i += perRow) {
+          rows.add(IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var j = 0; j < perRow; j++) ...[
+                  if (j > 0) const SizedBox(width: 10),
+                  Expanded(child: i + j < tiles.length ? tiles[i + j] : const SizedBox.shrink()),
+                ],
+              ],
+            ),
+          ));
+        }
+        return Column(
+          children: [
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0) const SizedBox(height: 10),
+              rows[i],
+            ],
+          ],
+        );
+      });
+}
+
+/// Something on Home that wants a look (drafts to confirm, likely
+/// duplicates, a return period running out), tinted by how urgent it is.
+class AttentionRow extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final Color iconColor;
+  final String text;
+  final String? detail;
+  final VoidCallback onTap;
+  const AttentionRow({required this.icon, required this.color, required this.iconColor, required this.text, this.detail, required this.onTap, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: color.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          child: Row(
+            children: [
+              IconChip(icon: icon, color: iconColor, size: 32),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(text, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: scheme.onSurface)),
+                    if (detail != null) Text(detail!, style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_left, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
   @override
@@ -16675,16 +17860,36 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
 
   String get primaryCurrency => accountFilter != null ? currencyOf(accountFilter!) : mainCurrencyOf(accounts);
 
+  /// A day's amount in a small calendar cell: whole units, and thousands or
+  /// millions shortened.
+  String _cellAmount(double v) {
+    final fa = currentLanguage.value == AppLanguage.fa;
+    String trim(double x) {
+      final t = x.toStringAsFixed(1);
+      return t.endsWith('.0') ? t.substring(0, t.length - 2) : t;
+    }
+
+    if (v >= 1e6) return persianDigits('${trim(v / 1e6)}${fa ? 'م' : 'M'}');
+    if (v >= 1e4) return persianDigits('${trim(v / 1e3)}${fa ? 'ه' : 'K'}');
+    return persianDigits(_groupThousands(v.round().toString()));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final colors = ChartColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
     final currency = primaryCurrency;
+    String money(double v) => formatMoney(v, currency);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
+    final wide = desktopSideMenu(context);
 
     // The shown month in the calendar chosen in settings; cells are keyed by
     // their 1-based day within that month.
     final cm = calendarMonthOf(month);
+    final isThisMonth = !today.isBefore(cm.start) && !today.isAfter(cm.end);
     final daysInMonth = cm.end.difference(cm.start).inDays + 1;
     DateTime dateOfDay(int day) => DateTime(cm.start.year, cm.start.month, cm.start.day + day - 1);
     int dayOf(DateTime d) => DateTime(d.year, d.month, d.day).difference(cm.start).inDays + 1;
@@ -16700,27 +17905,23 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
       // Moving money between own accounts is neither income nor expense.
       if (e.t.categoryId.startsWith('_transfer')) continue;
       final notYetDue = e.date.isAfter(today);
+      final d = dayOf(e.date);
       if (e.t.type == TxType.income) {
-        if (notYetDue) {
-          dayIncomeProjected[dayOf(e.date)] = (dayIncomeProjected[dayOf(e.date)] ?? 0) + e.t.amount;
-        } else {
-          dayIncome[dayOf(e.date)] = (dayIncome[dayOf(e.date)] ?? 0) + e.t.amount;
-        }
+        final m = notYetDue ? dayIncomeProjected : dayIncome;
+        m[d] = (m[d] ?? 0) + e.t.amount;
       } else {
-        if (notYetDue) {
-          dayExpenseProjected[dayOf(e.date)] = (dayExpenseProjected[dayOf(e.date)] ?? 0) + e.t.amount;
-        } else {
-          dayExpense[dayOf(e.date)] = (dayExpense[dayOf(e.date)] ?? 0) + e.t.amount;
-        }
+        final m = notYetDue ? dayExpenseProjected : dayExpense;
+        m[d] = (m[d] ?? 0) + e.t.amount;
       }
     }
 
-    double dueIncome = 0, dueExpense = 0, plannedIncome = 0, plannedExpense = 0;
+    double dueIncome = 0, dueExpense = 0, plannedIncome = 0, plannedExpense = 0, topDay = 0;
     for (var d = 1; d <= daysInMonth; d++) {
       dueIncome += dayIncome[d] ?? 0;
       dueExpense += dayExpense[d] ?? 0;
       plannedIncome += dayIncomeProjected[d] ?? 0;
       plannedExpense += dayExpenseProjected[d] ?? 0;
+      topDay = max(topDay, (dayExpense[d] ?? 0) + (dayExpenseProjected[d] ?? 0));
     }
 
     // DateTime.weekday: Monday=1 .. Sunday=7. Weeks start on Saturday with
@@ -16729,37 +17930,83 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
     final firstWeekday = cm.start.weekday; // 1..7, Mon..Sun
     final leadingBlanks = saturdayFirst ? (firstWeekday + 1) % 7 : firstWeekday - 1;
 
-    return Scaffold(
-      appBar: AppBar(title: Text(tr('month_calendar'))),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back_ios, size: 18),
-                  tooltip: loc('ماه بعد'),
-                  onPressed: () => setState(() => month = calendarMonthOf(month, 1).start),
-                ),
-                Text(
-                  '${cm.name} ${cm.yearText}',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_forward_ios, size: 18),
-                  tooltip: loc('ماه قبل'),
-                  onPressed: () => setState(() => month = calendarMonthOf(month, -1).start),
-                ),
-              ],
+    Widget stat(Color c, String label, double done, double planned, {bool signed = false}) => Expanded(
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+                      const SizedBox(width: 6),
+                      Expanded(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: muted.copyWith(fontSize: 11.5))),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(money(done), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: scheme.onSurface)),
+                  ),
+                  if (planned != 0)
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(locf('{0} در راه', [ltr('${signed && planned > 0 ? '+' : ''}${money(planned)}')]), style: muted.copyWith(fontSize: 10.5)),
+                    ),
+                ],
+              ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: desktopFieldWidth(
-              context,
-              DropdownButtonFormField<String?>(
+        );
+
+    final weekdays = currentCalendarSystem.value == CalendarSystem.jalali
+        ? [loc('ش'), loc('ی'), loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج')]
+        : currentLanguage.value == AppLanguage.fa
+            ? [loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج'), loc('ش'), loc('ی')]
+            : const ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('month_calendar'))),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          // The month, with the way back to this month.
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios, size: 18),
+                tooltip: loc('ماه بعد'),
+                onPressed: () => setState(() => month = calendarMonthOf(month, 1).start),
+              ),
+              Expanded(
+                child: Column(
+                  children: [
+                    Text('${cm.name} ${cm.yearText}', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                    if (!isThisMonth)
+                      TextButton.icon(
+                        onPressed: () => setState(() => month = calendarMonthOf(DateTime.now()).start),
+                        icon: const Icon(Icons.today_outlined, size: 16),
+                        label: Text(loc('برو به این ماه')),
+                        style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                      ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward_ios, size: 18),
+                tooltip: loc('ماه قبل'),
+                onPressed: () => setState(() => month = calendarMonthOf(month, -1).start),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          desktopFieldWidth(
+            context,
+            DropdownButtonFormField<String?>(
               initialValue: accountFilter,
               isExpanded: true,
               decoration: InputDecoration(labelText: loc('حساب'), border: const OutlineInputBorder(), isDense: true),
@@ -16768,126 +18015,131 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                 ...accounts.map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${currencyLabel(a.currency)})'))),
               ],
               onChanged: (v) => setState(() => accountFilter = v),
-            )
             ),
           ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(loc('جمع تا امروز'), style: const TextStyle(fontWeight: FontWeight.bold)),
-                        Row(
-                          children: [
-                            Text(ltr('+${formatMoney(dueIncome, currency)}'),
-                                style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w600)),
-                            const SizedBox(width: 8),
-                            Text(ltr('-${formatMoney(dueExpense, currency)}'),
-                                style: const TextStyle(fontSize: 12, color: Colors.red, fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                      ],
-                    ),
-                    if (plannedIncome > 0 || plannedExpense > 0) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(loc('جمع سررسیدنشده'), style: TextStyle(color: Colors.grey.shade600)),
-                          Row(
-                            children: [
-                              Text(ltr('+${formatMoney(plannedIncome, currency)}'),
-                                  style: TextStyle(fontSize: 12, color: Colors.green.shade200, fontWeight: FontWeight.w600)),
-                              const SizedBox(width: 8),
-                              Text(ltr('-${formatMoney(plannedExpense, currency)}'),
-                                  style: TextStyle(fontSize: 12, color: Colors.red.shade200, fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+          const SizedBox(height: 12),
+          IntrinsicHeight(
             child: Row(
-              children: (currentCalendarSystem.value == CalendarSystem.jalali
-                      ? [loc('ش'), loc('ی'), loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج')]
-                      : currentLanguage.value == AppLanguage.fa
-                          ? [loc('د'), loc('س'), loc('چ'), loc('پ'), loc('ج'), loc('ش'), loc('ی')]
-                          : const ['M', 'T', 'W', 'T', 'F', 'S', 'S'])
-                  .map((d) => Expanded(child: Center(child: Text(d, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)))))
-                  .toList(),
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                stat(colors.good, loc('درآمد تا امروز'), dueIncome, plannedIncome),
+                const SizedBox(width: 8),
+                stat(colors.bad, loc('هزینه تا امروز'), dueExpense, plannedExpense),
+                const SizedBox(width: 8),
+                stat(colors.accent, loc('خالص تا امروز'), dueIncome - dueExpense, plannedIncome - plannedExpense, signed: true),
+              ],
             ),
           ),
-          Expanded(
+          const SizedBox(height: 12),
+          Card(
+            margin: EdgeInsets.zero,
             child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: GridView.builder(
-                // On a wide computer window the cells are wide: a fixed
-                // height so the whole month fits.
-                gridDelegate: desktopSideMenu(context)
-                    ? const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, mainAxisExtent: 96)
-                    : const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.72),
-                itemCount: leadingBlanks + daysInMonth,
-                itemBuilder: (context, index) {
-                  if (index < leadingBlanks) return const SizedBox.shrink();
-                  final day = index - leadingBlanks + 1;
-                  final date = dateOfDay(day);
-                  final future = date.isAfter(today);
-                  final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
-                  final inc = (dayIncome[day] ?? 0) + (dayIncomeProjected[day] ?? 0);
-                  final exp = (dayExpense[day] ?? 0) + (dayExpenseProjected[day] ?? 0);
-                  final todayBg = Theme.of(context).colorScheme.primaryContainer;
-                  final todayFg = Theme.of(context).colorScheme.onPrimaryContainer;
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => _showDayTransactions(date),
-                    child: Container(
-                    margin: const EdgeInsets.all(2),
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    decoration: BoxDecoration(
-                      color: isToday ? todayBg : null,
-                      border: Border.all(color: isToday ? todayFg.withValues(alpha: 0.4) : Colors.grey.shade200),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      children: [
-                        Text(
-                          ltr(persianDigits('$day')),
-                          style: TextStyle(
-                            fontSize: desktopSideMenu(context) ? 14 : 12,
-                            fontWeight: FontWeight.bold,
-                            color: isToday ? todayFg : (future ? Colors.grey.shade400 : null),
+              padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      for (final d in weekdays)
+                        Expanded(child: Center(child: Text(d, style: muted.copyWith(fontWeight: FontWeight.w600)))),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    // On a wide computer window the cells are wide: a fixed
+                    // height so the whole month fits.
+                    gridDelegate: wide
+                        ? const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, mainAxisExtent: 92)
+                        : const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.74),
+                    itemCount: leadingBlanks + daysInMonth,
+                    itemBuilder: (context, index) {
+                      if (index < leadingBlanks) return const SizedBox.shrink();
+                      final day = index - leadingBlanks + 1;
+                      final date = dateOfDay(day);
+                      final future = date.isAfter(today);
+                      final isToday = date == today;
+                      final inc = (dayIncome[day] ?? 0) + (dayIncomeProjected[day] ?? 0);
+                      final exp = (dayExpense[day] ?? 0) + (dayExpenseProjected[day] ?? 0);
+                      // The more spent on a day, the deeper its color.
+                      final heat = topDay > 0 && exp > 0 ? 0.07 + 0.33 * (exp / topDay) : 0.0;
+                      return Padding(
+                        padding: const EdgeInsets.all(2),
+                        child: Material(
+                          color: heat > 0 ? colors.bad.withValues(alpha: future ? heat * 0.5 : heat) : scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            side: isToday ? BorderSide(color: colors.accent, width: 2) : BorderSide.none,
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: () => _showDayTransactions(date),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                              child: Column(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                    decoration: isToday ? BoxDecoration(color: colors.accent, borderRadius: BorderRadius.circular(10)) : null,
+                                    child: Text(
+                                      ltr(persianDigits('$day')),
+                                      style: TextStyle(
+                                        fontSize: wide ? 14 : 12.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: isToday ? Colors.white : (future ? scheme.onSurfaceVariant : scheme.onSurface),
+                                      ),
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Opacity(
+                                    opacity: future ? 0.65 : 1,
+                                    child: Column(
+                                      children: [
+                                        if (exp > 0)
+                                          FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            child: Text(ltr('-${_cellAmount(exp)}'),
+                                                style: TextStyle(fontSize: wide ? 12 : 10, fontWeight: FontWeight.w600, color: colors.badText)),
+                                          ),
+                                        if (inc > 0)
+                                          FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            child: Text(ltr('+${_cellAmount(inc)}'),
+                                                style: TextStyle(fontSize: wide ? 12 : 10, fontWeight: FontWeight.w600, color: colors.goodText)),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                        if (exp > 0)
-                          Text(
-                            ltr('-${formatAmountInput(exp)}'),
-                            style: TextStyle(fontSize: desktopSideMenu(context) ? 12 : 9, color: future ? Colors.red.shade200 : Colors.red.shade700),
-                          ),
-                        if (inc > 0)
-                          Text(
-                            ltr('+${formatAmountInput(inc)}'),
-                            style: TextStyle(fontSize: desktopSideMenu(context) ? 12 : 9, color: future ? Colors.green.shade200 : Colors.green.shade700),
-                          ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
-                  );
-                },
+                  const SizedBox(height: 10),
+                  // What the colors mean.
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 6,
+                    children: [
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        for (final a in [0.1, 0.22, 0.4])
+                          Container(width: 12, height: 12, margin: const EdgeInsets.only(left: 2), decoration: BoxDecoration(color: colors.bad.withValues(alpha: a), borderRadius: BorderRadius.circular(3))),
+                        const SizedBox(width: 6),
+                        Text(loc('رنگ روز: هرچه پررنگ‌تر، هزینه بیشتر'), style: muted.copyWith(fontSize: 11.5)),
+                      ]),
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        Container(width: 12, height: 12, decoration: BoxDecoration(border: Border.all(color: colors.accent, width: 2), borderRadius: BorderRadius.circular(3))),
+                        const SizedBox(width: 6),
+                        Text(loc('امروز'), style: muted.copyWith(fontSize: 11.5)),
+                      ]),
+                      Text(loc('روزهای آینده کم‌رنگ: هنوز سررسید نشده'), style: muted.copyWith(fontSize: 11.5)),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -16906,6 +18158,7 @@ class BackupRestoreScreen extends StatefulWidget {
 class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   bool busy = false;
   AutoBackupFrequency autoFreq = AutoBackupFrequency.off;
+  List<File> autoBackups = [];
 
   @override
   void initState() {
@@ -16913,6 +18166,43 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     Store.loadAutoBackupFrequency().then((f) {
       if (mounted) setState(() => autoFreq = f);
     });
+    _loadAutoBackups();
+  }
+
+  Future<void> _loadAutoBackups() async {
+    try {
+      final list = await listAutoBackups();
+      if (mounted) setState(() => autoBackups = list);
+    } catch (_) {
+      // No storage to list - nothing to show.
+    }
+  }
+
+  Future<void> _backupNow() async {
+    setState(() => busy = true);
+    final ok = await maybeRunAutoBackup(force: true);
+    await _loadAutoBackups();
+    if (!mounted) return;
+    setState(() => busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? loc('نسخه‌ی پشتیبان ذخیره شد.') : loc('ذخیره‌ی نسخه‌ی پشتیبان انجام نشد.'))));
+  }
+
+  Future<void> _deleteAutoBackup(File f) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(loc('حذف این نسخه‌ی پشتیبان؟')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(loc('حذف'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await f.delete();
+    } catch (_) {}
+    await _loadAutoBackups();
   }
 
   Future<void> _backup() async {
@@ -16939,9 +18229,13 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     }
   }
 
-  Future<void> _restore() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json']);
-    if (result == null || result.files.single.path == null) return;
+  Future<void> _restore([String? fromPath]) async {
+    var path = fromPath;
+    if (path == null) {
+      final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json']);
+      if (result == null || result.files.single.path == null) return;
+      path = result.files.single.path!;
+    }
     if (!context.mounted) return;
     final confirm = await showDialog<bool>(
       context: context,
@@ -16959,7 +18253,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     if (confirm != true) return;
     setState(() => busy = true);
     try {
-      final content = await File(result.files.single.path!).readAsString();
+      final content = await File(path).readAsString();
       final data = jsonDecode(content) as Map<String, dynamic>;
       await Store.restoreBackupData(data);
       if (mounted) {
@@ -16996,7 +18290,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
               title: Text(loc('بازیابی از نسخه‌ی پشتیبان')),
               subtitle: Text(loc('جایگزینی اطلاعات فعلی با یک فایل پشتیبان')),
               trailing: busy ? null : const Icon(Icons.chevron_left),
-              onTap: busy ? null : _restore,
+              onTap: busy ? null : () => _restore(),
             ),
           ),
           Card(
@@ -17024,21 +18318,70 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    loc('در بازه‌ی انتخابی، یه نسخه‌ی پشتیبان به‌طور خودکار روی حافظه‌ی گوشی ذخیره می‌شه (بدون نیاز به کار دستی). فقط ۵ نسخه‌ی آخر نگه داشته می‌شه.'),
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    locf('در بازه‌ی انتخابی، یک نسخه‌ی پشتیبان خودکار روی همین دستگاه ذخیره می‌شود (بدون نیاز به کار دستی). {0} نسخه‌ی آخر نگه داشته می‌شود و از فهرست زیر می‌توانید هر کدام را بازیابی یا ارسال کنید.', [persianDigits('$kAutoBackupsKept')]),
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<AutoBackupFrequency>(
-                    initialValue: autoFreq,
-                    decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-                    items: AutoBackupFrequency.values.map((f) => DropdownMenuItem(value: f, child: Text(f.label))).toList(),
-                    onChanged: (v) async {
-                      if (v == null) return;
-                      setState(() => autoFreq = v);
-                      await Store.saveAutoBackupFrequency(v);
-                      if (v != AutoBackupFrequency.off) unawaited(maybeRunAutoBackup());
-                    },
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<AutoBackupFrequency>(
+                          initialValue: autoFreq,
+                          decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                          items: AutoBackupFrequency.values.map((f) => DropdownMenuItem(value: f, child: Text(f.label))).toList(),
+                          onChanged: (v) async {
+                            if (v == null) return;
+                            setState(() => autoFreq = v);
+                            await Store.saveAutoBackupFrequency(v);
+                            if (v != AutoBackupFrequency.off && await maybeRunAutoBackup()) await _loadAutoBackups();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton.tonalIcon(
+                        onPressed: busy ? null : _backupNow,
+                        icon: const Icon(Icons.save_outlined, size: 18),
+                        label: Text(loc('همین الان')),
+                      ),
+                    ],
                   ),
+                  if (autoBackups.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Text(
+                      locf('نسخه‌های ذخیره‌شده ({0} از {1})', [persianDigits('${autoBackups.length}'), persianDigits('$kAutoBackupsKept')]),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    for (final f in autoBackups)
+                      () {
+                        final at = autoBackupTime(f);
+                        final kb = (f.statSync().size / 1024).round();
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.history, size: 20),
+                          title: Text(at == null ? f.uri.pathSegments.last : '${formatDate(at)}  ${ltr(persianDigits(DateFormat('HH:mm').format(at)))}'),
+                          subtitle: Text(locf('{0} کیلوبایت', [persianDigits('$kb')])),
+                          trailing: PopupMenuButton<String>(
+                            tooltip: loc('گزینه‌ها'),
+                            onSelected: (v) async {
+                              if (v == 'restore') {
+                                await _restore(f.path);
+                              } else if (v == 'share') {
+                                await Share.shareXFiles([XFile(f.path)], text: loc('نسخه‌ی پشتیبان مدیریت مالی شخصی'));
+                              } else if (v == 'delete') {
+                                await _deleteAutoBackup(f);
+                              }
+                            },
+                            itemBuilder: (ctx) => [
+                              PopupMenuItem(value: 'restore', child: ListTile(leading: const Icon(Icons.settings_backup_restore), title: Text(loc('بازیابی')), contentPadding: EdgeInsets.zero)),
+                              PopupMenuItem(value: 'share', child: ListTile(leading: const Icon(Icons.share_outlined), title: Text(loc('ارسال / ذخیره در جای دیگر')), contentPadding: EdgeInsets.zero)),
+                              PopupMenuItem(value: 'delete', child: ListTile(leading: const Icon(Icons.delete_outline), title: Text(loc('حذف')), contentPadding: EdgeInsets.zero)),
+                            ],
+                          ),
+                        );
+                      }(),
+                  ],
                 ],
               ),
             ),
@@ -17147,81 +18490,109 @@ class _ScanEntryScreenState extends State<ScanEntryScreen> {
     }
   }
 
-  Widget _sourceRow(bool isPayslip) {
-    final style = OutlinedButton.styleFrom(
-      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
-      textStyle: const TextStyle(fontSize: 13),
-    );
-    return Row(
-        children: [
-          // A computer has no camera to photograph a receipt with.
-          if (Platform.isAndroid || Platform.isIOS) ...[
-            Expanded(
-              child: OutlinedButton.icon(
-                style: style,
-                onPressed: busy ? null : () => _process(isPayslip, ScanSource.camera),
-                icon: const Icon(Icons.camera_alt, size: 18),
-                label: Text(tr('camera'), softWrap: false, overflow: TextOverflow.visible),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
-          Expanded(
-            child: OutlinedButton.icon(
-              style: style,
-              onPressed: busy ? null : () => _process(isPayslip, ScanSource.gallery),
-              icon: const Icon(Icons.photo_library, size: 18),
-              label: Text(tr('gallery'), softWrap: false, overflow: TextOverflow.visible),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: OutlinedButton.icon(
-              style: style,
-              onPressed: busy ? null : () => _process(isPayslip, ScanSource.pdf),
-              icon: const Icon(Icons.picture_as_pdf, size: 18),
-              label: const Text('PDF', softWrap: false, overflow: TextOverflow.visible),
-            ),
-          ),
-        ],
-      );
-  }
+  bool payslip = false;
 
-  Widget _section(String title, String subtitle, IconData icon, bool isPayslip) => Card(
+  /// One of the two things that can be read, chosen by tapping it.
+  Widget _typeCard(bool isPayslip, IconData icon, String title, String subtitle) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = payslip == isPayslip;
+    final accent = selected ? scheme.primary : scheme.onSurfaceVariant;
+    return Card(
+      margin: EdgeInsets.zero,
+      color: selected ? scheme.secondaryContainer : null,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: selected ? scheme.primary : scheme.outlineVariant, width: selected ? 2 : 1),
+      ),
+      child: InkWell(
+        onTap: busy ? null : () => setState(() => payslip = isPayslip),
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Row(children: [Icon(icon), const SizedBox(width: 8), Text(title, style: Theme.of(context).textTheme.titleMedium)]),
-              const SizedBox(height: 4),
-              Text(subtitle, style: const TextStyle(color: Colors.grey)),
-              const SizedBox(height: 12),
-              _sourceRow(isPayslip),
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(color: accent.withValues(alpha: 0.14), shape: BoxShape.circle),
+                child: Icon(icon, color: accent),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Text(subtitle, style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant, height: 1.5)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: selected ? scheme.primary : scheme.outline),
             ],
           ),
         ),
-      );
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const tall = Size.fromHeight(52);
     return Scaffold(
       appBar: AppBar(title: Text(tr('scan_title'))),
+      // Where the photo comes from is chosen at the bottom, by the thumb.
+      bottomNavigationBar: pinnedBottomButtons(context, [
+        // A computer has no camera to photograph a receipt with.
+        if (Platform.isAndroid || Platform.isIOS)
+          FilledButton.icon(
+            style: FilledButton.styleFrom(minimumSize: tall, padding: const EdgeInsets.symmetric(horizontal: 6)),
+            onPressed: busy ? null : () => _process(payslip, ScanSource.camera),
+            icon: const Icon(Icons.camera_alt),
+            label: Text(tr('camera'), maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        FilledButton.tonalIcon(
+          style: FilledButton.styleFrom(minimumSize: tall, padding: const EdgeInsets.symmetric(horizontal: 6)),
+          onPressed: busy ? null : () => _process(payslip, ScanSource.gallery),
+          icon: const Icon(Icons.photo_library),
+          label: Text(tr('gallery'), maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: tall, padding: const EdgeInsets.symmetric(horizontal: 6)),
+          onPressed: busy ? null : () => _process(payslip, ScanSource.pdf),
+          icon: const Icon(Icons.picture_as_pdf),
+          label: const Text('PDF', maxLines: 1),
+        ),
+      ]),
       body: Stack(
         children: [
           ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _section(
+              Text(loc('چه چیزی را می‌خواهید بخوانید؟'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 12),
+              _typeCard(
+                false,
+                Icons.receipt_long,
                 loc('رسید جدید'),
                 hasOnDeviceOcr
                     ? loc('تشخیص آفلاین + امکان بهبود با هوش مصنوعی • برای رسید طولانی چند عکس بگیرید یا چند تصویر انتخاب کنید')
                     : loc('خواندن با هوش مصنوعی • برای رسید طولانی چند تصویر انتخاب کنید'),
-                Icons.receipt_long,
-                false,
               ),
-              const SizedBox(height: 16),
-              _section(loc('فیش حقوقی جدید'), loc('استخراج درآمد ناخالص و خالص، مالیات، بیمه و کلاس مالیاتی'), Icons.badge_outlined, true),
+              const SizedBox(height: 10),
+              _typeCard(true, Icons.badge_outlined, loc('فیش حقوقی جدید'), loc('استخراج درآمد ناخالص و خالص، مالیات، بیمه و کلاس مالیاتی')),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Icon(Icons.south, size: 16, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(loc('عکس یا فایل را از دکمه‌های پایین صفحه انتخاب کنید.'), style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant)),
+                  ),
+                ],
+              ),
             ],
           ),
           if (busy)
@@ -19640,7 +21011,28 @@ class _TransactionEditorState extends State<TransactionEditor> {
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             child: Text(loc('ثبت نهایی'), textAlign: TextAlign.center),
           ),
-      ], trailing: [
+      ],
+          // Reading a receipt is the first thing to do in a new transaction,
+          // so it's down here by the thumb (where the new-transaction button
+          // was), not at the top of the form.
+          above: widget.existing == null
+              ? FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  icon: const Icon(Icons.document_scanner_outlined),
+                  label: Text(loc('خواندن از عکس یا فایل رسید/فیش حقوقی'), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onPressed: () async {
+                    final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
+                    if (result == null) return;
+                    if (!context.mounted) return;
+                    // A scanned transaction supersedes anything typed manually
+                    // so far in this form; bypass the "unsaved changes" guard
+                    // instead of letting it swallow the scan result.
+                    _dirty = false;
+                    Navigator.pop(context, result);
+                  },
+                )
+              : null,
+          trailing: [
         if (_currentImagePath != null)
           IconButton(
             icon: const Icon(Icons.receipt_long_outlined),
@@ -19698,32 +21090,6 @@ class _TransactionEditorState extends State<TransactionEditor> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (widget.existing == null) ...[
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
-              icon: const Icon(Icons.document_scanner_outlined),
-              label: Text(loc('خواندن از عکس یا فایل رسید/فیش حقوقی'), style: const TextStyle(fontSize: 15)),
-              onPressed: () async {
-                final result = await Navigator.push<Transaction>(context, MaterialPageRoute(builder: (_) => const ScanEntryScreen()));
-                if (result == null) return;
-                if (!context.mounted) return;
-                // A scanned transaction supersedes anything typed manually
-                // so far in this form; bypass the "unsaved changes" guard
-                // instead of letting it swallow the scan result.
-                _dirty = false;
-                Navigator.pop(context, result);
-              },
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const Expanded(child: Divider()),
-                Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(loc('یا وارد کنید'), style: const TextStyle(color: Colors.grey, fontSize: 12))),
-                const Expanded(child: Divider()),
-              ],
-            ),
-            const SizedBox(height: 16),
-          ],
           SegmentedButton<TxType>(
             segments: [
               ButtonSegment(value: TxType.expense, label: Text(loc('هزینه')), icon: const Icon(Icons.arrow_upward)),
