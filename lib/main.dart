@@ -1573,6 +1573,243 @@ List<DateTime> computeRecurrenceOccurrences(Transaction t) {
   return result;
 }
 
+/// A recurring series' own date is its first payment. When that date is not
+/// one of the days its rule pays on (due on the 15th of each month but saved
+/// with the 27th, or a weekly payment on Mondays saved on a Thursday), these
+/// are the rule's payment days just before and just after it - otherwise the
+/// first payment silently lands on a day the person never meant. Null when
+/// the date is on the rule, or the pattern has no such rule.
+({DateTime before, DateTime after})? offRulePaymentDays(RecurrenceFrequency f, DateTime date, {int? day, int? weekday}) {
+  final d = DateTime(date.year, date.month, date.day);
+  switch (f) {
+    case RecurrenceFrequency.monthly:
+    case RecurrenceFrequency.quarterly:
+      if (day == null) return null;
+      final same = calendarMonthDate(d, 0, day);
+      if (same == d) return null;
+      return same.isBefore(d)
+          ? (before: same, after: calendarMonthDate(d, 1, day))
+          : (before: calendarMonthDate(d, -1, day), after: same);
+    case RecurrenceFrequency.weekly:
+      if (weekday == null || weekday == d.weekday) return null;
+      final after = DateTime(d.year, d.month, d.day + (weekday - d.weekday) % 7);
+      return (before: DateTime(after.year, after.month, after.day - 7), after: after);
+    default:
+      return null;
+  }
+}
+
+/// [offRulePaymentDays] of a saved transaction. A weekly series always pays
+/// every 7 days from its own date, so only a monthly or quarterly one can
+/// start off its due day.
+({DateTime before, DateTime after})? offRuleOf(Transaction t) =>
+    t.recurrence == RecurrenceFrequency.weekly ? null : offRulePaymentDays(t.recurrence, t.date, day: t.recurrenceDay);
+
+/// Names a series' first payment and due day, to remember that it is off
+/// the due day on purpose (it counts again once either changes).
+String offRuleKey(Transaction t) => '${t.id}|${DateUtils.dateOnly(t.date).toIso8601String()}|${t.recurrenceDay}';
+
+/// The payments of [t] at a glance: "6 payments: 15.12. to 15.05." for a
+/// series that ends, the first three for one that doesn't.
+String recurrenceOutline(Transaction t) {
+  final all = computeRecurrenceOccurrences(t);
+  if (all.isEmpty) return loc('هیچ پرداختی در این بازه نمی‌افتد.');
+  final ends = t.installments != null || t.recurrenceEndDate != null;
+  if (ends) {
+    return all.length == 1
+        ? locf('فقط یک پرداخت: {0}', [formatDate(all.first)])
+        : locf('{0} پرداخت: {1} تا {2}', [persianDigits('${all.length}'), formatDate(all.first), formatDate(all.last)]);
+  }
+  final sep = currentLanguage.value == AppLanguage.fa ? '، ' : ', ';
+  return '${all.take(3).map(formatDate).join(sep)}$sep…';
+}
+
+/// What to save for a recurring series whose first payment was off its rule.
+typedef FirstPaymentFix = ({DateTime date, int? day, int? weekday});
+
+/// Asks where a recurring series really starts when its date (its first
+/// payment) is not on its rule's day: the rule's day just before or just
+/// after that date, every payment on the date's own day instead, or - for a
+/// monthly one - the first on that date and the rest on the due day as set.
+/// Returns what to save, or null to go back to the form.
+Future<FirstPaymentFix?> askFirstPayment(BuildContext context, Transaction series) async {
+  final date = DateTime(series.date.year, series.date.month, series.date.day);
+  final off = offRulePaymentDays(series.recurrence, date, day: series.recurrenceDay, weekday: series.recurrenceWeekday);
+  if (off == null) return (date: date, day: series.recurrenceDay, weekday: series.recurrenceWeekday);
+  final weekly = series.recurrence == RecurrenceFrequency.weekly;
+  final day = series.recurrenceDay;
+  final ownDay = dayOfMonthInCalendar(date);
+  String weekdayOf(DateTime d) => _weekdayNames[d.weekday - 1];
+  final options = <({FirstPaymentFix fix, String title})>[
+    (fix: (date: off.before, day: day, weekday: weekly ? off.before.weekday : null), title: locf('اولین پرداخت: {0}', [formatDate(off.before)])),
+    (fix: (date: off.after, day: day, weekday: weekly ? off.after.weekday : null), title: locf('اولین پرداخت: {0}', [formatDate(off.after)])),
+    if (weekly)
+      (fix: (date: date, day: null, weekday: date.weekday), title: locf('هر هفته {0}، از همین {1}', [weekdayOf(date), formatDate(date)]))
+    else ...[
+      (fix: (date: date, day: ownDay, weekday: null), title: locf('همه‌ی پرداخت‌ها روز {0} ماه، از همین {1}', [persianDigits('$ownDay'), formatDate(date)])),
+      (fix: (date: date, day: day, weekday: null), title: locf('اولین پرداخت همین {0}، بقیه روز {1} ماه', [formatDate(date), persianDigits('$day')])),
+    ],
+  ];
+  Transaction apply(FirstPaymentFix f) => series.copyWith(
+        date: f.date,
+        recurrenceDay: f.day,
+        clearRecurrenceDay: f.day == null,
+        recurrenceWeekday: f.weekday,
+        clearRecurrenceWeekday: f.weekday == null,
+      );
+  final explanation = weekly
+      ? locf('تاریخ این تراکنش {0} ({1}) است ولی روز پرداخت هفتگی {2} انتخاب شده. تاریخ خود تراکنش، اولین پرداخت حساب می‌شود.',
+          [formatDate(date), weekdayOf(date), _weekdayNames[(series.recurrenceWeekday ?? 1) - 1]])
+      : locf('تاریخ این تراکنش {0} است ولی روز سررسید پرداخت‌ها {1} ماه است. تاریخ خود تراکنش، اولین پرداخت حساب می‌شود.',
+          [formatDate(date), persianDigits('$day')]);
+  return showDialog<FirstPaymentFix>(
+    context: context,
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      return SimpleDialog(
+        title: Text(loc('اولین پرداخت کدام روز است؟')),
+        contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 8),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(explanation, style: TextStyle(fontSize: 13, height: 1.6, color: scheme.onSurfaceVariant)),
+          ),
+          const SizedBox(height: 8),
+          for (final o in options)
+            // (An option that leaves no payment before the end date is left out.)
+            if (computeRecurrenceOccurrences(apply(o.fix)).isNotEmpty)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, o.fix),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.event_available_outlined, size: 20, color: scheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(o.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 2),
+                          Text(recurrenceOutline(apply(o.fix)), style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 12, left: 12, top: 4),
+              child: TextButton(onPressed: () => Navigator.pop(ctx), child: Text(loc('برگشت به فرم'))),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+/// The payments of a recurring series as it will be saved - the first, the
+/// second and the last (with how many), the next one due - and, when its
+/// first payment is off its rule's day, a notice with buttons to move it
+/// onto that day ([onMoveFirst]) or to make the date's own day the rule
+/// ([onRuleFromDate]).
+Widget recurrenceSummary(
+  BuildContext context,
+  Transaction series, {
+  required void Function(DateTime date) onMoveFirst,
+  required VoidCallback onRuleFromDate,
+}) {
+  final scheme = Theme.of(context).colorScheme;
+  final colors = ChartColors.of(context);
+  final all = computeRecurrenceOccurrences(series);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final ends = series.installments != null || series.recurrenceEndDate != null;
+  final lines = <String>[];
+  if (all.isEmpty) {
+    lines.add(loc('هیچ پرداختی در این بازه نمی‌افتد.'));
+  } else {
+    lines.add([
+      locf('اولین پرداخت: {0}', [formatDate(all.first)]),
+      if (all.length > 1) locf('دومین: {0}', [formatDate(all[1])]),
+    ].join(' • '));
+    if (ends && all.length > 1) lines.add(locf('آخرین پرداخت: {0} ({1} پرداخت)', [formatDate(all.last), persianDigits('${all.length}')]));
+    final nextIndex = all.indexWhere((d) => !d.isBefore(today));
+    if (nextIndex >= 0) {
+      lines.add(locf('سررسید بعدی: {0}', [formatDate(all[nextIndex])]) +
+          (ends ? ' ${locf('(قسط {0} از {1})', [persianDigits('${nextIndex + 1}'), persianDigits('${all.length}')])}' : ''));
+    } else {
+      lines.add(locf('همه‌ی پرداخت‌ها انجام شده (آخرین: {0})', [formatDate(all.last)]));
+    }
+  }
+  final weekly = series.recurrence == RecurrenceFrequency.weekly;
+  final off = offRulePaymentDays(series.recurrence, series.date, day: series.recurrenceDay, weekday: series.recurrenceWeekday);
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(color: scheme.primaryContainer.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(10)),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.event_repeat_outlined, size: 18, color: scheme.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(lines.join('\n'), style: TextStyle(fontSize: 12.5, height: 1.6, color: scheme.onSurface, fontWeight: FontWeight.w500)),
+            ),
+          ],
+        ),
+      ),
+      if (off != null) ...[
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+          decoration: BoxDecoration(color: colors.warning.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(10)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 18, color: colors.warningText),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      weekly
+                          ? locf('تاریخ تراکنش ({0}) {1} نیست؛ اولین پرداخت همین تاریخ حساب می‌شود.',
+                              [formatDate(series.date), _weekdayNames[(series.recurrenceWeekday ?? 1) - 1]])
+                          : locf('تاریخ تراکنش ({0}) روز {1} ماه نیست؛ اولین پرداخت همین تاریخ حساب می‌شود و بقیه روز {1}.',
+                              [formatDate(series.date), persianDigits('${series.recurrenceDay}')]),
+                      style: TextStyle(fontSize: 12.5, height: 1.5, color: scheme.onSurface),
+                    ),
+                  ),
+                ],
+              ),
+              Wrap(
+                spacing: 4,
+                children: [
+                  TextButton(onPressed: () => onMoveFirst(off.before), child: Text(locf('اولین پرداخت: {0}', [formatDate(off.before)]))),
+                  TextButton(onPressed: () => onMoveFirst(off.after), child: Text(locf('اولین پرداخت: {0}', [formatDate(off.after)]))),
+                  TextButton(
+                    onPressed: onRuleFromDate,
+                    child: Text(weekly
+                        ? locf('هر هفته {0}', [_weekdayNames[series.date.weekday - 1]])
+                        : locf('روز سررسید: {0}', [persianDigits('${dayOfMonthInCalendar(series.date)}')])),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
 /// Represents one occurrence of a transaction on a specific date, for
 /// building future-looking views (upcoming payments, calendar, month tabs)
 /// that need to show recurring transactions' not-yet-due occurrences
@@ -1994,7 +2231,7 @@ const _defaultCategoryNames = <String, List<String>>{
 Future<void> localizeDefaultNames(AppLanguage lang) async {
   final idx = lang == AppLanguage.en ? 0 : 1;
   final faById = {for (final c in defaultCategories) c.id: c.name};
-  final cats = await Store.loadCategories();
+  final cats = await Store.loadCategories(raw: true);
   var changed = false;
   final updated = [
     for (final c in cats)
@@ -2011,12 +2248,40 @@ Future<void> localizeDefaultNames(AppLanguage lang) async {
       }(),
   ];
   if (changed) await Store.saveCategories(updated);
-  const accountNames = ['حساب اصلی', 'Main account', 'Hauptkonto'];
-  final accounts = await Store.loadAccounts();
+  const accountNames = _defaultAccountNames;
+  final accounts = await Store.loadAccounts(raw: true);
   final target = accountNames[lang == AppLanguage.fa ? 0 : (lang == AppLanguage.en ? 1 : 2)];
   if (accounts.any((a) => a.id == 'default' && accountNames.contains(a.name.trim()) && a.name != target)) {
     await Store.saveAccounts([for (final a in accounts) a.id == 'default' ? a.copyWith(name: target) : a]);
   }
+}
+
+final Map<String, String> _defaultCategoryFaNames = {for (final c in defaultCategories) c.id: c.name};
+
+/// [c] named in the current language when it is a default category still
+/// carrying one of its default names (Persian, English or German).
+Category localizedDefaultCategory(Category c) {
+  final other = _defaultCategoryNames[c.id];
+  final fa = _defaultCategoryFaNames[c.id];
+  if (other == null || fa == null) return c;
+  final name = c.name.trim();
+  if (name != fa && !other.contains(name)) return c;
+  final target = switch (currentLanguage.value) {
+    AppLanguage.fa => fa,
+    AppLanguage.en => other[0],
+    AppLanguage.de => other[1],
+  };
+  return target == c.name ? c : c.copyWith(name: target);
+}
+
+const _defaultAccountNames = ['حساب اصلی', 'Main account', 'Hauptkonto'];
+
+/// The default account named in the current language while it still has
+/// its default name.
+Account localizedDefaultAccount(Account a) {
+  if (a.id != 'default' || !_defaultAccountNames.contains(a.name.trim())) return a;
+  final target = _defaultAccountNames[currentLanguage.value.index];
+  return target == a.name ? a : a.copyWith(name: target);
 }
 
 /// False until a language has been chosen (the very first start).
@@ -2735,6 +3000,21 @@ class Store {
     await sp.setStringList(_shoppingListsKey, list.map((l) => jsonEncode(l.toJson())).toList());
   }
 
+  static const _offRuleOkKey = 'first_payment_off_rule_ok';
+
+  /// Recurring series whose first payment is off their due day on purpose
+  /// (the person chose to keep it so) - see [offRuleKey].
+  static Future<Set<String>> loadOffRuleOk() async {
+    final sp = await SharedPreferences.getInstance();
+    return (sp.getStringList(_offRuleOkKey) ?? const <String>[]).toSet();
+  }
+
+  static Future<void> acknowledgeOffRule(Transaction t) async {
+    final sp = await SharedPreferences.getInstance();
+    final set = (sp.getStringList(_offRuleOkKey) ?? const <String>[]).toSet()..add(offRuleKey(t));
+    await sp.setStringList(_offRuleOkKey, set.toList());
+  }
+
   static Future<List<BudgetGoal>> loadBudgetGoals() async {
     final sp = await SharedPreferences.getInstance();
     final raw = sp.getStringList(_budgetKey) ?? [];
@@ -3255,16 +3535,21 @@ class Store {
     return removed;
   }
 
-  static Future<List<Category>> loadCategories() async {
+  /// The categories, sorted by name. A default category still carrying a
+  /// default name (in any of the app's languages) comes named in the current
+  /// language - after a later language change too - unless [raw] (what sync
+  /// compares and sends: renaming in storage would make two devices in two
+  /// languages rename back and forth). A name the person chose is kept.
+  static Future<List<Category>> loadCategories({bool raw = false}) async {
     final sp = await SharedPreferences.getInstance();
-    final raw = sp.getStringList(_catKey);
+    final raw_ = sp.getStringList(_catKey);
     List<Category> list;
     var changed = false;
-    if (raw == null) {
+    if (raw_ == null) {
       list = List.of(defaultCategories);
       changed = true;
     } else {
-      list = raw.map((s) => Category.fromJson(jsonDecode(s))).toList();
+      list = raw_.map((s) => Category.fromJson(jsonDecode(s))).toList();
     }
     if (!list.any((c) => c.id == 'e_car')) {
       list = [...list, ...defaultCategories.where((c) => c.id == 'e_car' || c.parentId == 'e_car')];
@@ -3320,7 +3605,7 @@ class Store {
     // after a migration added something) would still be in insertion
     // order, which is exactly what caused newly-added categories to
     // stubbornly appear at the end of the list instead of alphabetically.
-    return List.of(list)..sort((a, b) => persianCompare(a.name, b.name));
+    return [for (final c in list) raw ? c : localizedDefaultCategory(c)]..sort((a, b) => persianCompare(a.name, b.name));
   }
 
   static Future<void> saveCategories(List<Category> list) async {
@@ -3332,14 +3617,19 @@ class Store {
     await sp.setStringList(_catKey, sorted.map((c) => jsonEncode(c.toJson())).toList());
   }
 
-  static Future<List<Account>> loadAccounts() async {
+  /// The accounts; the default account's default name comes in the current
+  /// language unless [raw] (see [loadCategories]).
+  static Future<List<Account>> loadAccounts({bool raw = false}) async {
     final sp = await SharedPreferences.getInstance();
-    final raw = sp.getStringList(_accKey);
-    if (raw == null) {
+    final stored = sp.getStringList(_accKey);
+    if (stored == null) {
       await saveAccounts(const [defaultAccount]);
-      return [defaultAccount];
+      return [raw ? defaultAccount : localizedDefaultAccount(defaultAccount)];
     }
-    return raw.map((s) => Account.fromJson(jsonDecode(s))).toList();
+    return [for (final s in stored) () {
+      final a = Account.fromJson(jsonDecode(s));
+      return raw ? a : localizedDefaultAccount(a);
+    }()];
   }
 
   static Future<void> saveAccounts(List<Account> list) async {
@@ -6827,7 +7117,14 @@ String formatMoneyCompact(double amount, String currency) {
   }
 
   final sign = amount < 0 ? '-' : '';
-  if (abs >= 1e6) return '\u2067${ltr(persianDigits('$sign${trim(abs / 1e6)}'))} م\u2069';
+  if (abs >= 1e6) {
+    // "Million": م in Persian, M / Mio. in English / German.
+    return switch (currentLanguage.value) {
+      AppLanguage.fa => '\u2067${ltr(persianDigits('$sign${trim(abs / 1e6)}'))} م\u2069',
+      AppLanguage.en => ltr('$sign${trim(abs / 1e6)}M $currency'),
+      AppLanguage.de => ltr('$sign${trim(abs / 1e6)} Mio. $currency'),
+    };
+  }
   return formatMoney(amount, currency);
 }
 
@@ -7110,12 +7407,48 @@ String txMainTitle(Transaction t, String categoryName) {
   return txDetailTitle(t) ?? categoryName;
 }
 
+/// Texts the app writes into a transaction's note itself, in whatever
+/// language it had at the time (a transfer's "انتقال به ...").
+const _appNoteTemplates = [
+  '{0} (دسته‌بندی قبلی: {1})',
+  'دسته‌بندی قبلی: {0}',
+  'انتقال به {0}',
+  'انتقال از {0}',
+  'از لیست خرید «{0}»',
+];
+
+final List<({String template, RegExp pattern})> _appNotePatterns = [
+  for (final t in _appNoteTemplates)
+    for (final variant in {t, ...?uiTranslations[t]})
+      (
+        template: t,
+        pattern: RegExp(
+          '^${RegExp.escape(variant).replaceAll(r'\{0\}', '(.+?)').replaceAll(r'\{1\}', '(.+?)')}\$',
+          dotAll: true,
+        ),
+      ),
+];
+
+/// A transaction's note as shown: a text the app wrote itself comes in the
+/// current language (after a language change too); the person's own words
+/// stay exactly as written.
+String shownNote(String note) {
+  final n = note.trim();
+  if (n.isEmpty) return n;
+  for (final p in _appNotePatterns) {
+    final m = p.pattern.firstMatch(n);
+    if (m == null) continue;
+    return locf(p.template, [for (var i = 1; i <= m.groupCount; i++) shownNote(m.group(i)!)]);
+  }
+  return n;
+}
+
 /// What the row title used to be before a shop name existed: the item name /
 /// "first item +N", else the note. Null when there is neither.
 String? txDetailTitle(Transaction t) {
   if (t.items.length == 1) return t.items.first.name;
   if (t.items.length > 1) return locf('{0} +{1} قلم دیگر', [(t.items.first.name), (t.items.length - 1)]);
-  if (t.note.trim().isNotEmpty) return t.note.trim();
+  if (t.note.trim().isNotEmpty) return shownNote(t.note);
   return null;
 }
 
@@ -9616,7 +9949,9 @@ String recurrenceLabelOf(Transaction t) {
     case RecurrenceFrequency.monthly:
       return locf('ماهانه (روز {0})', [(persianDigits('${t.recurrenceDay ?? '?'}'))]);
     case RecurrenceFrequency.weekly:
-      return locf('هفتگی ({0})', [(_weekdayNames[(t.recurrenceWeekday ?? 1) - 1])]);
+      // Weekly payments come every 7 days from the series' own date, so
+      // that date's weekday is the one they fall on.
+      return locf('هفتگی ({0})', [(_weekdayNames[t.date.weekday - 1])]);
     case RecurrenceFrequency.custom:
       return locf('هر {0} روز', [(persianDigits('${t.recurrenceIntervalDays ?? '?'}'))]);
     case RecurrenceFrequency.quarterly:
@@ -10251,7 +10586,7 @@ class _AutoDuplicatesScreenState extends State<AutoDuplicatesScreen> {
     if (t == null) return loc('تراکنش تکرارشونده‌ی حذف‌شده');
     if (t.merchant.trim().isNotEmpty) return t.merchant.trim();
     final c = categories.where((c) => c.id == t.categoryId).firstOrNull?.name ?? '';
-    return t.note.trim().isNotEmpty ? '$c • ${t.note.trim()}' : c;
+    return t.note.trim().isNotEmpty ? '$c • ${shownNote(t.note)}' : c;
   }
 
   Future<void> _restore(AutoDeletedDraft e) async {
@@ -10387,7 +10722,26 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
     tx = all.where((t) => t.isRecurring).toList()..sort((a, b) => b.date.compareTo(a.date));
     categories = await Store.loadCategories();
     accounts = await Store.loadAccounts();
+    offRuleOk = await Store.loadOffRuleOk();
     setState(() => loading = false);
+  }
+
+  Set<String> offRuleOk = {};
+
+  /// A series saved with its first payment off its due day (before that was
+  /// asked about): asks where it really starts and saves that - the other
+  /// leg of a transfer follows along.
+  Future<void> _fixFirstPayment(Transaction t) async {
+    final fix = await askFirstPayment(context, t);
+    if (fix == null) return;
+    if (DateUtils.isSameDay(fix.date, t.date) && fix.day == t.recurrenceDay) {
+      await Store.acknowledgeOffRule(t);
+    } else {
+      final fixed = t.copyWith(date: fix.date, recurrenceDay: fix.day, clearRecurrenceDay: fix.day == null);
+      await Store.upsertTransaction(fixed);
+      if (fixed.notifyEnabled) unawaited(NotificationService.instance.scheduleForTransaction(fixed, categoryName(fixed.categoryId)));
+    }
+    await _load();
   }
 
   String categoryName(String id) {
@@ -10476,10 +10830,38 @@ class _RecurringTransactionsScreenState extends State<RecurringTransactionsScree
                         ),
                       ),
                       title: Text(categoryName(t.categoryId)),
-                      subtitle: Text(
-                        '${_recurrenceLabel(t)}'
-                        ' • ${next != null ? locf('سررسید بعدی: {0}', [formatDate(next)]) : loc('همه‌ی پرداخت‌ها انجام شده')}'
-                        '${next != null && installmentLabel(t, next) != null ? ' (${installmentLabel(t, next)})' : ''}',
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${_recurrenceLabel(t)}'
+                            ' • ${next != null ? locf('سررسید بعدی: {0}', [formatDate(next)]) : loc('همه‌ی پرداخت‌ها انجام شده')}'
+                            '${next != null && installmentLabel(t, next) != null ? ' (${installmentLabel(t, next)})' : ''}',
+                          ),
+                          // First payment off the due day (saved before this
+                          // was asked): say so, with a way to fix it.
+                          if (offRuleOf(t) != null && !offRuleOk.contains(offRuleKey(t)))
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.warning_amber_rounded, size: 15, color: ChartColors.of(context).warningText),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      locf('اولین پرداخت ({0}) روز {1} ماه نیست', [formatDate(t.date), persianDigits('${t.recurrenceDay}')]),
+                                      style: TextStyle(fontSize: 12, color: ChartColors.of(context).warningText),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => _fixFirstPayment(t),
+                                    style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                                    child: Text(loc('بررسی')),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
                       ),
                       trailing: Text(
                         ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, currencyOf(t.accountId)),
@@ -11096,7 +11478,7 @@ class _AffectedTransactionsScreenState extends State<AffectedTransactionsScreen>
                           title: Text(categoryName(t.categoryId)),
                           subtitle: Text(
                             '${formatDate(t.date)}'
-                            '${t.note.isNotEmpty ? ' • ${t.note}' : ''}',
+                            '${t.note.isNotEmpty ? ' • ${shownNote(t.note)}' : ''}',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -11258,7 +11640,7 @@ Future<String> _buildExcelFile() async {
       xls.TextCellValue(accountName(t.accountId)),
       xls.TextCellValue(currencyOf(t.accountId)),
       xls.DoubleCellValue(t.amount),
-      xls.TextCellValue(t.note),
+      xls.TextCellValue(shownNote(t.note)),
       xls.TextCellValue(t.isRecurring ? loc('بله') : loc('خیر')),
       xls.TextCellValue(t.draft ? loc('بله') : loc('خیر')),
     ]);
@@ -14810,7 +15192,8 @@ class _TransferScreenState extends State<TransferScreen> {
   bool saving = false;
   RecurrenceFrequency recurrence = RecurrenceFrequency.none;
   final dayCtrl = TextEditingController();
-  int weekday = 1;
+  // Weekly payments come every 7 days from the date: its weekday.
+  late int weekday = date.weekday;
   final intervalCtrl = TextEditingController(text: persianDigits('30'));
   final installmentsCtrl = TextEditingController();
   DateTime? endDate;
@@ -14836,9 +15219,39 @@ class _TransferScreenState extends State<TransferScreen> {
     toAccount = accounts.where((a) => a.id == w.initialToId).firstOrNull ?? toAccount;
     if (w.initialAmount != null) amountCtrl.text = formatAmountInput(w.initialAmount!);
     if (w.initialDate != null) date = DateTime(w.initialDate!.year, w.initialDate!.month, w.initialDate!.day);
+    weekday = date.weekday;
     if (w.initialNote != null && w.initialNote!.isNotEmpty) noteCtrl.text = w.initialNote!;
     receivedHint = w.initialReceived;
     setState(() => loading = false);
+  }
+
+  /// The repeating transfer as it will be saved, once its pattern is
+  /// complete (null before that).
+  Transaction? _transferSeries() {
+    final day = parseInt(dayCtrl.text);
+    final interval = parseInt(intervalCtrl.text);
+    final count = parseInt(installmentsCtrl.text);
+    final complete = switch (recurrence) {
+      RecurrenceFrequency.monthly || RecurrenceFrequency.quarterly => day != null,
+      RecurrenceFrequency.custom => (interval ?? 0) > 0,
+      RecurrenceFrequency.none => false,
+      _ => true,
+    };
+    if (!complete) return null;
+    return Transaction(
+      id: '_preview',
+      type: TxType.expense,
+      amount: 0,
+      categoryId: '',
+      accountId: '',
+      date: date,
+      recurrence: recurrence,
+      recurrenceDay: day,
+      recurrenceWeekday: weekday,
+      recurrenceIntervalDays: interval,
+      installments: endMode == 'installments' && count != null && count > 0 ? count : null,
+      recurrenceEndDate: endMode == 'date' ? endDate : null,
+    );
   }
 
   Future<void> _pickDate() async {
@@ -14849,7 +15262,14 @@ class _TransferScreenState extends State<TransferScreen> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (ctx, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
     );
-    if (picked != null) setState(() => date = picked);
+    if (picked == null) return;
+    setState(() {
+      // A due day or weekday that was just the old date's moves along.
+      final typedDay = parseInt(dayCtrl.text);
+      if (typedDay != null && typedDay == dayOfMonthInCalendar(date)) dayCtrl.text = persianDigits('${dayOfMonthInCalendar(picked)}');
+      if (weekday == date.weekday) weekday = picked.weekday;
+      date = picked;
+    });
   }
 
   bool useAsDayRate = true;
@@ -14945,6 +15365,34 @@ class _TransferScreenState extends State<TransferScreen> {
         }
         recEndDate = endDate;
       }
+    }
+    // The date is the first payment: when it isn't on the due day (or
+    // weekday), ask which day the first payment really is.
+    if (offRulePaymentDays(recurrence, date, day: recDay, weekday: recWeekday) != null) {
+      final fix = await askFirstPayment(
+        context,
+        Transaction(
+          id: '_probe',
+          type: TxType.expense,
+          amount: amount,
+          categoryId: '',
+          accountId: '',
+          date: date,
+          recurrence: recurrence,
+          recurrenceDay: recDay,
+          recurrenceWeekday: recWeekday,
+          installments: recInstallments,
+          recurrenceEndDate: recEndDate,
+        ),
+      );
+      if (fix == null || !mounted) return;
+      recDay = fix.day;
+      recWeekday = fix.weekday;
+      setState(() {
+        date = fix.date;
+        if (fix.day != null) dayCtrl.text = persianDigits('${fix.day}');
+        if (fix.weekday != null) weekday = fix.weekday!;
+      });
     }
     setState(() => saving = true);
     final baseId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -15093,19 +15541,27 @@ class _TransferScreenState extends State<TransferScreen> {
               DropdownMenuItem(value: RecurrenceFrequency.yearly, child: Text(loc('سالانه'))),
               DropdownMenuItem(value: RecurrenceFrequency.custom, child: Text(loc('بازه‌ی دلخواه (هر N روز)'))),
             ],
-            onChanged: (v) => setState(() => recurrence = v ?? RecurrenceFrequency.none),
+            onChanged: (v) => setState(() {
+              recurrence = v ?? RecurrenceFrequency.none;
+              // The due day starts as the date's own day.
+              if ((recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) && dayCtrl.text.trim().isEmpty) {
+                dayCtrl.text = persianDigits('${dayOfMonthInCalendar(date)}');
+              }
+            }),
           ),
           if (recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) ...[
             const SizedBox(height: 12),
             TextField(
               controller: dayCtrl,
               keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(labelText: loc('روز سررسید در ماه (۱ تا ۳۱) *'), border: const OutlineInputBorder()),
             ),
           ],
           if (recurrence == RecurrenceFrequency.weekly) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
+              key: ValueKey('weekday-$weekday'),
               initialValue: weekday,
               decoration: InputDecoration(labelText: tr('weekday'), border: const OutlineInputBorder()),
               items: List.generate(7, (i) => i + 1).map((w) => DropdownMenuItem(value: w, child: Text(_weekdayNames[w - 1]))).toList(),
@@ -15117,6 +15573,7 @@ class _TransferScreenState extends State<TransferScreen> {
             TextField(
               controller: intervalCtrl,
               keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(labelText: loc('هر چند روز یک‌بار؟'), border: const OutlineInputBorder()),
             ),
           ],
@@ -15136,6 +15593,7 @@ class _TransferScreenState extends State<TransferScreen> {
               TextField(
                 controller: installmentsCtrl,
                 keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
+                onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(labelText: tr('total_installments'), border: const OutlineInputBorder()),
               ),
             ],
@@ -15155,6 +15613,18 @@ class _TransferScreenState extends State<TransferScreen> {
                   );
                   if (picked != null) setState(() => endDate = picked);
                 },
+              ),
+            ],
+            if (_transferSeries() != null) ...[
+              const SizedBox(height: 10),
+              recurrenceSummary(
+                context,
+                _transferSeries()!,
+                onMoveFirst: (d) => setState(() => date = d),
+                onRuleFromDate: () => setState(() {
+                  dayCtrl.text = persianDigits('${dayOfMonthInCalendar(date)}');
+                  weekday = date.weekday;
+                }),
               ),
             ],
           ],
@@ -15246,6 +15716,7 @@ class _AllTransactionsScreenState extends State<AllTransactionsScreen> {
         categoryName(t.categoryId),
         t.merchant,
         t.note,
+        shownNote(t.note),
         accountNames[t.accountId] ?? '',
         ...t.items.map((i) => i.name),
         t.payslipDetails?.arbeitgeber ?? '',
@@ -15935,7 +16406,7 @@ class ReportTransactionsScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${formatDate(t.date)}${t.isRecurring ? ' • ${loc('تکرارشونده')}' : ''}${t.note.trim().isNotEmpty ? ' • ${t.note.trim()}' : ''}',
+                          '${formatDate(t.date)}${t.isRecurring ? ' • ${loc('تکرارشونده')}' : ''}${t.note.trim().isNotEmpty ? ' • ${shownNote(t.note)}' : ''}',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -17822,7 +18293,7 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                                 [
                                   if (notDue) loc('سررسیدنشده') else if (!e.isReal) loc('سررسید شده'),
                                   if (t.isRecurring) loc('تکرارشونده'),
-                                  if (e.isReal && t.note.isNotEmpty) t.note,
+                                  if (e.isReal && t.note.isNotEmpty) shownNote(t.note),
                                 ].join(' • '),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -18327,8 +18798,13 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                       Expanded(
                         child: DropdownButtonFormField<AutoBackupFrequency>(
                           initialValue: autoFreq,
+                          // (Longer names - "Quarterly (every 3 months)" -
+                          // are cut short instead of overflowing.)
+                          isExpanded: true,
                           decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-                          items: AutoBackupFrequency.values.map((f) => DropdownMenuItem(value: f, child: Text(f.label))).toList(),
+                          items: AutoBackupFrequency.values
+                              .map((f) => DropdownMenuItem(value: f, child: Text(f.label, maxLines: 1, overflow: TextOverflow.ellipsis)))
+                              .toList(),
                           onChanged: (v) async {
                             if (v == null) return;
                             setState(() => autoFreq = v);
@@ -19929,7 +20405,7 @@ class TransactionDetailScreen extends StatelessWidget {
                   _row(context, loc('تاریخ'), formatDate(t.date)),
                   if (t.note.trim().isNotEmpty) ...[
                     const Divider(height: 1),
-                    _row(context, loc('توضیحات'), t.note.trim()),
+                    _row(context, loc('توضیحات'), shownNote(t.note)),
                   ],
                   if (t.isRecurring) ...[
                     const Divider(height: 1),
@@ -20390,7 +20866,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
       date = e.date;
       recurrence = e.recurrence;
       dayCtrl.text = persianDigits(e.recurrenceDay?.toString() ?? dayOfMonthInCalendar(date).toString());
-      weekday = e.recurrenceWeekday ?? date.weekday;
+      // Weekly payments come every 7 days from the date, whatever weekday
+      // was stored with them.
+      weekday = date.weekday;
       intervalCtrl.text = persianDigits(e.recurrenceIntervalDays?.toString() ?? '');
       installmentsCtrl.text = persianDigits(e.installments?.toString() ?? '');
       endDate = e.recurrenceEndDate;
@@ -20553,6 +21031,45 @@ class _TransactionEditorState extends State<TransactionEditor> {
       }
       // endMode == 'unlimited': leave both recEndDate and recInstallments null
     }
+    // The date is the series' first payment: when it isn't on the due day
+    // (or weekday), ask which day the first payment really is - unless it
+    // was saved that way before and neither the date nor the rule changed.
+    final e = widget.existing;
+    final ruleUnchanged = e != null &&
+        !e.draft &&
+        DateUtils.isSameDay(e.date, date) &&
+        e.recurrence == recurrence &&
+        e.recurrenceDay == recDay &&
+        (recurrence != RecurrenceFrequency.weekly || e.date.weekday == recWeekday);
+    var keptOffRule = false;
+    if (!draft && !ruleUnchanged && offRulePaymentDays(recurrence, date, day: recDay, weekday: recWeekday) != null) {
+      if (!context.mounted) return false;
+      final fix = await askFirstPayment(
+        context,
+        Transaction(
+          id: '_probe',
+          type: type,
+          amount: amount,
+          categoryId: '',
+          accountId: '',
+          date: date,
+          recurrence: recurrence,
+          recurrenceDay: recDay,
+          recurrenceWeekday: recWeekday,
+          installments: recInstallments,
+          recurrenceEndDate: recEndDate,
+        ),
+      );
+      if (fix == null) return false;
+      keptOffRule = DateUtils.isSameDay(fix.date, date) && fix.day == recDay && recurrence != RecurrenceFrequency.weekly;
+      recDay = fix.day;
+      recWeekday = fix.weekday;
+      setState(() {
+        date = fix.date;
+        if (fix.day != null) dayCtrl.text = persianDigits('${fix.day}');
+        if (fix.weekday != null) weekday = fix.weekday!;
+      });
+    }
     final id = widget.existing?.id ?? DateTime.now().microsecondsSinceEpoch.toString();
     PayslipDetails? payslipDetails;
     if (type == TxType.income) {
@@ -20638,6 +21155,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
     } else {
       unawaited(NotificationService.instance.cancelForTransaction(result.id));
     }
+    // Off the due day on purpose: the recurring list needn't flag it.
+    if (keptOffRule) unawaited(Store.acknowledgeOffRule(result));
     if (!context.mounted) return true;
     Navigator.pop(context, result);
     return true;
@@ -20750,39 +21269,44 @@ class _TransactionEditorState extends State<TransactionEditor> {
     });
   }
 
+  /// A new date for the transaction. A due day or weekday that was simply
+  /// the old date's moves along with it - only one set apart on purpose
+  /// stays - so the first payment and the rule don't drift apart.
+  void _followDate(DateTime d) {
+    final typedDay = parseInt(dayCtrl.text);
+    if (typedDay != null && typedDay == dayOfMonthInCalendar(date)) dayCtrl.text = persianDigits('${dayOfMonthInCalendar(d)}');
+    if (weekday == date.weekday) weekday = d.weekday;
+    date = d;
+  }
+
+  /// The series exactly as it will be saved (first payment on the
+  /// transaction's date, installment count and end date included).
+  Transaction _seriesPreview() {
+    final count = endMode == 'count' ? parseInt(installmentsCtrl.text) : null;
+    return Transaction(
+      id: '_preview',
+      type: type,
+      amount: 0,
+      categoryId: '',
+      accountId: '',
+      date: date,
+      recurrence: recurrence,
+      recurrenceDay: parseInt(dayCtrl.text),
+      recurrenceWeekday: weekday,
+      recurrenceIntervalDays: parseInt(intervalCtrl.text),
+      installments: count != null && count > 0 ? count : null,
+      recurrenceEndDate: endMode == 'date' ? endDate : null,
+    );
+  }
+
   Widget _recurrenceSection() {
-    // The series exactly as it will be saved - first payment on the
-    // transaction's date, installment count and end date included - so the
-    // preview shows its real next payment (or that it's already over).
-    String? preview;
-    if (recurrence != RecurrenceFrequency.none) {
-      final count = endMode == 'count' ? parseInt(installmentsCtrl.text) : null;
-      final series = computeRecurrenceOccurrences(Transaction(
-        id: '_preview',
-        type: type,
-        amount: 0,
-        categoryId: '',
-        accountId: '',
-        date: date,
-        recurrence: recurrence,
-        recurrenceDay: parseInt(dayCtrl.text),
-        recurrenceWeekday: weekday,
-        recurrenceIntervalDays: parseInt(intervalCtrl.text),
-        installments: count != null && count > 0 ? count : null,
-        recurrenceEndDate: endMode == 'date' ? endDate : null,
-      ));
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final nextIndex = series.indexWhere((d) => !d.isBefore(today));
-      if (nextIndex >= 0) {
-        final next = locf('سررسید بعدی: {0}', [formatDate(series[nextIndex])]);
-        preview = endMode == 'count' && count != null && count > 0
-            ? '$next ${locf('(قسط {0} از {1})', [persianDigits('${nextIndex + 1}'), persianDigits('$count')])}'
-            : next;
-      } else if (series.isNotEmpty) {
-        preview = locf('همه‌ی پرداخت‌ها انجام شده (آخرین: {0})', [formatDate(series.last)]);
-      }
-    }
+    // The payments are shown once the pattern is complete.
+    final showSummary = switch (recurrence) {
+      RecurrenceFrequency.monthly || RecurrenceFrequency.quarterly => parseInt(dayCtrl.text) != null,
+      RecurrenceFrequency.custom => (parseInt(intervalCtrl.text) ?? 0) > 0,
+      RecurrenceFrequency.none => false,
+      _ => true,
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -20799,6 +21323,11 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ],
           onChanged: (v) => setState(() {
             recurrence = v ?? RecurrenceFrequency.none;
+            // The due day starts as the date's own day, so the first payment
+            // (the date) is on it.
+            if ((recurrence == RecurrenceFrequency.monthly || recurrence == RecurrenceFrequency.quarterly) && dayCtrl.text.trim().isEmpty) {
+              dayCtrl.text = persianDigits('${dayOfMonthInCalendar(date)}');
+            }
             _dirty = true;
           }),
         ),
@@ -20807,6 +21336,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: dayCtrl,
             keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
+            onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
               labelText: loc('روز سررسید در ماه (۱ تا ۳۱) *'),
               helperText: loc('برای ماه‌های کوتاه‌تر، به‌صورت خودکار آخرین روز همان ماه در نظر گرفته می‌شود.'),
@@ -20817,6 +21347,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
         if (recurrence == RecurrenceFrequency.weekly) ...[
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
+            // (Keyed by the value: the date picker can change it.)
+            key: ValueKey('weekday-$weekday'),
             initialValue: weekday,
             decoration: InputDecoration(labelText: tr('weekday'), border: const OutlineInputBorder()),
             items: List.generate(
@@ -20834,6 +21366,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           TextField(
             controller: intervalCtrl,
             keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
+            onChanged: (_) => setState(() {}),
             decoration: InputDecoration(labelText: loc('هر چند روز یک‌بار؟'), border: const OutlineInputBorder()),
           ),
         ],
@@ -20881,14 +21414,24 @@ class _TransactionEditorState extends State<TransactionEditor> {
             TextField(
               controller: installmentsCtrl,
               keyboardType: TextInputType.number, inputFormatters: const [DigitsInputFormatter()],
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(labelText: tr('total_installments'), border: const OutlineInputBorder()),
             ),
           ],
-          if (preview != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              preview,
-              style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w600),
+          if (showSummary) ...[
+            const SizedBox(height: 10),
+            recurrenceSummary(
+              context,
+              _seriesPreview(),
+              onMoveFirst: (d) => setState(() {
+                date = d;
+                _dirty = true;
+              }),
+              onRuleFromDate: () => setState(() {
+                dayCtrl.text = persianDigits('${dayOfMonthInCalendar(date)}');
+                weekday = date.weekday;
+                _dirty = true;
+              }),
             ),
           ],
           const SizedBox(height: 12),
@@ -20932,7 +21475,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
                       decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4)),
                     ),
                   ),
-                  Text(loc(' روز قبل از هر قسط')),
+                  // (Wraps where the words are longer - English, German.)
+                  Flexible(child: Text(loc(' روز قبل از هر قسط'))),
                 ],
               ),
               value: notifyEachEnabled,
@@ -21145,7 +21689,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 );
                 if (d != null) {
                   setState(() {
-                    date = d;
+                    _followDate(d);
                     _dirty = true;
                   });
                 }

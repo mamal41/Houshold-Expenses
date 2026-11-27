@@ -99,8 +99,10 @@ class LocalSyncData {
     final base = await Store.loadBaseCurrency();
     return {
       'transactions': byId(tx),
-      'categories': byId((await Store.loadCategories()).map((c) => c.toJson()).toList()),
-      'accounts': byId((await Store.loadAccounts()).map((a) => a.toJson()).toList()),
+      // As stored: shown names follow each device's language (see
+      // Store.loadCategories), what is synced must not.
+      'categories': byId((await Store.loadCategories(raw: true)).map((c) => c.toJson()).toList()),
+      'accounts': byId((await Store.loadAccounts(raw: true)).map((a) => a.toJson()).toList()),
       'budgetGoals': byId((await Store.loadBudgetGoals()).map((g) => g.toJson()).toList(), (j) => '${j['categoryId']}'),
       'savingsGoals': byId((await Store.loadSavingsGoals()).map((g) => g.toJson()).toList()),
       'savingsContributions': byId((await Store.loadSavingsContributions()).map((c) => c.toJson()).toList()),
