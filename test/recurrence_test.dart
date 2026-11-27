@@ -195,4 +195,92 @@ void main() {
     expect(find.text(flag), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
+
+  /// Opens the detail screen of [shown] (saved: [saved]) from a button and
+  /// returns what it hands back, after [act] ran on it.
+  Future<Object?> viewAndAct(WidgetTester tester, Transaction saved, Transaction shown, Future<void> Function() act) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1000, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await Store.saveTransactions([saved]);
+    await Store.loadTransactions();
+    final categories = await Store.loadCategories();
+    final accounts = await Store.loadAccounts();
+    Object? result = 'none';
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: ElevatedButton(
+              onPressed: () async => result = await Navigator.push<Object>(
+                context,
+                MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: shown, categories: categories, accounts: accounts)),
+              ),
+              child: const Text('view'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('view'));
+    await pumpFor(tester);
+    await act();
+    await pumpFor(tester, 10);
+    return result;
+  }
+
+  testWidgets('an endless series can be ended from its detail screen: no payment after the last one due', (tester) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    // Monthly since the 1st three months ago, no end.
+    final rent = series(DateTime(now.year, now.month - 3, 1), day: 1);
+    final lastDue = computeRecurrenceOccurrences(rent).where((d) => !d.isAfter(today)).last;
+    final result = await viewAndAct(tester, rent, rent, () async {
+      expect(find.text('پایان دادن به این تراکنش تکرارشونده'), findsOneWidget);
+      await tester.tap(find.text('پایان دادن به این تراکنش تکرارشونده'));
+      await pumpFor(tester);
+      expect(find.text('آخرین پرداخت کدام باشد؟'), findsOneWidget);
+      await tester.tap(find.text(locf('بدون پرداخت دیگر (آخرین: {0})', [formatDate(lastDue)])));
+    });
+    expect(result, isA<Transaction>());
+    final ended = result as Transaction;
+    expect(ended.recurrenceEndDate, lastDue);
+    expect(ended.date, rent.date);
+    final all = computeRecurrenceOccurrences(ended);
+    expect(all.last, lastDue);
+    expect(all.where((d) => d.isAfter(today)), isEmpty);
+    expect(all.length, 4); // the 1st of each of the last three months and of this one
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('ending from a payment of the series keeps the series as saved, with one more payment', (tester) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final sub = series(DateTime(now.year, now.month - 2, 10), day: 10);
+    final all = computeRecurrenceOccurrences(sub);
+    final next = all.firstWhere((d) => d.isAfter(today));
+    // The detail screen shows one of its payments (a copy on its own day).
+    final payment = sub.copyWith(date: all[1]);
+    final result = await viewAndAct(tester, sub, payment, () async {
+      await tester.tap(find.text('پایان دادن به این تراکنش تکرارشونده'));
+      await pumpFor(tester);
+      await tester.tap(find.text(locf('یک پرداخت دیگر (آخرین: {0})', [formatDate(next)])));
+    });
+    final ended = result as Transaction;
+    expect(ended.date, sub.date, reason: 'the series must not move to the payment shown');
+    expect(ended.recurrenceEndDate, next);
+    expect(computeRecurrenceOccurrences(ended).last, next);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a series that ends shows its last payment and no end button', (tester) async {
+    final loan = series(DateTime(2026, 1, 5), day: 5, installments: 12);
+    final result = await viewAndAct(tester, loan, loan, () async {
+      expect(find.text('پایان دادن به این تراکنش تکرارشونده'), findsNothing);
+      expect(find.text(locf('{0} ({1} پرداخت)', [formatDate(DateTime(2026, 12, 5)), persianDigits('12')])), findsOneWidget);
+    });
+    expect(result, 'none');
+    await tester.pumpWidget(const SizedBox());
+  });
 }

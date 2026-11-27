@@ -1711,6 +1711,82 @@ Future<FirstPaymentFix?> askFirstPayment(BuildContext context, Transaction serie
   );
 }
 
+/// Asks which payment is the last of a recurring series that has no end: the
+/// last one that already fell due (none after today), one more, or the last
+/// one on or before a date picked. Returns the end date to save, or null.
+Future<DateTime?> askSeriesEnd(BuildContext context, Transaction series) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final start = DateTime(series.date.year, series.date.month, series.date.day);
+  final all = computeRecurrenceOccurrences(series);
+  final done = all.where((d) => !d.isAfter(today)).toList();
+  final next = all.where((d) => d.isAfter(today)).firstOrNull;
+  return showModalBottomSheet<DateTime>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      Widget option(IconData icon, String title, String? subtitle, VoidCallback onTap) => ListTile(
+            leading: Icon(icon, color: scheme.primary),
+            title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: subtitle == null ? null : Text(subtitle),
+            onTap: onTap,
+          );
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                child: Text(loc('آخرین پرداخت کدام باشد؟'), style: Theme.of(ctx).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  loc('پرداخت‌های بعد از آن دیگر در موجودی، گزارش‌ها و یادآوری‌ها حساب نمی‌شوند.'),
+                  style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+                ),
+              ),
+              if (done.isNotEmpty)
+                option(
+                  Icons.event_busy_outlined,
+                  locf('بدون پرداخت دیگر (آخرین: {0})', [formatDate(done.last)]),
+                  locf('{0} پرداخت انجام شده؛ از امروز به بعد دیگر حساب نمی‌شود.', [persianDigits('${done.length}')]),
+                  () => Navigator.pop(ctx, done.last),
+                )
+              else if (all.isNotEmpty)
+                option(Icons.event_busy_outlined, locf('فقط پرداخت اول ({0})', [formatDate(all.first)]), null, () => Navigator.pop(ctx, all.first)),
+              if (next != null && done.isNotEmpty)
+                option(
+                  Icons.event_available_outlined,
+                  locf('یک پرداخت دیگر (آخرین: {0})', [formatDate(next)]),
+                  loc('مثلاً وقتی اشتراک تا پایان دوره‌ی بعدی فعال می‌ماند.'),
+                  () => Navigator.pop(ctx, next),
+                ),
+              option(Icons.edit_calendar_outlined, loc('تاریخ دیگری…'), loc('آخرین پرداخت، آخرین سررسید تا آن تاریخ است.'), () async {
+                var initial = next ?? today;
+                if (initial.isBefore(start)) initial = start;
+                final picked = await showAppDatePicker(
+                  context: ctx,
+                  initialDate: initial,
+                  firstDate: start,
+                  lastDate: DateTime(2100),
+                  builder: (c, child) => Directionality(textDirection: TextDirection.ltr, child: child!),
+                );
+                if (picked != null && ctx.mounted) Navigator.pop(ctx, picked);
+              }),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
 /// The payments of a recurring series as it will be saved - the first, the
 /// second and the last (with how many), the next one due - and, when its
 /// first payment is off its rule's day, a notice with buttons to move it
@@ -16417,10 +16493,22 @@ class ReportTransactionsScreen extends StatelessWidget {
                       ltr(t.type == TxType.income ? '+' : '-') + formatMoney(t.amount, cur(t.accountId)),
                       style: TextStyle(fontWeight: FontWeight.bold, color: t.type == TxType.income ? Colors.green.shade700 : Colors.red.shade700),
                     ),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: t, categories: categories, accounts: accounts)),
-                    ),
+                    onTap: () async {
+                      final result = await Navigator.push<Object>(
+                        context,
+                        MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: t, categories: categories, accounts: accounts)),
+                      );
+                      // An edit, delete or end made there is saved here (it
+                      // used to be lost); this list is a snapshot of the
+                      // report, so back to the report, which then reloads.
+                      if (result is Transaction) {
+                        await Store.upsertTransaction(result);
+                      } else if (result is DeleteTransactionSignal) {
+                        await NotificationService.instance.cancelForTransaction(result.id);
+                        await Store.deleteTransaction(result.id);
+                      }
+                      if (result != null && context.mounted) Navigator.pop(context);
+                    },
                   ),
                 );
               },
@@ -18310,10 +18398,17 @@ class _MonthCalendarScreenState extends State<MonthCalendarScreen> {
                           ),
                           onTap: () async {
                             Navigator.pop(ctx);
-                            await Navigator.push(
+                            final result = await Navigator.push<Object>(
                               context,
                               MaterialPageRoute(builder: (_) => TransactionDetailScreen(t: t, categories: categories, accounts: accounts)),
                             );
+                            // An edit, delete or end made there is saved (it used to be lost).
+                            if (result is Transaction) {
+                              await Store.upsertTransaction(result);
+                            } else if (result is DeleteTransactionSignal) {
+                              await NotificationService.instance.cancelForTransaction(result.id);
+                              await Store.deleteTransaction(result.id);
+                            }
                             await _load();
                           },
                         ),
@@ -20317,6 +20412,26 @@ class TransactionDetailScreen extends StatelessWidget {
     return m.isEmpty ? 'IRT' : m.first.currency;
   }
 
+  /// The transaction as saved: a payment of a recurring series is shown on its
+  /// own day here, but editing or ending it works on the series itself (an
+  /// edit must not move the series' start to the payment shown).
+  Transaction get _stored => Store.savedTransaction(t.id) ?? t;
+
+  /// Ends a recurring series that has none: asks which payment is the last,
+  /// and hands the series with that end date back to be saved.
+  Future<void> _endSeries(BuildContext context) async {
+    final series = _stored;
+    final end = await askSeriesEnd(context, series);
+    if (end == null || !context.mounted) return;
+    final updated = series.copyWith(recurrenceEndDate: end);
+    if (updated.notifyEnabled) unawaited(NotificationService.instance.scheduleForTransaction(updated, _categoryName));
+    final last = computeRecurrenceOccurrences(updated).lastOrNull ?? end;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(locf('پایان تکرار ثبت شد؛ آخرین پرداخت: {0}', [formatDate(last)]))));
+    Navigator.pop(context, updated);
+  }
+
   Widget _row(BuildContext context, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -20344,7 +20459,7 @@ class TransactionDetailScreen extends StatelessWidget {
             onPressed: () async {
               final result = await Navigator.push<Object>(
                 context,
-                MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: t)),
+                MaterialPageRoute(builder: (_) => TransactionEditor(categories: categories, accounts: accounts, existing: _stored)),
               );
               if (result != null && context.mounted) Navigator.pop(context, result);
             },
@@ -20421,6 +20536,12 @@ class TransactionDetailScreen extends StatelessWidget {
                       const Divider(height: 1),
                       _row(context, loc('این پرداخت'), installmentLabel(t, t.date)!),
                     ],
+                    // A series that ends: its last payment and how many.
+                    if (_stored.installments != null || _stored.recurrenceEndDate != null)
+                      if (computeRecurrenceOccurrences(_stored) case final all when all.isNotEmpty) ...[
+                        const Divider(height: 1),
+                        _row(context, loc('پایان تکرار'), locf('{0} ({1} پرداخت)', [formatDate(all.last), persianDigits('${all.length}')])),
+                      ],
                   ],
                   if (t.draft) ...[
                     const Divider(height: 1),
@@ -20430,6 +20551,24 @@ class TransactionDetailScreen extends StatelessWidget {
               ),
             ),
           ),
+          // A recurring transaction without an end (a subscription, rent...):
+          // a button to end it, so the payments after that stop counting.
+          if (_stored.isRecurring && !_stored.draft && _stored.installments == null && _stored.recurrenceEndDate == null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _endSeries(context),
+              icon: const Icon(Icons.event_busy_outlined),
+              label: Text(loc('پایان دادن به این تراکنش تکرارشونده')),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+              child: Text(
+                loc('این تراکنش پایانی ندارد. اگر اشتراک یا قرارداد تمام شده، آخرین پرداخت را ثبت کنید تا پرداخت‌های بعدی دیگر حساب نشوند.'),
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
           if (t.items.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(loc('اقلام'), style: Theme.of(context).textTheme.titleSmall),
